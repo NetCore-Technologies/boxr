@@ -20,79 +20,70 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: "1.23"
 
       - name: Get version
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
-      - name: Build Linux amd64
+      - name: Build all platforms
         run: |
-          GOOS=linux GOARCH=amd64 go build -o boxr ./cmd/boxr
-          tar -czf boxr-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz boxr
+          VERSION=${{ steps.version.outputs.VERSION }}
+          GOOS=linux   GOARCH=amd64 go build -o boxr-linux-amd64      ./cmd/boxr
+          GOOS=linux   GOARCH=arm64 go build -o boxr-linux-arm64      ./cmd/boxr
+          GOOS=windows GOARCH=amd64 go build -o boxr-windows-amd64.exe ./cmd/boxr
+          GOOS=darwin  GOARCH=amd64 go build -o boxr-darwin-amd64     ./cmd/boxr
+          GOOS=darwin  GOARCH=arm64 go build -o boxr-darwin-arm64     ./cmd/boxr
+          tar -czf boxr-${VERSION}-linux-amd64.tar.gz   boxr-linux-amd64
+          tar -czf boxr-${VERSION}-linux-arm64.tar.gz   boxr-linux-arm64
+          zip       boxr-${VERSION}-windows-amd64.zip   boxr-windows-amd64.exe
+          tar -czf boxr-${VERSION}-darwin-amd64.tar.gz  boxr-darwin-amd64
+          tar -czf boxr-${VERSION}-darwin-arm64.tar.gz  boxr-darwin-arm64
 
-      - name: Build Linux arm64
-        run: |
-          GOOS=linux GOARCH=arm64 go build -o boxr-arm64 ./cmd/boxr
-          tar -czf boxr-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz boxr-arm64
-
-      - name: Build Windows amd64
-        run: |
-          GOOS=windows GOARCH=amd64 go build -o boxr.exe ./cmd/boxr
-          zip boxr-${{ steps.version.outputs.VERSION }}-windows-amd64.zip boxr.exe
-
-      - name: Build macOS amd64
-        run: |
-          GOOS=darwin GOARCH=amd64 go build -o boxr-darwin ./cmd/boxr
-          tar -czf boxr-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz boxr-darwin
-
-      - name: Build macOS arm64
-        run: |
-          GOOS=darwin GOARCH=arm64 go build -o boxr-darwin-arm64 ./cmd/boxr
-          tar -czf boxr-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz boxr-darwin-arm64
-
-      - name: Make install script
-        run: |
-          printf '#!/bin/bash\nset -e\nREPO="NetCore-Technologies/boxr"\nVERSION=$(curl -s https://api.github.com/repos/$REPO/releases/latest | grep tag_name | cut -d "\"" -f 4)\nARCH=$(uname -m)\nif [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi\nif [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; fi\nURL="https://github.com/$REPO/releases/download/$VERSION/boxr-$VERSION-linux-$ARCH.tar.gz"\necho "Downloading boxr $VERSION..."\ncurl -sL $URL | tar -xz\nsudo mv boxr /usr/local/bin/boxr\necho "Done! Run: sudo boxr run /bin/sh"\n' > install.sh
-          chmod +x install.sh
-
-      - name: Make PowerShell script
-        run: |
-          printf '$repo = "NetCore-Technologies/boxr"\n$release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"\n$version = $release.tag_name\n$url = "https://github.com/$repo/releases/download/$version/boxr-$version-windows-amd64.zip"\nWrite-Host "Downloading boxr $version..."\nInvoke-WebRequest -Uri $url -OutFile "boxr.zip"\nExpand-Archive -Path "boxr.zip" -DestinationPath "$env:ProgramFiles\\boxr" -Force\nWrite-Host "Done!"\n' > install.ps1
-
-      - name: Make .deb package
+      - name: Build deb package
         run: |
           VERSION=${{ steps.version.outputs.VERSION }}
           mkdir -p deb/boxr_${VERSION}_amd64/DEBIAN
           mkdir -p deb/boxr_${VERSION}_amd64/usr/local/bin
-          cp boxr deb/boxr_${VERSION}_amd64/usr/local/bin/
-          printf "Package: boxr\nVersion: ${VERSION}\nArchitecture: amd64\nMaintainer: manit6752025\nDescription: A mini Docker engine built from Linux namespaces and cgroups\n" > deb/boxr_${VERSION}_amd64/DEBIAN/control
+          cp boxr-linux-amd64 deb/boxr_${VERSION}_amd64/usr/local/bin/boxr
+          echo "Package: boxr"                                              > deb/boxr_${VERSION}_amd64/DEBIAN/control
+          echo "Version: ${VERSION}"                                       >> deb/boxr_${VERSION}_amd64/DEBIAN/control
+          echo "Architecture: amd64"                                       >> deb/boxr_${VERSION}_amd64/DEBIAN/control
+          echo "Maintainer: manit6752025"                                  >> deb/boxr_${VERSION}_amd64/DEBIAN/control
+          echo "Description: Mini Docker engine using namespaces+cgroups"  >> deb/boxr_${VERSION}_amd64/DEBIAN/control
           dpkg-deb --build deb/boxr_${VERSION}_amd64
           mv deb/boxr_${VERSION}_amd64.deb boxr-${VERSION}-amd64.deb
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            boxr-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz
-            boxr-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz
-            boxr-${{ steps.version.outputs.VERSION }}-windows-amd64.zip
-            boxr-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz
-            boxr-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz
-            boxr-${{ steps.version.outputs.VERSION }}-amd64.deb
-            install.sh
-            install.ps1
+          name: "boxr ${{ steps.version.outputs.VERSION }} — Containers from scratch, no Docker required"
           body: |
             ## boxr ${{ steps.version.outputs.VERSION }}
 
-            A mini Docker engine built from Linux namespaces and cgroups.
+            A mini Docker engine built from raw Linux syscalls. No Docker. No containerd. No daemon. Just namespaces and cgroups.
 
-            **Linux:**
+            ---
+
+            ## Whats in this release
+
+            - PID namespace — container gets its own PID 1, isolated from host
+            - UTS namespace — isolated hostname
+            - Mount namespace — private filesystem view
+            - IPC namespace — isolated interprocess communication
+            - cgroup v2 — CPU and memory limits per container
+            - Clean CLI — `boxr run <command>`
+
+            ---
+
+            ## Install
+
+            **Linux (one line):**
 ```bash
             curl -sL https://github.com/NetCore-Technologies/boxr/releases/download/${{ steps.version.outputs.VERSION }}/install.sh | bash
 ```
 
-            **Windows:**
+            **Windows (PowerShell):**
 ```powershell
             irm https://github.com/NetCore-Technologies/boxr/releases/download/${{ steps.version.outputs.VERSION }}/install.ps1 | iex
 ```
@@ -102,3 +93,24 @@ jobs:
             wget https://github.com/NetCore-Technologies/boxr/releases/download/${{ steps.version.outputs.VERSION }}/boxr-${{ steps.version.outputs.VERSION }}-amd64.deb
             sudo dpkg -i boxr-${{ steps.version.outputs.VERSION }}-amd64.deb
 ```
+
+            ---
+
+            ## Coming in v0.2
+
+            - Network namespace + veth pair (internet inside the container)
+            - Overlay filesystem (image layers like real Docker)
+            - Pull and run Alpine from Docker Hub with zero Docker installed
+
+            ---
+
+            > boxr requires root on Linux to create namespaces. Windows/macOS builds compile but full isolation requires Linux kernel.
+          files: |
+            boxr-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz
+            boxr-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz
+            boxr-${{ steps.version.outputs.VERSION }}-windows-amd64.zip
+            boxr-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz
+            boxr-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz
+            boxr-${{ steps.version.outputs.VERSION }}-amd64.deb
+            install.sh
+            install.ps1
