@@ -37,8 +37,38 @@ jobs:
           tar -czf boxr-${VERSION}-linux-amd64.tar.gz  boxr-linux-amd64
           tar -czf boxr-${VERSION}-linux-arm64.tar.gz  boxr-linux-arm64
           zip       boxr-${VERSION}-windows-amd64.zip  boxr-windows-amd64.exe
+          cp boxr-windows-amd64.exe boxr-${VERSION}-windows-amd64.exe
           tar -czf boxr-${VERSION}-darwin-amd64.tar.gz boxr-darwin-amd64
           tar -czf boxr-${VERSION}-darwin-arm64.tar.gz boxr-darwin-arm64
+
+      - name: Build MSI installer
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          sudo apt-get install -y wixl
+          mkdir -p msi
+          cp boxr-windows-amd64.exe msi/boxr.exe
+          cat > msi/boxr.wxs << WXS
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+            <Product Id="*" Name="boxr" Language="1033" Version="0.1.0" Manufacturer="NetCore-Technologies" UpgradeCode="12345678-1234-1234-1234-123456789012">
+              <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine"/>
+              <MediaTemplate EmbedCab="yes"/>
+              <Directory Id="TARGETDIR" Name="SourceDir">
+                <Directory Id="ProgramFilesFolder">
+                  <Directory Id="INSTALLFOLDER" Name="boxr">
+                    <Component Id="boxr.exe" Guid="*">
+                      <File Id="boxr.exe" Source="msi/boxr.exe" KeyPath="yes"/>
+                    </Component>
+                  </Directory>
+                </Directory>
+              </Directory>
+              <Feature Id="ProductFeature" Title="boxr" Level="1">
+                <ComponentRef Id="boxr.exe"/>
+              </Feature>
+            </Product>
+          </Wix>
+          WXS
+          wixl -o boxr-${VERSION}-windows-amd64.msi msi/boxr.wxs
 
       - name: Build deb package
         run: |
@@ -111,6 +141,8 @@ jobs:
             boxr-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz
             boxr-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz
             boxr-${{ steps.version.outputs.VERSION }}-windows-amd64.zip
+            boxr-${{ steps.version.outputs.VERSION }}-windows-amd64.exe
+            boxr-${{ steps.version.outputs.VERSION }}-windows-amd64.msi
             boxr-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz
             boxr-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz
             boxr-${{ steps.version.outputs.VERSION }}-amd64.deb
