@@ -47,7 +47,8 @@ jobs:
           mkdir -p deb/boxr_${VERSION}_amd64/usr/local/bin
           cp boxr-linux-amd64 deb/boxr_${VERSION}_amd64/usr/local/bin/boxr
           echo "Package: boxr"                                             > deb/boxr_${VERSION}_amd64/DEBIAN/control
-          echo "Version: ${VERSION}"                                      >> deb/boxr_${VERSION}_amd64/DEBIAN/control
+          DEB_VERSION=${VERSION#v}
+          echo "Version: ${DEB_VERSION}"                                   >> deb/boxr_${VERSION}_amd64/DEBIAN/control
           echo "Architecture: amd64"                                      >> deb/boxr_${VERSION}_amd64/DEBIAN/control
           echo "Maintainer: manit6752025"                                 >> deb/boxr_${VERSION}_amd64/DEBIAN/control
           echo "Description: Mini Docker engine using namespaces+cgroups" >> deb/boxr_${VERSION}_amd64/DEBIAN/control
