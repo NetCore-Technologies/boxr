@@ -30,75 +30,45 @@ jobs:
         run: |
           GOOS=linux GOARCH=amd64 go build -o boxr ./cmd/boxr
           tar -czf boxr-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz boxr
-          sha256sum boxr-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz > boxr-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz.sha256
 
       - name: Build Linux arm64
         run: |
           GOOS=linux GOARCH=arm64 go build -o boxr-arm64 ./cmd/boxr
           tar -czf boxr-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz boxr-arm64
-          sha256sum boxr-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz >> boxr-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz.sha256
 
       - name: Build Windows amd64
         run: |
           GOOS=windows GOARCH=amd64 go build -o boxr.exe ./cmd/boxr
           zip boxr-${{ steps.version.outputs.VERSION }}-windows-amd64.zip boxr.exe
-          sha256sum boxr-${{ steps.version.outputs.VERSION }}-windows-amd64.zip >> checksums.txt
 
       - name: Build macOS amd64
         run: |
           GOOS=darwin GOARCH=amd64 go build -o boxr-darwin ./cmd/boxr
           tar -czf boxr-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz boxr-darwin
-          sha256sum boxr-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz >> checksums.txt
 
-      - name: Build macOS arm64 (Apple Silicon)
+      - name: Build macOS arm64
         run: |
           GOOS=darwin GOARCH=arm64 go build -o boxr-darwin-arm64 ./cmd/boxr
           tar -czf boxr-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz boxr-darwin-arm64
 
       - name: Make install script
         run: |
-          cat > install.sh << 'SCRIPT'
-          #!/bin/bash
-          set -e
-          REPO="manit6752025/boxr"
-          VERSION=$(curl -s https://api.github.com/repos/$REPO/releases/latest | grep tag_name | cut -d '"' -f 4)
-          ARCH=$(uname -m)
-          if [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi
-          if [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; fi
-          URL="https://github.com/$REPO/releases/download/$VERSION/boxr-$VERSION-linux-$ARCH.tar.gz"
-          echo "Downloading boxr $VERSION for linux/$ARCH..."
-          curl -sL $URL | tar -xz
-          sudo mv boxr /usr/local/bin/boxr
-          echo "Done! Run: sudo boxr run /bin/sh"
-          SCRIPT
+          printf '#!/bin/bash\nset -e\nREPO="NetCore-Technologies/boxr"\nVERSION=$(curl -s https://api.github.com/repos/$REPO/releases/latest | grep tag_name | cut -d "\"" -f 4)\nARCH=$(uname -m)\nif [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; fi\nif [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; fi\nURL="https://github.com/$REPO/releases/download/$VERSION/boxr-$VERSION-linux-$ARCH.tar.gz"\necho "Downloading boxr $VERSION..."\ncurl -sL $URL | tar -xz\nsudo mv boxr /usr/local/bin/boxr\necho "Done! Run: sudo boxr run /bin/sh"\n' > install.sh
           chmod +x install.sh
 
-      - name: Make PowerShell install script
+      - name: Make PowerShell script
         run: |
-          cat > install.ps1 << 'SCRIPT'
-          $repo = "manit6752025/boxr"
-          $release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"
-          $version = $release.tag_name
-          $url = "https://github.com/$repo/releases/download/$version/boxr-$version-windows-amd64.zip"
-          Write-Host "Downloading boxr $version..."
-          Invoke-WebRequest -Uri $url -OutFile "boxr.zip"
-          Expand-Archive -Path "boxr.zip" -DestinationPath "$env:ProgramFiles\boxr" -Force
-          Write-Host "Done! boxr installed to $env:ProgramFiles\boxr"
-          SCRIPT
+          printf '$repo = "NetCore-Technologies/boxr"\n$release = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest"\n$version = $release.tag_name\n$url = "https://github.com/$repo/releases/download/$version/boxr-$version-windows-amd64.zip"\nWrite-Host "Downloading boxr $version..."\nInvoke-WebRequest -Uri $url -OutFile "boxr.zip"\nExpand-Archive -Path "boxr.zip" -DestinationPath "$env:ProgramFiles\\boxr" -Force\nWrite-Host "Done!"\n' > install.ps1
 
       - name: Make .deb package
         run: |
-          mkdir -p deb/boxr_${{ steps.version.outputs.VERSION }}_amd64/{DEBIAN,usr/local/bin}
-          cp boxr deb/boxr_${{ steps.version.outputs.VERSION }}_amd64/usr/local/bin/
-          cat > deb/boxr_${{ steps.version.outputs.VERSION }}_amd64/DEBIAN/control << DEB
-          Package: boxr
-          Version: ${{ steps.version.outputs.VERSION }}
-          Architecture: amd64
-          Maintainer: manit6752025
-          Description: A mini Docker engine built from Linux namespaces and cgroups
-          DEB
-          dpkg-deb --build deb/boxr_${{ steps.version.outputs.VERSION }}_amd64
-          mv deb/boxr_${{ steps.version.outputs.VERSION }}_amd64.deb boxr-${{ steps.version.outputs.VERSION }}-amd64.deb
+          VERSION=${{ steps.version.outputs.VERSION }}
+          mkdir -p deb/boxr_${VERSION}_amd64/DEBIAN
+          mkdir -p deb/boxr_${VERSION}_amd64/usr/local/bin
+          cp boxr deb/boxr_${VERSION}_amd64/usr/local/bin/
+          printf "Package: boxr\nVersion: ${VERSION}\nArchitecture: amd64\nMaintainer: manit6752025\nDescription: A mini Docker engine built from Linux namespaces and cgroups\n" > deb/boxr_${VERSION}_amd64/DEBIAN/control
+          dpkg-deb --build deb/boxr_${VERSION}_amd64
+          mv deb/boxr_${VERSION}_amd64.deb boxr-${VERSION}-amd64.deb
 
       - name: Release
         uses: softprops/action-gh-release@v2
@@ -117,20 +87,18 @@ jobs:
 
             A mini Docker engine built from Linux namespaces and cgroups.
 
-            ## Install
-
-            **Linux (one line):**
+            **Linux:**
 ```bash
-            curl -sL https://github.com/manit6752025/boxr/releases/download/${{ steps.version.outputs.VERSION }}/install.sh | bash
+            curl -sL https://github.com/NetCore-Technologies/boxr/releases/download/${{ steps.version.outputs.VERSION }}/install.sh | bash
 ```
 
-            **Windows (PowerShell):**
+            **Windows:**
 ```powershell
-            irm https://github.com/manit6752025/boxr/releases/download/${{ steps.version.outputs.VERSION }}/install.ps1 | iex
+            irm https://github.com/NetCore-Technologies/boxr/releases/download/${{ steps.version.outputs.VERSION }}/install.ps1 | iex
 ```
 
             **Debian/Ubuntu:**
 ```bash
-            wget https://github.com/manit6752025/boxr/releases/download/${{ steps.version.outputs.VERSION }}/boxr-${{ steps.version.outputs.VERSION }}-amd64.deb
+            wget https://github.com/NetCore-Technologies/boxr/releases/download/${{ steps.version.outputs.VERSION }}/boxr-${{ steps.version.outputs.VERSION }}-amd64.deb
             sudo dpkg -i boxr-${{ steps.version.outputs.VERSION }}-amd64.deb
 ```
