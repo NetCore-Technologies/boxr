@@ -3247,7 +3247,7 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 		}
 		// Launch all services in a dependency wave before waiting for any one.
 		for _, process := range groupProcesses {
-			_, unexpectedExit, err := waitForDeploymentStart(ctx, process.name, startTimeout, file.Services[serviceName].Readiness, exits)
+			_, unexpectedExit, err := waitForDeploymentStart(ctx, process.name, startTimeout, file.Services[process.service].Readiness, exits)
 			if unexpectedExit != nil {
 				exited[unexpectedExit.service] = *unexpectedExit
 			}
