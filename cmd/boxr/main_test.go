@@ -3911,3 +3911,33 @@ func TestRenameAndContainerRenamePreserveContainerIdentity(t *testing.T) {
 		t.Fatalf("unrelated container disappeared after rename: %v", err)
 	}
 }
+
+
+func TestComposeCommandAliasesSupportedComposeYAMLWorkflow(t *testing.T) {
+	manifest := filepath.Join(t.TempDir(), "compose.yaml")
+	contents := `name: compose-alias-test
+services:
+  app:
+    image: alpine:3.20
+    command: ["echo", "hello"]
+`
+	if err := os.WriteFile(manifest, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"compose", "validate", manifest}, &stdout, &stderr); code != 0 {
+		t.Fatalf("compose validate returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "valid Boxr deployment") || !strings.Contains(stdout.String(), "app") {
+		t.Fatalf("compose validation output is incomplete: %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"compose", "plan", "--json", manifest}, &stdout, &stderr); code != 0 {
+		t.Fatalf("compose plan returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "compose-alias-test") || !strings.Contains(stdout.String(), "alpine:3.20") {
+		t.Fatalf("compose plan output omits deployment metadata: %q", stdout.String())
+	}
+}
