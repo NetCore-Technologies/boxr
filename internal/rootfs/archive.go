@@ -3,6 +3,7 @@ package rootfs
 
 import (
 	"archive/tar"
+	"bufio"
 	"compress/gzip"
 	"errors"
 	"fmt"
@@ -39,6 +40,17 @@ type Manifest struct {
 // destination. Extraction is staged in a sibling temporary directory and
 // atomically renamed into place only after every entry has been validated.
 func ExtractTarGz(archivePath, destination string, limits Limits) (Manifest, error) {
+	return extractTarArchive(archivePath, destination, limits, true)
+}
+
+// ExtractTar safely extracts a plain or gzip-compressed tar archive to a new
+// path. It uses the same traversal, link, special-file and size limits as the
+// gzip-only rootfs restore operation.
+func ExtractTar(archivePath, destination string, limits Limits) (Manifest, error) {
+	return extractTarArchive(archivePath, destination, limits, false)
+}
+
+func extractTarArchive(archivePath, destination string, limits Limits, requireGzip bool) (Manifest, error) {
 	var manifest Manifest
 	if limits.MaxFiles <= 0 {
 		limits.MaxFiles = DefaultMaxFiles
@@ -67,11 +79,21 @@ func ExtractTarGz(archivePath, destination string, limits Limits) (Manifest, err
 		return manifest, fmt.Errorf("open rootfs archive: %w", err)
 	}
 	defer archive.Close()
-	compressed, err := gzip.NewReader(archive)
-	if err != nil {
-		return manifest, fmt.Errorf("read gzip header: %w", err)
+	buffered := bufio.NewReader(archive)
+	magic, peekErr := buffered.Peek(2)
+	isGzip := peekErr == nil && magic[0] == 0x1f && magic[1] == 0x8b
+	if requireGzip && !isGzip {
+		return manifest, fmt.Errorf("archive is not gzip-compressed")
 	}
-	defer compressed.Close()
+	var source io.Reader = buffered
+	if isGzip {
+		compressed, gzipErr := gzip.NewReader(buffered)
+		if gzipErr != nil {
+			return manifest, fmt.Errorf("read gzip header: %w", gzipErr)
+		}
+		defer compressed.Close()
+		source = compressed
+	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
 		return manifest, fmt.Errorf("create destination parent: %w", err)
 	}
@@ -86,9 +108,9 @@ func ExtractTarGz(archivePath, destination string, limits Limits) (Manifest, err
 		}
 	}()
 	seen := make(map[string]bool)
-	reader := tar.NewReader(compressed)
+	tarReader := tar.NewReader(source)
 	for {
-		header, nextErr := reader.Next()
+		header, nextErr := tarReader.Next()
 		if errors.Is(nextErr, io.EOF) {
 			break
 		}
@@ -136,7 +158,7 @@ func ExtractTarGz(archivePath, destination string, limits Limits) (Manifest, err
 			if err != nil {
 				return manifest, fmt.Errorf("create file %q: %w", name, err)
 			}
-			written, copyErr := io.CopyN(file, reader, header.Size)
+			written, copyErr := io.CopyN(file, tarReader, header.Size)
 			closeErr := file.Close()
 			if copyErr != nil {
 				return manifest, fmt.Errorf("extract file %q: %w", name, copyErr)

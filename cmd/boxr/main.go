@@ -3020,6 +3020,12 @@ var implementedFeatures = []string{
 	"invalid and unused Dockerfile build arguments are rejected",
 	"Dockerfile COPY relative destinations resolve against the base image WORKDIR",
 	"Dockerfile build API accepts explicit network and build-argument options",
+	"Dockerfile ADD supports local context files and directories",
+	"Dockerfile ADD automatically extracts plain tar archives",
+	"Dockerfile ADD automatically extracts gzip-compressed tar archives",
+	"Dockerfile ADD archive extraction applies rootfs path traversal link and special-file protections",
+	"Dockerfile ADD archive extraction enforces bounded file counts and uncompressed byte limits",
+	"Dockerfile ADD rejects remote URL and Git sources instead of silently fetching them",
 }
 
 func printFeatures(stdout io.Writer) {

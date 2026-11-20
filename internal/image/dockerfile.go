@@ -185,6 +185,9 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 			destination = path.Clean(destination)
 			sources := words[:len(words)-1]
 			for _, source := range sources {
+				if instructionName == "ADD" && isRemoteDockerfileSource(source) {
+					return fmt.Errorf("line %d: remote ADD sources are not supported; download the file explicitly into the build context", lineNumber)
+				}
 				cleanSource := path.Clean(source)
 				if strings.HasPrefix(cleanSource, "/") || cleanSource == ".." || strings.HasPrefix(cleanSource, "../") {
 					return fmt.Errorf("line %d: COPY source %q must stay inside the build context", lineNumber, source)

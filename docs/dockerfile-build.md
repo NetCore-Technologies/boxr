@@ -3,7 +3,7 @@
 Boxr can build a bounded, single-stage Dockerfile subset. `RUN` commands execute in a disposable staged rootfs through Boxr's namespace runtime, not directly on the host:
 
 - One `FROM` stage, using `scratch` or a base image already pulled into Boxr's local image store.
-- Local-context `COPY` (including JSON form and `COPY .`), with paths kept inside the build context.
+- Local-context `COPY` and `ADD` (including JSON form and `COPY .`), with paths kept inside the build context. Local ADD files/directories are copied; plain and gzip tar archives are automatically extracted.
 - `RUN` in shell or exec form, `WORKDIR`, `ENV`, `LABEL`, `USER`, and shell/exec forms of `CMD` and `ENTRYPOINT`.
 - Bounded `.dockerignore` filtering. Negation patterns and advanced Docker ignore semantics are rejected.
 
@@ -31,9 +31,13 @@ boxr image pull alpine:3.22
 boxr image build --tag example/api:dev -f Dockerfile .
 ```
 
-`ADD`, multi-stage `FROM`, `COPY --from`, build secrets, cache mounts, remote contexts, `RUN --mount`, and advanced Dockerfile frontend features are not implemented. They fail explicitly. Dockerfile RUN executes in Boxr's namespaces and staged rootfs, but Boxr is not yet a BuildKit replacement. The builder currently flattens the result into Boxr's canonical local image layer, so it does not preserve source layer history or Docker build cache metadata.
+`ADD` supports local files, directories and plain/gzip tar archives only. Remote URL/Git ADD sources, multi-stage `FROM`, `COPY --from`, build secrets, cache mounts, remote contexts, `RUN --mount`, and advanced Dockerfile frontend features are not implemented. They fail explicitly. Dockerfile RUN executes in Boxr's namespaces and staged rootfs, but Boxr is not yet a BuildKit replacement. The builder currently flattens the result into Boxr's canonical local image layer, so it does not preserve source layer history or Docker build cache metadata.
 
 This is a compatibility subset, not a complete Dockerfile frontend or BuildKit replacement.
+
+## ADD archive handling
+
+Local ADD sources are resolved only inside the build context. Plain `.tar` and gzip-compressed `.tar.gz`/`.tgz` archives are unpacked into a private staging directory before their contents are copied into the image. Extraction is bounded by rootfs file-count and uncompressed-byte limits and rejects traversal, unsafe links, duplicate entries and special files. A failed extraction aborts the build without publishing the image. Remote URL and Git ADD sources are deliberately rejected; fetch them explicitly into the build context first.
 
 ## Build arguments
 

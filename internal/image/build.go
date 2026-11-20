@@ -1,7 +1,9 @@
 package image
 
 import (
+	"archive/tar"
 	"bufio"
+	"compress/gzip"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -14,12 +16,14 @@ import (
 	"strings"
 
 	"github.com/manit6752025/boxr/internal/container"
+	rootfsTools "github.com/manit6752025/boxr/internal/rootfs"
 )
 
 const (
-	maxBuildSpecBytes   = 1 << 20
-	maxBuildIgnoreBytes = 64 << 10
-	maxBuildIgnoreLine  = 4096
+	maxBuildSpecBytes       = 1 << 20
+	maxBuildIgnoreBytes     = 64 << 10
+	maxBuildIgnoreLine      = 4096
+	maxBuildAddArchiveBytes = int64(8 << 30)
 )
 
 // BuildSpec is a deliberately small, non-executing Boxr build recipe. Only a
@@ -259,15 +263,21 @@ func buildWithSpec(contextDir string, spec BuildSpec, reference, platform, ignor
 		copyNumber := 0
 		for _, step := range spec.dockerfileSteps {
 			switch step.kind {
-			case "copy":
+			case "copy", "add":
 				destination := step.destination
 				if !path.IsAbs(destination) {
 					destination = path.Join(workingDir, destination)
 				}
 				copyNumber++
 				instruction := CopyInstruction{Source: step.source, Destination: path.Clean(destination)}
-				if err := applyCopy(contextAbs, root, instruction, ignorePatterns); err != nil {
-					return Image{}, fmt.Errorf("COPY %d: %w", copyNumber, err)
+				var copyErr error
+				if step.kind == "add" {
+					copyErr = applyAdd(contextAbs, root, instruction, ignorePatterns)
+				} else {
+					copyErr = applyCopy(contextAbs, root, instruction, ignorePatterns)
+				}
+				if copyErr != nil {
+					return Image{}, fmt.Errorf("%s %d: %w", strings.ToUpper(step.kind), copyNumber, copyErr)
 				}
 			case "workdir":
 				if path.IsAbs(step.value) {
@@ -582,6 +592,76 @@ func applyCopy(contextRoot, root string, instruction CopyInstruction, ignorePatt
 		return fmt.Errorf("prepare COPY destination: %w", err)
 	}
 	return copyContextFile(source, destination, info.Mode())
+}
+
+// applyAdd supports local ADD files/directories and plain or gzip tar archives.
+// Remote sources are rejected by the Dockerfile parser. Archive extraction is
+// bounded and staged before the contents are copied into the image rootfs.
+func applyAdd(contextRoot, root string, instruction CopyInstruction, ignorePatterns []ignorePattern) error {
+	if err := validateContextPath(instruction.Source); err != nil {
+		return err
+	}
+	source := filepath.Join(contextRoot, filepath.Clean(instruction.Source))
+	info, err := os.Lstat(source)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return applyCopy(contextRoot, root, instruction, ignorePatterns)
+	}
+	if info.Size() < 0 || info.Size() > maxBuildAddArchiveBytes {
+		return fmt.Errorf("ADD source exceeds the %d-byte archive limit", maxBuildAddArchiveBytes)
+	}
+	archive, err := isTarArchive(source)
+	if err != nil {
+		return err
+	}
+	if !archive {
+		return applyCopy(contextRoot, root, instruction, ignorePatterns)
+	}
+	if ignoredPath(instruction.Source, false, ignorePatterns) {
+		return fmt.Errorf("source %q is excluded by .dockerignore", instruction.Source)
+	}
+	destination, err := rootfsDestination(root, instruction.Destination)
+	if err != nil {
+		return err
+	}
+	destination, err = ensureRootfsDirectory(root, destination)
+	if err != nil {
+		return fmt.Errorf("prepare ADD archive destination: %w", err)
+	}
+	staging, err := os.MkdirTemp("", "boxr-add-*")
+	if err != nil {
+		return fmt.Errorf("create ADD staging directory: %w", err)
+	}
+	defer os.RemoveAll(staging)
+	extracted := filepath.Join(staging, "extracted")
+	if _, err := rootfsTools.ExtractTar(source, extracted, rootfsTools.Limits{}); err != nil {
+		return fmt.Errorf("safely extract ADD archive: %w", err)
+	}
+	return copyContextDirectory(extracted, destination, root, ".", nil)
+}
+
+func isTarArchive(filename string) (bool, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+	buffered := bufio.NewReader(file)
+	magic, peekErr := buffered.Peek(2)
+	var reader io.Reader = buffered
+	if peekErr == nil && magic[0] == 0x1f && magic[1] == 0x8b {
+		compressed, gzipErr := gzip.NewReader(buffered)
+		if gzipErr != nil {
+			return false, nil
+		}
+		defer compressed.Close()
+		reader = compressed
+	}
+	archive := tar.NewReader(reader)
+	_, err = archive.Next()
+	return err == nil, nil
 }
 
 func copyContextDirectory(source, destination, root, sourceRelative string, ignorePatterns []ignorePattern) error {
