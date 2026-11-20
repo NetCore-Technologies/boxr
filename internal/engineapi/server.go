@@ -826,17 +826,17 @@ func dockerStatsSnapshot(record state.Record) (map[string]any, error) {
 		"usage_in_usermode":   stats.CPUUserUsec * 1000,
 	}
 	return map[string]any{
-		"read":        time.Now().UTC().Format(time.RFC3339Nano),
-		"preread":     "",
-		"pids_stats":  map[string]any{"current": stats.PIDsCurrent, "limit": record.Options.PidsLimit},
+		"read":         time.Now().UTC().Format(time.RFC3339Nano),
+		"preread":      "",
+		"pids_stats":   map[string]any{"current": stats.PIDsCurrent, "limit": record.Options.PidsLimit},
 		"memory_stats": map[string]any{"usage": stats.MemoryCurrent, "limit": memoryLimit, "stats": map[string]int64{}},
-		"cpu_stats":   map[string]any{
+		"cpu_stats": map[string]any{
 			"cpu_usage": cpuUsage, "system_cpu_usage": 0, "online_cpus": runtime.NumCPU(),
 		},
 		"precpu_stats": map[string]any{"cpu_usage": cpuUsage, "system_cpu_usage": 0, "online_cpus": runtime.NumCPU()},
-		"blkio_stats": map[string]any{"io_service_bytes_recursive": []any{}},
-		"networks":    map[string]any{},
-		"name":        displayName(record), "id": record.ID,
+		"blkio_stats":  map[string]any{"io_service_bytes_recursive": []any{}},
+		"networks":     map[string]any{},
+		"name":         displayName(record), "id": record.ID,
 	}, nil
 }
 

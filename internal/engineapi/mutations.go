@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-		"time"
+	"time"
 
 	"github.com/manit6752025/boxr/internal/config"
 	"github.com/manit6752025/boxr/internal/container"
@@ -47,26 +47,26 @@ type dockerCreateRequest struct {
 }
 
 type dockerHostConfig struct {
-	Memory            int64                         `json:"Memory"`
-	MemoryReservation int64                         `json:"MemoryReservation"`
-	MemorySwap        int64                         `json:"MemorySwap"`
-	NanoCPUs          int64                         `json:"NanoCpus"`
-	PidsLimit         int64                         `json:"PidsLimit"`
-	NetworkMode       string                        `json:"NetworkMode"`
-	Binds             []string                      `json:"Binds"`
+	Memory            int64                          `json:"Memory"`
+	MemoryReservation int64                          `json:"MemoryReservation"`
+	MemorySwap        int64                          `json:"MemorySwap"`
+	NanoCPUs          int64                          `json:"NanoCpus"`
+	PidsLimit         int64                          `json:"PidsLimit"`
+	NetworkMode       string                         `json:"NetworkMode"`
+	Binds             []string                       `json:"Binds"`
 	PortBindings      map[string][]dockerPortBinding `json:"PortBindings"`
-	Privileged        bool                          `json:"Privileged"`
-	ReadonlyRootfs    bool                          `json:"ReadonlyRootfs"`
-	RestartPolicy     dockerRestartPolicyConfig           `json:"RestartPolicy"`
-	AutoRemove        bool                          `json:"AutoRemove"`
-	CapAdd            []string                      `json:"CapAdd"`
-	CapDrop           []string                      `json:"CapDrop"`
-	Devices           []json.RawMessage             `json:"Devices"`
-	SecurityOpt       []string                      `json:"SecurityOpt"`
-	Tmpfs             map[string]string             `json:"Tmpfs"`
-	Mounts            []json.RawMessage             `json:"Mounts"`
-	ShmSize           int64                         `json:"ShmSize"`
-	PublishAllPorts   bool                          `json:"PublishAllPorts"`
+	Privileged        bool                           `json:"Privileged"`
+	ReadonlyRootfs    bool                           `json:"ReadonlyRootfs"`
+	RestartPolicy     dockerRestartPolicyConfig      `json:"RestartPolicy"`
+	AutoRemove        bool                           `json:"AutoRemove"`
+	CapAdd            []string                       `json:"CapAdd"`
+	CapDrop           []string                       `json:"CapDrop"`
+	Devices           []json.RawMessage              `json:"Devices"`
+	SecurityOpt       []string                       `json:"SecurityOpt"`
+	Tmpfs             map[string]string              `json:"Tmpfs"`
+	Mounts            []json.RawMessage              `json:"Mounts"`
+	ShmSize           int64                          `json:"ShmSize"`
+	PublishAllPorts   bool                           `json:"PublishAllPorts"`
 }
 
 type dockerPortBinding struct {
@@ -112,10 +112,10 @@ func (s *Server) handleContainerCreate(writer http.ResponseWriter, request *http
 		return
 	}
 	runFile := config.RunFile{
-		Version: 1,
-		Name: record.Name,
-		Command: input.Cmd,
-		Options: sanitizeEngineRunOptions(record.Options),
+		Version:  1,
+		Name:     record.Name,
+		Command:  input.Cmd,
+		Options:  sanitizeEngineRunOptions(record.Options),
 		Metadata: record.Labels,
 	}
 	configData, err := json.Marshal(runFile)
@@ -128,7 +128,7 @@ func (s *Server) handleContainerCreate(writer http.ResponseWriter, request *http
 		return
 	}
 	writeJSON(writer, http.StatusCreated, map[string]any{
-		"Id": record.ID,
+		"Id":       record.ID,
 		"Warnings": []string{},
 	})
 }
@@ -227,15 +227,15 @@ func createContainerRecord(name string, input dockerCreateRequest) (state.Record
 
 func dockerOptions(host dockerHostConfig) (container.Options, error) {
 	options := container.Options{
-		NetworkMode: "none",
-		MemoryLimitBytes: host.Memory,
-		MemoryLowBytes: host.MemoryReservation,
-		PidsLimit: host.PidsLimit,
-		ReadOnlyRootFS: host.ReadonlyRootfs,
-		AutoRemove: host.AutoRemove,
-		RestartPolicy: host.RestartPolicy.Name,
+		NetworkMode:       "none",
+		MemoryLimitBytes:  host.Memory,
+		MemoryLowBytes:    host.MemoryReservation,
+		PidsLimit:         host.PidsLimit,
+		ReadOnlyRootFS:    host.ReadonlyRootfs,
+		AutoRemove:        host.AutoRemove,
+		RestartPolicy:     host.RestartPolicy.Name,
 		RestartMaxRetries: host.RestartPolicy.MaximumRetryCount,
-		DropCapabilities: append([]string(nil), host.CapDrop...),
+		DropCapabilities:  append([]string(nil), host.CapDrop...),
 	}
 	if host.Memory < 0 || host.MemoryReservation < 0 || host.MemorySwap < 0 || host.NanoCPUs < 0 || host.PidsLimit < 0 {
 		return options, fmt.Errorf("Docker memory, CPU and PID limits must not be negative")
@@ -557,4 +557,3 @@ func (s *Server) handleContainerStop(writer http.ResponseWriter, request *http.R
 		}
 	}
 }
-

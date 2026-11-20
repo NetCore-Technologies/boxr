@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -88,7 +88,7 @@ func TestContainerListInspectFiltersAndDockerFields(t *testing.T) {
 		NetworkMode: "bridge", NetworkName: "boxr-test",
 		Hostname: "api", Workdir: "/srv/app", MemoryLimitBytes: 64 << 20,
 		PublishedPorts: []container.PortMapping{{HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 80, Protocol: "tcp"}},
-		BindMounts: []container.BindMount{{Source: "/srv/data", Target: "/data", ReadOnly: true}},
+		BindMounts:     []container.BindMount{{Source: "/srv/data", Target: "/data", ReadOnly: true}},
 	})
 	filters, err := json.Marshal(map[string][]string{"name": {"api-test"}, "status": {"running"}})
 	if err != nil {
@@ -238,7 +238,6 @@ func TestMalformedContainerQueriesReturnDockerErrors(t *testing.T) {
 		t.Fatalf("missing container status=%d", response.Code)
 	}
 }
-
 
 func TestDockerImageIDDoesNotDuplicateDigestAlgorithm(t *testing.T) {
 	if got := dockerImageID("sha256:abc123"); got != "sha256:abc123" {
@@ -395,8 +394,6 @@ func TestEngineAPIContainerDeleteRejectsUnsupportedForceAndVolumeRemoval(t *test
 	}
 }
 
-
-
 func TestDockerCreateRejectsUnsupportedAndMalformedRequests(t *testing.T) {
 	server := setupEngineAPITest(t)
 	tests := []struct {
@@ -473,7 +470,7 @@ func TestParseDockerBindRequiresExistingNonSymlinkSource(t *testing.T) {
 	if err := os.Mkdir(source, 0700); err != nil {
 		t.Fatal(err)
 	}
-	mount, err := parseDockerBind(source+":/var/lib/app:ro")
+	mount, err := parseDockerBind(source + ":/var/lib/app:ro")
 	if err != nil {
 		t.Fatalf("parseDockerBind: %v", err)
 	}
@@ -484,13 +481,13 @@ func TestParseDockerBindRequiresExistingNonSymlinkSource(t *testing.T) {
 	if err := os.Symlink(source, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := parseDockerBind(link+":/data"); err == nil {
+	if _, err := parseDockerBind(link + ":/data"); err == nil {
 		t.Fatal("symlink bind source unexpectedly accepted")
 	}
-	if _, err := parseDockerBind(filepath.Join(root, "missing")+":/data"); err == nil {
+	if _, err := parseDockerBind(filepath.Join(root, "missing") + ":/data"); err == nil {
 		t.Fatal("missing bind source unexpectedly accepted")
 	}
-	if _, err := parseDockerBind(source+":/data:ro,z"); err == nil {
+	if _, err := parseDockerBind(source + ":/data:ro,z"); err == nil {
 		t.Fatal("unsupported bind mount mode unexpectedly accepted")
 	}
 }
@@ -498,8 +495,8 @@ func TestParseDockerBindRequiresExistingNonSymlinkSource(t *testing.T) {
 func TestDockerPortBindingsRejectEphemeralAndInvalidProtocols(t *testing.T) {
 	for name, input := range map[string]map[string][]dockerPortBinding{
 		"ephemeral host port": {"80/tcp": {{HostIP: "127.0.0.1"}}},
-		"invalid protocol": {"80/sctp": {{HostIP: "127.0.0.1", HostPort: "8080"}}},
-		"invalid host port": {"80/tcp": {{HostIP: "127.0.0.1", HostPort: "70000"}}},
+		"invalid protocol":    {"80/sctp": {{HostIP: "127.0.0.1", HostPort: "8080"}}},
+		"invalid host port":   {"80/tcp": {{HostIP: "127.0.0.1", HostPort: "70000"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := parseDockerPortBindings(input); err == nil {

@@ -375,7 +375,6 @@ func TestRemoveRefusesContainerDuringRestartBackoff(t *testing.T) {
 	}
 }
 
-
 func TestEngineConfigIsStoredPrivatelyAndRemovedWithContainer(t *testing.T) {
 	directory := useTempState(t)
 	record, err := Create("engine-config-test", []string{"/bin/true"}, container.Options{

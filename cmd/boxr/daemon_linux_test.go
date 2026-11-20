@@ -105,7 +105,6 @@ func TestListenDaemonSocketDoesNotReplaceRegularFile(t *testing.T) {
 	}
 }
 
-
 func TestDaemonUnixSocketServesDockerPing(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "engine.sock")
 	listener, _, err := listenDaemonSocket(socketPath)
