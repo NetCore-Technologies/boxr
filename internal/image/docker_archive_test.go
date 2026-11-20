@@ -90,9 +90,9 @@ func writeDockerFixture(t *testing.T, pathname string, compressOuter, corruptDif
 		t.Fatal(err)
 	}
 	manifest, err := json.Marshal([]dockerManifestEntry{{
-		Config: "config.json",
+		Config:   "config.json",
 		RepoTags: []string{"demo:latest", "demo:stable"},
-		Layers: []string{"layer-one/layer.tar", "layer-two/layer.tar"},
+		Layers:   []string{"layer-one/layer.tar", "layer-two/layer.tar"},
 	}})
 	if err != nil {
 		t.Fatal(err)

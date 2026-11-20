@@ -509,9 +509,10 @@ func dockerClearDirectory(root, name string) error {
 	}
 	target := root
 	if name != "." {
-		target, err = dockerTarget(root, name, true)
-		if err != nil {
-			return err
+		var targetErr error
+		target, targetErr = dockerTarget(root, name, true)
+		if targetErr != nil {
+			return targetErr
 		}
 	}
 	children, err := os.ReadDir(target)
