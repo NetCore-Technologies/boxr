@@ -2578,3 +2578,64 @@ func TestDeployProfileFlagsFilterPlanAndDryRun(t *testing.T) {
 	}
 }
 
+func TestDeployProfilesCommandListsDefaultAndOptInServices(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.json")
+	manifest := `{
+		"version": 1,
+		"name": "profile-inventory",
+		"services": {
+			"database": {
+				"command": ["/bin/database"],
+				"options": {"labels": {"classification": "private-label"}}
+			},
+			"web": {
+				"command": ["/bin/web", "private-command"],
+				"options": {"env": ["TOKEN=private-secret"]},
+				"profiles": ["frontend", "diagnostics"]
+			},
+			"metrics": {
+				"command": ["/bin/metrics"],
+				"profiles": ["diagnostics"]
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(manifest), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	if code := run([]string{"deploy", "profiles", "--json", path}, &out, &errOut); code != 0 {
+		t.Fatalf("deploy profiles --json: code=%d stderr=%q", code, errOut.String())
+	}
+	var inventory deploy.ProfileInventory
+	if err := json.Unmarshal(out.Bytes(), &inventory); err != nil {
+		t.Fatalf("decode deploy profile inventory: %v", err)
+	}
+	want := deploy.ProfileInventory{
+		DefaultServices: []string{"database"},
+		Profiles: []deploy.ProfileGroup{
+			{Name: "diagnostics", Services: []string{"metrics", "web"}},
+			{Name: "frontend", Services: []string{"web"}},
+		},
+	}
+	if !reflect.DeepEqual(inventory, want) {
+		t.Fatalf("deploy profile inventory = %+v, want %+v", inventory, want)
+	}
+	for _, secret := range []string{"private-command", "private-secret", "private-label"} {
+		if strings.Contains(out.String(), secret) {
+			t.Errorf("profile inventory leaked %q: %s", secret, out.String())
+		}
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"deploy", "profiles", path}, &out, &errOut); code != 0 {
+		t.Fatalf("deploy profiles text: code=%d stderr=%q", code, errOut.String())
+	}
+	for _, expected := range []string{"DEFAULT SERVICES", "database", "SERVICE PROFILES", "diagnostics", "frontend", "metrics, web"} {
+		if !strings.Contains(out.String(), expected) {
+			t.Errorf("text profile inventory missing %q: %s", expected, out.String())
+		}
+	}
+}
+
