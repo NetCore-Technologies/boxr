@@ -425,3 +425,48 @@ func TestBuildPlanProfilesRejectInvalidSelectorsAndInactiveDependencies(t *testi
 		})
 	}
 }
+
+func TestListProfilesReturnsDeterministicInventory(t *testing.T) {
+	file := File{
+		Version: 1,
+		Services: map[string]Service{
+			"web": {
+				Command:  []string{"/bin/web", "private-command"},
+				Profiles: []string{"frontend", "diagnostics"},
+				Options:  container.Options{Env: []string{"TOKEN=private-secret"}},
+			},
+			"metrics": {
+				Command:  []string{"/bin/metrics"},
+				Profiles: []string{"diagnostics"},
+			},
+			"database": {
+				Command: []string{"/bin/database"},
+				Options: container.Options{Labels: map[string]string{"secret": "private-label"}},
+			},
+		},
+	}
+	inventory := ListProfiles(file)
+	want := ProfileInventory{
+		DefaultServices: []string{"database"},
+		Profiles: []ProfileGroup{
+			{Name: "diagnostics", Services: []string{"metrics", "web"}},
+			{Name: "frontend", Services: []string{"web"}},
+		},
+	}
+	if !reflect.DeepEqual(inventory, want) {
+		t.Fatalf("profile inventory = %+v, want %+v", inventory, want)
+	}
+	encoded, err := json.Marshal(inventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"private-command", "private-secret", "private-label"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Errorf("profile inventory leaked %q: %s", secret, encoded)
+		}
+	}
+	if !reflect.DeepEqual(inventory, ListProfiles(file)) {
+		t.Fatal("profile inventory ordering is not deterministic")
+	}
+}
+
