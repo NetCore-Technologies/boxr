@@ -4427,6 +4427,7 @@ func runKill(args []string, stdout, stderr io.Writer) int {
 	for _, query := range flags.Args() {
 		record, err := state.Get(query)
 		terminating := isTerminatingSignal(*signalName)
+		stopRequested := false
 		if err == nil && record.Status == "restarting" && terminating {
 			err = state.RequestStop(record.ID)
 			if err == nil {
@@ -4439,12 +4440,13 @@ func runKill(args []string, stdout, stderr io.Writer) int {
 		}
 		if err == nil && terminating {
 			err = state.RequestStop(record.ID)
+			stopRequested = err == nil
 		}
 		if err == nil {
 			err = state.Signal(record.ID, *signalName)
 		}
 		if err != nil {
-			if record.ID != "" && terminating && record.Status == "running" && record.StopRequested {
+			if stopRequested {
 				_ = state.CancelStopRequest(record.ID)
 			}
 			fmt.Fprintf(stderr, "boxr kill: %s: %v\n", query, err)
