@@ -578,7 +578,6 @@ func TestDeployStatusDryRunDownAndRemoval(t *testing.T) {
 	}
 }
 
-
 func TestDeployPullSkipsCachedImagesAndDeduplicatesCanonicalReferences(t *testing.T) {
 	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
 	root := t.TempDir()
