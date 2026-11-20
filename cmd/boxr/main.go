@@ -40,6 +40,14 @@ var (
 	buildDate = "unknown"
 )
 
+// These hooks keep live namespace connection testable without requiring
+// privileged iproute2 and firewall access in the CLI unit-test suite.
+var (
+	joinExistingContainerNetwork = boxrnetwork.Join
+	leaveExistingContainerNetwork = boxrnetwork.Leave
+	verifyContainerNamespacePID = verifyContainerRuntimePID
+)
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -1446,6 +1454,8 @@ Usage:
   boxr network create --subnet CIDR [--gateway IP] [--no-nat] NAME
   boxr network ls [--json]
   boxr network inspect [--json] NAME
+  boxr network connect [--publish SPEC] NETWORK CONTAINER
+  boxr network disconnect NETWORK CONTAINER
   boxr network rm NAME
   boxr volume create [--label KEY=VALUE] NAME
   boxr volume ls [--format table|json] [--filter label=KEY=VALUE]
@@ -4457,7 +4467,7 @@ func parseVolumeMount(value string) (string, container.BindMount, error) {
 
 func runNetwork(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "Usage: boxr network create --subnet CIDR [--gateway IP] [--bridge IFACE] [--no-nat] NAME | ls [--json] | inspect [--json] NAME | rm NAME")
+		fmt.Fprintln(stderr, "Usage: boxr network create --subnet CIDR [--gateway IP] [--bridge IFACE] [--no-nat] NAME | ls [--json] | inspect [--json] NAME | connect NETWORK CONTAINER | disconnect NETWORK CONTAINER | rm NAME")
 		return 2
 	}
 	switch args[0] {
@@ -4534,6 +4544,77 @@ func runNetwork(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "Network: %s\nID: %s\nDriver: %s\nBridge: %s\nSubnet: %s\nGateway: %s\nNAT: %t\nContainers: %d\n",
 			item.Name, item.ID, item.Driver, item.Bridge, item.Subnet, item.Gateway, item.NAT, item.ContainerCount)
 		return 0
+	case "connect":
+		flags := flag.NewFlagSet("network connect", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		var publish envList
+		flags.Var(&publish, "publish", "publish [HOST_IP:]HOST_PORT:CONTAINER_PORT[/tcp|udp] (repeatable)")
+		flags.Var(&publish, "p", "alias for --publish (repeatable)")
+		if err := flags.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if flags.NArg() != 2 {
+			fmt.Fprintln(stderr, "Usage: boxr network connect [--publish SPEC] NETWORK CONTAINER")
+			return 2
+		}
+		networkName, containerQuery := flags.Arg(0), flags.Arg(1)
+		record, err := state.Get(containerQuery)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr network connect: %v\\n", err)
+			return 1
+		}
+		if record.Status != "running" || record.PID <= 1 {
+			fmt.Fprintf(stderr, "boxr network connect: container %s must be running\\n", record.ID)
+			return 1
+		}
+		if record.Options.NetworkMode != "none" {
+			fmt.Fprintln(stderr, "boxr network connect: container must have been started with --network none so its network namespace is private")
+			return 1
+		}
+		if err := verifyContainerNamespacePID(record.PID); err != nil {
+			fmt.Fprintf(stderr, "boxr network connect: refusing to enter container PID %d: %v\\n", record.PID, err)
+			return 1
+		}
+		ports := make([]container.PortMapping, 0, len(publish))
+		for _, value := range publish {
+			mapping, err := parsePortMapping(value)
+			if err != nil {
+				fmt.Fprintf(stderr, "boxr network connect: invalid --publish: %v\\n", err)
+				return 2
+			}
+			ports = append(ports, mapping)
+		}
+		if err := (container.Options{NetworkMode: "bridge", NetworkName: networkName, PublishedPorts: ports}).Validate(); err != nil {
+			fmt.Fprintf(stderr, "boxr network connect: %v\\n", err)
+			return 2
+		}
+		address, err := joinExistingContainerNetwork(networkName, record.PID, record.ID, ports...)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr network connect: %v\\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "connected container %s to network %s with IPv4 %s\\n", record.ID, networkName, address)
+		return 0
+	case "disconnect":
+		if len(args) != 3 || strings.TrimSpace(args[1]) == "" || strings.TrimSpace(args[2]) == "" {
+			fmt.Fprintln(stderr, "Usage: boxr network disconnect NETWORK CONTAINER")
+			return 2
+		}
+		record, err := state.Get(args[2])
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr network disconnect: %v\\n", err)
+			return 1
+		}
+		if record.Options.NetworkMode != "none" {
+			fmt.Fprintln(stderr, "boxr network disconnect: only containers started with --network none support live network attachment")
+			return 1
+		}
+		if err := leaveExistingContainerNetwork(args[1], record.ID); err != nil {
+			fmt.Fprintf(stderr, "boxr network disconnect: %v\\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "disconnected container %s from network %s\\n", record.ID, args[1])
+		return 0
 	case "rm":
 		if len(args) != 2 || strings.TrimSpace(args[1]) == "" {
 			fmt.Fprintln(stderr, "Usage: boxr network rm NAME")
@@ -4549,6 +4630,41 @@ func runNetwork(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "boxr network: unknown action %q\n", args[0])
 		return 2
 	}
+}
+
+func verifyContainerRuntimePID(pid int) error {
+	if pid <= 1 {
+		return fmt.Errorf("host PID must be greater than 1")
+	}
+	procDir := filepath.Join("/proc", strconv.Itoa(pid))
+	currentExecutable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve Boxr executable: %w", err)
+	}
+	currentInfo, err := os.Stat(currentExecutable)
+	if err != nil {
+		return fmt.Errorf("inspect Boxr executable: %w", err)
+	}
+	processExecutable := filepath.Join(procDir, "exe")
+	processInfo, err := os.Stat(processExecutable)
+	if err != nil {
+		return fmt.Errorf("inspect process executable: %w", err)
+	}
+	if !os.SameFile(currentInfo, processInfo) {
+		return fmt.Errorf("PID does not belong to this Boxr executable")
+	}
+	commandLine, err := os.ReadFile(filepath.Join(procDir, "cmdline"))
+	if err != nil {
+		return fmt.Errorf("read process command line: %w", err)
+	}
+	arguments := strings.Split(string(commandLine), "\x00")
+	if len(arguments) < 3 || arguments[1] != "__boxr-init" {
+		return fmt.Errorf("PID is not a Boxr container namespace helper")
+	}
+	if _, err := os.Stat(filepath.Join(procDir, "ns", "net")); err != nil {
+		return fmt.Errorf("inspect container network namespace: %w", err)
+	}
+	return nil
 }
 
 func runVolume(args []string, stdout, stderr io.Writer) int {
