@@ -2,13 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-
-## Implemented capabilities
-
-
-## Implemented capabilities
-
-**Inventory size: 735 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 740 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -747,3 +741,8 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 733. registry pull cancels outstanding layer downloads after the first failure
 734. parallel registry pull removes every partial temporary layer on failure
 735. concurrent registry requests share a synchronized Bearer token refresh
+736. OCI registry pulls accept Zstandard-compressed tar layers
+737. Zstandard registry layer digest verification streams decompressed bytes
+738. Zstandard decompression caps decoder memory and window at 256 MiB
+739. rootfs layer application auto-detects Zstandard-compressed tar archives
+740. pulled Zstandard layers are verified against OCI uncompressed diff IDs before application

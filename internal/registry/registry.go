@@ -23,12 +23,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
 	boxrLayerMediaType       = "application/vnd.boxr.rootfs.v1.tar+gzip"
 	ociGzipLayerMediaType    = "application/vnd.oci.image.layer.v1.tar+gzip"
 	ociTarLayerMediaType     = "application/vnd.oci.image.layer.v1.tar"
+	ociZstdLayerMediaType    = "application/vnd.oci.image.layer.v1.tar+zstd"
 	dockerGzipLayerMediaType = "application/vnd.docker.image.rootfs.diff.tar.gzip"
 	dockerTarLayerMediaType  = "application/vnd.docker.image.rootfs.diff.tar"
 	maxManifestBytes         = 4 << 20
@@ -486,11 +489,40 @@ func Pull(ctx context.Context, reference, platform string, credentials Credentia
 
 func supportedLayerMediaType(mediaType string) bool {
 	switch mediaType {
-	case boxrLayerMediaType, ociGzipLayerMediaType, ociTarLayerMediaType, dockerGzipLayerMediaType, dockerTarLayerMediaType:
+	case boxrLayerMediaType, ociGzipLayerMediaType, ociTarLayerMediaType, ociZstdLayerMediaType, dockerGzipLayerMediaType, dockerTarLayerMediaType:
 		return true
 	default:
 		return false
 	}
+}
+
+func uncompressedZstdDigest(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	decoder, err := zstd.NewReader(
+		file,
+		zstd.WithDecoderMaxMemory(256<<20),
+		zstd.WithDecoderMaxWindow(256<<20),
+		zstd.WithDecoderConcurrency(1),
+	)
+	if err != nil {
+		return "", fmt.Errorf("open Zstandard image layer: %w", err)
+	}
+	defer decoder.Close()
+
+	hash := sha256.New()
+	written, err := io.Copy(hash, io.LimitReader(decoder, maxLayerBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("decode Zstandard image layer: %w", err)
+	}
+	if written > maxLayerBytes {
+		return "", fmt.Errorf("uncompressed image layer exceeds %d bytes", maxLayerBytes)
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func uncompressedDigestForMediaType(path, mediaType string) (string, error) {
@@ -500,6 +532,8 @@ func uncompressedDigestForMediaType(path, mediaType string) (string, error) {
 	case ociTarLayerMediaType, dockerTarLayerMediaType:
 		digest, _, err := digestFile(path, maxLayerBytes)
 		return digest, err
+	case ociZstdLayerMediaType:
+		return uncompressedZstdDigest(path)
 	default:
 		return "", fmt.Errorf("unsupported image layer media type %q", mediaType)
 	}

@@ -2810,6 +2810,11 @@ var implementedFeatures = []string{
 	"registry pull cancels outstanding layer downloads after the first failure",
 	"parallel registry pull removes every partial temporary layer on failure",
 	"concurrent registry requests share a synchronized Bearer token refresh",
+	"OCI registry pulls accept Zstandard-compressed tar layers",
+	"Zstandard registry layer digest verification streams decompressed bytes",
+	"Zstandard decompression caps decoder memory and window at 256 MiB",
+	"rootfs layer application auto-detects Zstandard-compressed tar archives",
+	"pulled Zstandard layers are verified against OCI uncompressed diff IDs before application",
 }
 
 func printFeatures(stdout io.Writer) {

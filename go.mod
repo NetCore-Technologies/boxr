@@ -1,3 +1,5 @@
 module github.com/manit6752025/boxr
 
-go 1.23.0
+go 1.25.0
+
+require github.com/klauspost/compress v1.20.4

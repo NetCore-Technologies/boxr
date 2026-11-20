@@ -15,6 +15,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
@@ -55,6 +57,28 @@ func openDockerArchive(pathname string) (*dockerArchiveReader, error) {
 				return errors.Join(compressed.Close(), file.Close())
 			},
 		}, nil
+	}
+	if peekErr == nil && magic[0] == 0x28 {
+		frameHeader, headerErr := buffered.Peek(4)
+		if headerErr == nil && bytes.Equal(frameHeader, []byte{0x28, 0xb5, 0x2f, 0xfd}) {
+			compressed, zstdErr := zstd.NewReader(
+				buffered,
+				zstd.WithDecoderMaxMemory(256<<20),
+				zstd.WithDecoderMaxWindow(256<<20),
+				zstd.WithDecoderConcurrency(1),
+			)
+			if zstdErr != nil {
+				_ = file.Close()
+				return nil, fmt.Errorf("open Zstandard Docker archive: %w", zstdErr)
+			}
+			return &dockerArchiveReader{
+				Reader: compressed,
+				closeFn: func() error {
+					compressed.Close()
+					return file.Close()
+				},
+			}, nil
+		}
 	}
 	return &dockerArchiveReader{Reader: buffered, closeFn: file.Close}, nil
 }

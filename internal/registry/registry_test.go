@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
+
 	imageStore "github.com/manit6752025/boxr/internal/image"
 )
 
@@ -445,24 +447,60 @@ func TestConcurrentRegistryRequestsShareBearerTokenRefresh(t *testing.T) {
 	}
 }
 
-func TestPullRejectsUnsupportedZstdOCIImageLayers(t *testing.T) {
-	layer, diffID := testLayer(t)
+func TestPullAcceptsOCIZstandardImageLayerAndVerifiesDiffID(t *testing.T) {
+	plainLayer, diffID := testRegistryLayer(t, false, registryLayerEntry{name: "usr/share/boxr-zstd", data: []byte("pulled from zstandard\n")})
+	var encodedLayer bytes.Buffer
+	encoder, err := zstd.NewWriter(&encodedLayer, zstd.WithEncoderConcurrency(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := encoder.Write(plainLayer); err != nil {
+		t.Fatal(err)
+	}
+	encoder.Close()
+	layer := encodedLayer.Bytes()
+
 	configData := testConfig(t, "amd64", diffID)
 	configDescriptor := Descriptor{MediaType: "application/vnd.oci.image.config.v1+json", Digest: digestBytes(configData), Size: int64(len(configData))}
-	layerDescriptor := Descriptor{MediaType: "application/vnd.oci.image.layer.v1.tar+zstd", Digest: digestBytes(layer), Size: int64(len(layer))}
-	manifestData, _ := json.Marshal(manifest{SchemaVersion: 2, MediaType: "application/vnd.oci.image.manifest.v1+json", Config: configDescriptor, Layers: []Descriptor{layerDescriptor}})
+	layerDescriptor := Descriptor{MediaType: ociZstdLayerMediaType, Digest: digestBytes(layer), Size: int64(len(layer))}
+	manifestData, err := json.Marshal(manifest{SchemaVersion: 2, MediaType: "application/vnd.oci.image.manifest.v1+json", Config: configDescriptor, Layers: []Descriptor{layerDescriptor}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/manifests/") {
+		switch r.URL.Path {
+		case "/v2/team/app/manifests/latest":
 			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 			_, _ = w.Write(manifestData)
-			return
+		case "/v2/team/app/blobs/" + configDescriptor.Digest:
+			_, _ = w.Write(configData)
+		case "/v2/team/app/blobs/" + layerDescriptor.Digest:
+			_, _ = w.Write(layer)
+		default:
+			http.NotFound(w, r)
 		}
-		http.NotFound(w, r)
 	}))
 	defer server.Close()
+
 	ref := strings.TrimPrefix(server.URL, "http://") + "/team/app:latest"
-	if _, err := Pull(context.Background(), ref, "linux/amd64", Credentials{}); err == nil || !strings.Contains(err.Error(), "unsupported image layer media type") {
-		t.Fatalf("expected explicit unsupported zstd media type error, got %v", err)
+	artifact, err := Pull(context.Background(), ref, "linux/amd64", Credentials{})
+	if err != nil {
+		t.Fatalf("pull Zstandard image: %v", err)
+	}
+	defer artifact.Cleanup()
+	if len(artifact.Layers) != 1 || artifact.Layers[0].DiffID != diffID {
+		t.Fatalf("verified layers = %+v, want diff ID %q", artifact.Layers, diffID)
+	}
+	root := t.TempDir()
+	if err := imageStore.ApplyLayerArchive(root, artifact.Layers[0].Path); err != nil {
+		t.Fatalf("apply pulled Zstandard layer: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "usr/share/boxr-zstd"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "pulled from zstandard\n" {
+		t.Fatalf("pulled rootfs content = %q", got)
 	}
 }
 

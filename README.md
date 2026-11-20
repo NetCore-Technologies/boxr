@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/NetCore-Technologies/boxr/actions/workflows/ci.yml/badge.svg)](https://github.com/NetCore-Technologies/boxr/actions/workflows/ci.yml)
 [![Security](https://github.com/NetCore-Technologies/boxr/actions/workflows/security.yml/badge.svg)](https://github.com/NetCore-Technologies/boxr/actions/workflows/security.yml)
-[![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 [Project website](https://netcore-technologies.github.io/boxr/) · [Releases](https://github.com/NetCore-Technologies/boxr/releases) · [Feature matrix](docs/FEATURE_MATRIX.md)
@@ -52,7 +52,7 @@ irm https://raw.githubusercontent.com/NetCore-Technologies/boxr/main/install.ps1
 
 ## Build from source
 
-Use a supported Go release (Go 1.26.11 or Go 1.27.4 at the current toolchain review). The module keeps a Go 1.23 language floor, while CI tests both currently supported Go release lines.
+Use a supported Go release (Go 1.26.11 or Go 1.27.4 at the current toolchain review). The module requires Go 1.25 or newer for its patched Zstandard decoder; CI tests the Go 1.25, 1.26 and 1.27 release lines.
 
 ```bash
 git clone https://github.com/NetCore-Technologies/boxr.git

@@ -15,11 +15,12 @@ The puller accepts these layer media types:
 
 - `application/vnd.oci.image.layer.v1.tar`
 - `application/vnd.oci.image.layer.v1.tar+gzip`
+- `application/vnd.oci.image.layer.v1.tar+zstd`
 - `application/vnd.docker.image.rootfs.diff.tar`
 - `application/vnd.docker.image.rootfs.diff.tar.gzip`
 - Boxr's existing `application/vnd.boxr.rootfs.v1.tar+gzip`
 
-Zstandard-compressed and foreign/non-distributable layers are not currently supported. Unsupported media types fail before the layer is downloaded; Boxr never guesses the compression format from a filename.
+OCI Zstandard-compressed layers (`application/vnd.oci.image.layer.v1.tar+zstd`) are supported alongside uncompressed and gzip layers. Foreign/non-distributable layer URLs are not currently supported. Unsupported media types fail before the layer is downloaded; Boxr never guesses the compression format from a filename.
 
 ## Download performance
 
@@ -39,6 +40,7 @@ Verified layers are applied in manifest order. The extractor supports OCI/Docker
 - At most 8 GiB compressed bytes per layer.
 - At most 16 GiB aggregate compressed layer bytes per image.
 - At most 8 GiB uncompressed bytes per layer.
+- Zstandard decompression uses one decoder with a 256 MiB maximum window and memory budget.
 - Manifest and image config JSON remain bounded by the registry client's existing limits.
 
 These limits bound metadata and layer downloads; they are not a substitute for adequate disk-space planning.

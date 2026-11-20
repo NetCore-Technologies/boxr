@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 type dockerTestEntry struct {
@@ -52,6 +54,35 @@ func dockerTestLayer(t *testing.T, entries ...dockerTestEntry) ([]byte, string) 
 	data := buffer.Bytes()
 	sum := sha256.Sum256(data)
 	return append([]byte(nil), data...), "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func TestApplyLayerArchiveSupportsZstandard(t *testing.T) {
+	plain, _ := dockerTestLayer(t, dockerTestEntry{name: "usr/share/boxr-zstd", data: []byte("zstandard layer\n")})
+	var encoded bytes.Buffer
+	writer, err := zstd.NewWriter(&encoded, zstd.WithEncoderConcurrency(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write(plain); err != nil {
+		t.Fatal(err)
+	}
+	writer.Close()
+
+	archive := filepath.Join(t.TempDir(), "layer.tar.zst")
+	if err := os.WriteFile(archive, encoded.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := ApplyLayerArchive(root, archive); err != nil {
+		t.Fatalf("apply Zstandard layer: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "usr/share/boxr-zstd"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "zstandard layer\n" {
+		t.Fatalf("layer content = %q", got)
+	}
 }
 
 func writeDockerFixture(t *testing.T, pathname string, compressOuter, corruptDiff bool, firstLayerPath string) {

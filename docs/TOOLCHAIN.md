@@ -4,13 +4,13 @@ Last verified: **2026-11-19**.
 
 ## Go
 
-- Minimum language/toolchain version: **Go 1.23.0** (`go.mod`); the source is compatible with the Go 1.23 language/toolchain floor.
+- Minimum language/toolchain version: **Go 1.25.0** (`go.mod`); the source is compatible with the Go 1.25 language/toolchain floor.
 - CI compatibility matrix: **Go 1.26.x** and **Go 1.27.x** (newer supported release lines).
 - Release builds: **Go 1.27.4**.
 - Current supported patch releases at verification time: Go 1.26.11 and Go 1.27.4.
 - Dev Container: `mcr.microsoft.com/devcontainers/go:1.27-bookworm`.
 
-The module keeps Go 1.23 compatibility while CI exercises newer Go release lines. This allows local builds on the installed Go 1.23 toolchain while catching regressions on current Go versions. Release builds use an explicit patch version for repeatable release inputs.
+The module keeps Go 1.25 compatibility while CI exercises newer Go release lines. This allows local builds on the installed Go 1.25 toolchain while catching regressions on current Go versions. Release builds use an explicit patch version for repeatable release inputs.
 
 ## GitHub Actions
 
