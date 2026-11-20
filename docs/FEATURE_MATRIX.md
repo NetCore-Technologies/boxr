@@ -859,10 +859,11 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 850. state store renames containers with unique names and persists rename lifecycle events
 851. native rename and container rename commands preserve container IDs while changing unique names
 852. Engine API POST containers rename updates unique container names and returns Docker-compatible errors
-853. Engine API DELETE force true delegates to native safe forced removal for running or restarting containers
-854. native create command records a verified image-backed container without starting it
-855. native start command launches a created image-backed container through the detached supervisor
-856. native start command restarts stopped image-backed containers through the detached supervisor
-857. native restart command stops then starts an image-backed container with a bounded graceful timeout
-858. Engine API start endpoint restarts stopped image-backed containers through the native detached supervisor
-859. Engine API restart endpoint performs a bounded graceful stop and launches the same saved container again
+853. compose command aliases the supported Compose YAML deployment validation planning pull and lifecycle workflows
+854. Engine API DELETE force true delegates to native safe forced removal for running or restarting containers
+855. native create command records a verified image-backed container without starting it
+856. native start command launches a created image-backed container through the detached supervisor
+857. native start command restarts stopped image-backed containers through the detached supervisor
+858. native restart command stops then starts an image-backed container with a bounded graceful timeout
+859. Engine API start endpoint restarts stopped image-backed containers through the native detached supervisor
+860. Engine API restart endpoint performs a bounded graceful stop and launches the same saved container again
