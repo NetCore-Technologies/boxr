@@ -96,6 +96,53 @@ type Plan struct {
 	Services       []ServicePlan `json:"services"`
 }
 
+ 
+// ProfileGroup describes the services enabled by one opt-in profile.
+type ProfileGroup struct {
+	Name     string   `json:"name"`
+	Services []string `json:"services"`
+}
+
+// ProfileInventory separates always-enabled services from opt-in groups.
+type ProfileInventory struct {
+	DefaultServices []string       `json:"defaultServices"`
+	Profiles        []ProfileGroup `json:"profiles"`
+}
+
+// ListProfiles returns a deterministic, secret-free inventory of all service
+// profiles. Full manifest validation remains the caller's responsibility.
+func ListProfiles(file File) ProfileInventory {
+	groups := make(map[string][]string)
+	inventory := ProfileInventory{
+		DefaultServices: make([]string, 0),
+		Profiles:        make([]ProfileGroup, 0),
+	}
+	for serviceName, service := range file.Services {
+		if len(service.Profiles) == 0 {
+			inventory.DefaultServices = append(inventory.DefaultServices, serviceName)
+			continue
+		}
+		for _, profile := range service.Profiles {
+			groups[profile] = append(groups[profile], serviceName)
+		}
+	}
+	sort.Strings(inventory.DefaultServices)
+	profileNames := make([]string, 0, len(groups))
+	for name := range groups {
+		profileNames = append(profileNames, name)
+	}
+	sort.Strings(profileNames)
+	for _, name := range profileNames {
+		services := groups[name]
+		sort.Strings(services)
+		inventory.Profiles = append(inventory.Profiles, ProfileGroup{
+			Name:     name,
+			Services: services,
+		})
+	}
+	return inventory
+}
+
 // Load reads and strictly decodes one bounded JSON deployment manifest.
 func Load(path string) (File, error) {
 	var result File
