@@ -3,6 +3,7 @@ package container
 import (
 	"fmt"
 	"io"
+	"net/netip"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -39,10 +40,48 @@ type Options struct {
 	TmpfsMounts        []TmpfsMount      `json:"tmpfsMounts,omitempty"`
 	NetworkMode        string            `json:"networkMode,omitempty"`
 	NetworkName        string            `json:"networkName,omitempty"`
+	PublishedPorts     []PortMapping     `json:"publishedPorts,omitempty"`
 	UserNamespace      bool              `json:"userNamespace,omitempty"`
 	NoNewPrivileges    bool              `json:"noNewPrivileges,omitempty"`
 	SeccompProfile     string            `json:"seccompProfile,omitempty"`
 	DropCapabilities   []string          `json:"dropCapabilities,omitempty"`
+}
+
+// PortMapping publishes a host IPv4 address and port to a container TCP or UDP port.
+type PortMapping struct {
+	HostIP        string `json:"hostIp,omitempty"`
+	HostPort      uint16 `json:"hostPort"`
+	ContainerPort uint16 `json:"containerPort"`
+	Protocol      string `json:"protocol,omitempty"`
+}
+
+// Normalize applies safe defaults and rejects unsupported port mapping values.
+func (mapping PortMapping) Normalize() (PortMapping, error) {
+	if mapping.HostPort == 0 || mapping.ContainerPort == 0 {
+		return PortMapping{}, fmt.Errorf("published host and container ports must be between 1 and 65535")
+	}
+	if mapping.HostIP == "" {
+		mapping.HostIP = "0.0.0.0"
+	}
+	address, err := netip.ParseAddr(mapping.HostIP)
+	if err != nil || !address.Is4() || address.String() != mapping.HostIP {
+		return PortMapping{}, fmt.Errorf("published host IP must be a canonical IPv4 address")
+	}
+	mapping.Protocol = strings.ToLower(mapping.Protocol)
+	if mapping.Protocol == "" {
+		mapping.Protocol = "tcp"
+	}
+	if mapping.Protocol != "tcp" && mapping.Protocol != "udp" {
+		return PortMapping{}, fmt.Errorf("published port protocol must be tcp or udp")
+	}
+	return mapping, nil
+}
+
+func portMappingsConflict(left, right PortMapping) bool {
+	if left.HostPort != right.HostPort || left.Protocol != right.Protocol {
+		return false
+	}
+	return left.HostIP == "0.0.0.0" || right.HostIP == "0.0.0.0" || left.HostIP == right.HostIP
 }
 
 // BindMount describes a host path mounted at an absolute path inside RootFS.
@@ -146,6 +185,25 @@ func (o Options) Validate() error {
 		}
 	default:
 		return fmt.Errorf("network mode must be host, none, or bridge")
+	}
+	if len(o.PublishedPorts) > 128 {
+		return fmt.Errorf("at most 128 published port mappings are supported")
+	}
+	if len(o.PublishedPorts) > 0 && o.NetworkMode != "bridge" {
+		return fmt.Errorf("published ports require network mode bridge")
+	}
+	normalizedPorts := make([]PortMapping, 0, len(o.PublishedPorts))
+	for index, mapping := range o.PublishedPorts {
+		normalized, err := mapping.Normalize()
+		if err != nil {
+			return fmt.Errorf("published port %d: %w", index+1, err)
+		}
+		for _, previous := range normalizedPorts {
+			if portMappingsConflict(previous, normalized) {
+				return fmt.Errorf("published host port %s:%d/%s is configured more than once", normalized.HostIP, normalized.HostPort, normalized.Protocol)
+			}
+		}
+		normalizedPorts = append(normalizedPorts, normalized)
 	}
 	needsRootFS := o.ReadOnlyRootFS || o.MountProc || len(o.BindMounts) > 0 || len(o.TmpfsMounts) > 0 || o.OverlayDir != ""
 	if needsRootFS && o.RootFS == "" {
