@@ -813,7 +813,13 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 805. Compose profiles labels working directories and hostnames map to Boxr deployment options
 806. Compose short-form IPv4 TCP and UDP port mappings map to Boxr published bridge ports
 807. Compose services attach only to explicit pre-created external Boxr bridge networks or explicit host/none modes
-808. unsupported Compose builds volumes implicit networks healthchecks TTY privileged mode and restart policies fail explicitly
+808. unsupported Compose builds implicit volume creation implicit networks healthchecks TTY privileged mode and restart policies fail explicitly
 809. exec supports explicit -i stdin forwarding and closes stdin by default
 810. exec -t allocates a pseudo-terminal with a controlling session and combines terminal output
 811. exec TTY mode propagates SIGWINCH terminal size changes and restores host terminal settings on exit
+812. Compose external named volumes map to pre-created Boxr-managed volumes
+813. Compose relative host bind paths resolve from the Compose file directory
+814. Compose bind sources reject missing paths symlink components and special files
+815. Compose bind and external volume mounts support explicit read-only and read-write modes
+816. image-backed deployments defer bind mounts until after image rootfs extraction
+817. Compose-created volumes drivers options labels long-form mounts and propagation flags are rejected
