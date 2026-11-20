@@ -3124,6 +3124,7 @@ var implementedFeatures = []string{
 	"Engine API removes created and stopped containers through Docker DELETE with safe conflict handling",
 	"Engine API inspects verified local OCI images using Docker-compatible image metadata and uncompressed layer DiffIDs",
 	"Engine API removes unused local image tags and rejects removal while containers reference them",
+	"Engine API pulls and verifies OCI/Docker registry images using Docker X-Registry-Auth and Linux platform selection",
 }
 
 func printFeatures(stdout io.Writer) {
