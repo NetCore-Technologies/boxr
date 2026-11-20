@@ -2484,6 +2484,7 @@ var implementedFeatures = []string{
 	"Docker opaque-directory whiteout semantics",
 	"Docker image environment entrypoint command working-directory user and label preservation",
 	"Docker archive multi-tag import with complete preflight validation",
+	"Docker layer safe symlink and hard-link handling with special-file rejection",
 	"Docker-save-compatible image archive export",
 	"plain uncompressed tar output compatible with Docker load",
 	"Docker image config filenames derived from SHA-256 config identities",
@@ -2491,7 +2492,6 @@ var implementedFeatures = []string{
 	"Docker export preserves rootfs diff IDs platform and runtime config",
 	"Docker image layer is rehashed while expanding it for export",
 	"format-selectable image save with the existing OCI format as default",
-	"Docker layer safe symlink and hard-link handling with special-file rejection",
 }
 
 func printFeatures(stdout io.Writer) {
