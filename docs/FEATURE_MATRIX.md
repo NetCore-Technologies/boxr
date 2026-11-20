@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 503 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 507 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -509,3 +509,7 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 501. inspect size report includes total bytes
 502. inspect size scanner treats an absent log as zero bytes
 503. inspect size scanner rejects symlink and special-file targets
+504. container stats supports human-readable table output
+505. container stats watch supports live table rows
+506. container stats table includes timestamp memory CPU and PID metrics
+507. container stats preserves JSON as the default output format

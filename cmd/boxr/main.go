@@ -773,11 +773,12 @@ func runStats(args []string, stdout, stderr io.Writer) int {
 	watch := flags.Bool("watch", false, "stream timestamped statistics until the container exits")
 	interval := flags.Duration("interval", time.Second, "sampling interval for --watch (minimum 100ms)")
 	count := flags.Int("count", 0, "stop after N samples (0 means until the container exits)")
+	format := flags.String("format", "json", "output format: json or table")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	if flags.NArg() != 1 || *count < 0 || (!*watch && *count != 0) || (*watch && *interval < 100*time.Millisecond) {
-		fmt.Fprintln(stderr, "Usage: boxr stats [--watch] [--interval 1s] [--count N] ID|NAME")
+	if flags.NArg() != 1 || *count < 0 || (!*watch && *count != 0) || (*watch && *interval < 100*time.Millisecond) || (*format != "json" && *format != "table") {
+		fmt.Fprintln(stderr, "Usage: boxr stats [--watch] [--interval 1s] [--count N] [--format json|table] ID|NAME")
 		return 2
 	}
 
@@ -793,7 +794,14 @@ func runStats(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "boxr stats: %v\n", err)
 			return 1
 		}
-		return writeJSON(stdout, stats, stderr, "boxr stats")
+		if *format == "json" {
+			return writeJSON(stdout, stats, stderr, "boxr stats")
+		}
+		if err := writeStatsTable(stdout, time.Now().UTC(), stats); err != nil {
+			fmt.Fprintf(stderr, "boxr stats: write table: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 
 	current := record
@@ -811,17 +819,37 @@ func runStats(args []string, stdout, stderr io.Writer) int {
 	read := func() (state.Stats, error) {
 		return state.ReadStats(current.PID)
 	}
-	return streamStats(stdout, stderr, *interval, *count, isRunning, read)
+	return streamStats(stdout, stderr, *interval, *count, *format, isRunning, read)
 }
 
-// streamStats emits one compact JSON object per line so callers can pipe live
-// metrics into jq or monitoring tools without buffering a multi-line document.
-func streamStats(stdout, stderr io.Writer, interval time.Duration, count int, isRunning func() (bool, error), read func() (state.Stats, error)) int {
-	if interval <= 0 || count < 0 || isRunning == nil || read == nil {
+const statsTableHeader = "SAMPLED_AT                   PID      MEMORY_CURRENT_B MEMORY_MAX       PIDS_CURRENT CPU_USAGE_USEC CPU_USER_USEC CPU_SYSTEM_USEC"
+
+func writeStatsTable(stdout io.Writer, sampledAt time.Time, stats state.Stats) error {
+	if _, err := fmt.Fprintln(stdout, statsTableHeader); err != nil {
+		return err
+	}
+	return writeStatsTableRow(stdout, sampledAt, stats)
+}
+
+func writeStatsTableRow(stdout io.Writer, sampledAt time.Time, stats state.Stats) error {
+	memoryMax := stats.MemoryMax
+	if memoryMax == "" {
+		memoryMax = "-"
+	}
+	_, err := fmt.Fprintf(stdout, "%-27s %-8d %-17d %-16s %-12d %-14d %-13d %-15d\n",
+		sampledAt.Format(time.RFC3339), stats.PID, stats.MemoryCurrent, memoryMax,
+		stats.PIDsCurrent, stats.CPUUsageUsec, stats.CPUUserUsec, stats.CPUSystemUsec)
+	return err
+}
+
+// streamStats emits JSON Lines by default or a compact table when requested.
+func streamStats(stdout, stderr io.Writer, interval time.Duration, count int, format string, isRunning func() (bool, error), read func() (state.Stats, error)) int {
+	if interval <= 0 || count < 0 || (format != "json" && format != "table") || isRunning == nil || read == nil {
 		fmt.Fprintln(stderr, "boxr stats: invalid watch configuration")
 		return 2
 	}
 	encoder := json.NewEncoder(stdout)
+	headerWritten := false
 	emitted := 0
 	for {
 		running, err := isRunning()
@@ -850,7 +878,18 @@ func streamStats(stdout, stderr io.Writer, interval time.Duration, count int, is
 			fmt.Fprintf(stderr, "boxr stats: %v\n", err)
 			return 1
 		}
-		if err := encoder.Encode(statsWatchSample{SampledAt: time.Now().UTC(), Stats: stats}); err != nil {
+		if format == "json" {
+			err = encoder.Encode(statsWatchSample{SampledAt: time.Now().UTC(), Stats: stats})
+		} else {
+			if !headerWritten {
+				_, err = fmt.Fprintln(stdout, statsTableHeader)
+				headerWritten = err == nil
+			}
+			if err == nil {
+				err = writeStatsTableRow(stdout, time.Now().UTC(), stats)
+			}
+		}
+		if err != nil {
 			fmt.Fprintf(stderr, "boxr stats: write sample: %v\n", err)
 			return 1
 		}
@@ -1377,7 +1416,7 @@ Usage:
   boxr volume import ARCHIVE.tar.gz NAME
   boxr volume rm NAME [...]
   boxr volume prune (--force|--dry-run) [--json] [--filter name=VALUE|label=KEY[=VALUE]]
-  boxr stats [--watch] [--interval 1s] [--count N] ID|NAME
+  boxr stats [--watch] [--interval 1s] [--count N] [--format json|table] ID|NAME
   boxr rm ID|NAME [...]
   boxr events [--follow] [--interval 500ms] [--count N] [--limit N] [--since 1h|RFC3339] [--action ACTION] [--container ID|NAME] [--format table|json]
   boxr prune [--older-than 168h] [--dry-run] [--json]
@@ -2317,6 +2356,10 @@ var implementedFeatures = []string{
 	"inspect size report includes total bytes",
 	"inspect size scanner treats an absent log as zero bytes",
 	"inspect size scanner rejects symlink and special-file targets",
+	"container stats supports human-readable table output",
+	"container stats watch supports live table rows",
+	"container stats table includes timestamp memory CPU and PID metrics",
+	"container stats preserves JSON as the default output format",
 }
 
 func printFeatures(stdout io.Writer) {

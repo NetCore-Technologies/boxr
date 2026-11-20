@@ -21,7 +21,7 @@ func TestStatsWatchEmitsTimestampedJSONLinesAndHonorsCount(t *testing.T) {
 		return state.Stats{PID: 123, MemoryCurrent: int64(readCalls * 1024)}, nil
 	}
 
-	if code := streamStats(&stdout, &stderr, time.Millisecond, 2, isRunning, read); code != 0 {
+	if code := streamStats(&stdout, &stderr, time.Millisecond, 2, "json", isRunning, read); code != 0 {
 		t.Fatalf("streamStats returned %d: %s", code, stderr.String())
 	}
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
@@ -52,7 +52,7 @@ func TestStatsWatchStopsCleanlyWhenContainerExits(t *testing.T) {
 		return state.Stats{PID: 88}, nil
 	}
 
-	if code := streamStats(&stdout, &stderr, time.Millisecond, 0, isRunning, read); code != 0 {
+	if code := streamStats(&stdout, &stderr, time.Millisecond, 0, "json", isRunning, read); code != 0 {
 		t.Fatalf("streamStats returned %d: %s", code, stderr.String())
 	}
 	if readCalls != 1 || len(strings.Split(strings.TrimSpace(stdout.String()), "\n")) != 1 {
@@ -64,7 +64,7 @@ func TestStatsWatchReportsCgroupAndOutputErrors(t *testing.T) {
 	var stderr bytes.Buffer
 	isRunning := func() (bool, error) { return true, nil }
 	readFailure := func() (state.Stats, error) { return state.Stats{}, errors.New("cgroup disappeared") }
-	if code := streamStats(&bytes.Buffer{}, &stderr, time.Millisecond, 0, isRunning, readFailure); code != 1 {
+	if code := streamStats(&bytes.Buffer{}, &stderr, time.Millisecond, 0, "json", isRunning, readFailure); code != 1 {
 		t.Fatalf("cgroup read failure returned %d, want 1", code)
 	}
 	if !strings.Contains(stderr.String(), "cgroup disappeared") {
@@ -73,7 +73,7 @@ func TestStatsWatchReportsCgroupAndOutputErrors(t *testing.T) {
 
 	stderr.Reset()
 	writeFailure := func() (state.Stats, error) { return state.Stats{PID: 77}, nil }
-	if code := streamStats(statsFailWriter{}, &stderr, time.Millisecond, 0, isRunning, writeFailure); code != 1 {
+	if code := streamStats(statsFailWriter{}, &stderr, time.Millisecond, 0, "json", isRunning, writeFailure); code != 1 {
 		t.Fatalf("output failure returned %d, want 1", code)
 	}
 	if !strings.Contains(stderr.String(), "write sample") {
@@ -113,5 +113,28 @@ func TestStatsWatchRejectsCreatedContainer(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "not running") {
 		t.Fatalf("unexpected error: %q", stderr.String())
+	}
+}
+
+
+func TestStatsTableOneShotAndWatchOutput(t *testing.T) {
+	stats := state.Stats{PID: 321, MemoryCurrent: 4096, MemoryMax: "8192", PIDsCurrent: 5, CPUUsageUsec: 900, CPUUserUsec: 600, CPUSystemUsec: 300}
+	var oneShot bytes.Buffer
+	if err := writeStatsTable(&oneShot, time.Date(2026, 11, 20, 3, 0, 0, 0, time.UTC), stats); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(oneShot.String(), "MEMORY_CURRENT_B") || !strings.Contains(oneShot.String(), "4096") || !strings.Contains(oneShot.String(), "900") {
+		t.Fatalf("table missing resource values: %q", oneShot.String())
+	}
+
+	var stdout, stderr bytes.Buffer
+	isRunning := func() (bool, error) { return true, nil }
+	read := func() (state.Stats, error) { return stats, nil }
+	if code := streamStats(&stdout, &stderr, time.Millisecond, 2, "table", isRunning, read); code != 0 {
+		t.Fatalf("table watch returned %d: %s", code, stderr.String())
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 3 || lines[0] != statsTableHeader {
+		t.Fatalf("table watch should emit one header and two samples: %q", stdout.String())
 	}
 }

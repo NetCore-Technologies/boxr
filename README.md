@@ -335,7 +335,7 @@ boxr stats --watch CONTAINER
 boxr stats --watch --interval 2s --count 10 CONTAINER
 ```
 
-Watch mode emits a compact JSON object per sample with a UTC `sampledAt` timestamp and the existing statistics payload under `stats`. The default interval is one second (minimum 100 ms). A count of zero continues until the container exits; a positive count is useful for bounded scripts. The original one-shot JSON output remains unchanged. See [runtime monitoring](docs/runtime-monitoring.md).
+Watch mode emits compact JSON Lines by default with a UTC `sampledAt` timestamp and the existing statistics payload under `stats`; use `--format table` for a readable timestamped table. The default interval is one second (minimum 100 ms). A count of zero continues until the container exits; a positive count is useful for bounded scripts. The original one-shot JSON output remains unchanged. See [runtime monitoring](docs/runtime-monitoring.md).
 
 
 ## Follow container events
@@ -397,3 +397,6 @@ boxr inspect --size CONTAINER
 ```
 
 The optional size report includes separate state-record and log byte counts plus their total. It uses no-follow file metadata checks and treats a missing log as zero bytes; symlink and special-file targets are rejected. The original inspect JSON remains unchanged unless `--size` is supplied.
+
+
+For a human-readable snapshot, use `boxr stats --format table CONTAINER`. The same format is available with `--watch`; the table header is emitted once followed by one timestamped row per sample.
