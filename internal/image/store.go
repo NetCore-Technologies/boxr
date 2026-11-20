@@ -285,7 +285,12 @@ func ImportRootFSWithConfig(source, reference, osName, architecture, variant str
 	if err := writeIndex(dir, index); err != nil {
 		return result, err
 	}
-	return Image{Reference: reference, Digest: manifestDigest, Created: config.Created, OS: config.OS, Arch: config.Architecture, Variant: config.Variant, LayerBytes: layerSize, Layer: manifest.Layers[0]}, nil
+	return Image{
+		Reference: reference, Digest: manifestDigest, Created: config.Created,
+		OS: config.OS, Arch: config.Architecture, Variant: config.Variant,
+		LayerBytes: layerSize, Layer: manifest.Layers[0],
+		DiffIDs: []string{diffID}, RuntimeConfig: runtimeConfig,
+	}, nil
 }
 
 func List() ([]Image, error) {
