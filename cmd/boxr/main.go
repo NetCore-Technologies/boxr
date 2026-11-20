@@ -2618,6 +2618,11 @@ var implementedFeatures = []string{
 	"environment file path traversal and duplicate path rejection",
 	"deployment environment file count and path length bounds",
 	"secret-free environment file metadata in deployment plans",
+	"per-service startup timeout overrides the deployment-wide default",
+	"zero per-service startup timeout inherits the deployment-wide default",
+	"service startup timeout bounds are validated between 10 milliseconds and 10 minutes",
+	"secret-free deployment plans expose per-service startup timeout metadata",
+	"per-service startup timeouts govern process and readiness startup gates",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -3105,6 +3110,13 @@ type deploymentStatus struct {
 	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
 }
 
+func deploymentServiceStartTimeout(service deploy.Service, fallback time.Duration) time.Duration {
+	if service.StartTimeoutMS > 0 {
+		return time.Duration(service.StartTimeoutMS) * time.Millisecond
+	}
+	return fallback
+}
+
 func deploymentContainerOptions(service deploy.Service) (container.Options, error) {
 	options := service.Options
 	if len(service.EnvFiles) > 0 {
@@ -3466,7 +3478,9 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 				stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
 				return 1
 			}
-			_, unexpectedExit, err := waitForDeploymentStart(ctx, process.name, startTimeout, probe, exits)
+			service := file.Services[process.service]
+			serviceTimeout := deploymentServiceStartTimeout(service, startTimeout)
+			_, unexpectedExit, err := waitForDeploymentStart(ctx, process.name, serviceTimeout, probe, exits)
 			if unexpectedExit != nil {
 				exited[unexpectedExit.service] = *unexpectedExit
 			}
