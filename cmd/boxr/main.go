@@ -3546,7 +3546,7 @@ func stopDeploymentProcesses(processes []*deploymentProcess, exited map[string]d
 		}
 		pending[process.service] = stopState{graceDeadline: now.Add(grace)}
 		if err := process.command.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			fmt.Fprintf(stderr, "boxr deploy: signal service %s: %v\\n", process.service, err)
+			fmt.Fprintf(stderr, "boxr deploy: signal service %s: %v\n", process.service, err)
 		}
 	}
 
@@ -3561,7 +3561,7 @@ func stopDeploymentProcesses(processes []*deploymentProcess, exited map[string]d
 			if !state.killed && !now.Before(state.graceDeadline) {
 				if process.command.Process != nil {
 					if err := process.command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-						fmt.Fprintf(stderr, "boxr deploy: kill service %s: %v\\n", process.service, err)
+						fmt.Fprintf(stderr, "boxr deploy: kill service %s: %v\n", process.service, err)
 					}
 				}
 				state.killed = true
@@ -3570,7 +3570,7 @@ func stopDeploymentProcesses(processes []*deploymentProcess, exited map[string]d
 				continue
 			}
 			if state.killed && !now.Before(state.killDeadline) {
-				fmt.Fprintf(stderr, "boxr deploy: service %s did not exit after SIGKILL\\n", process.service)
+				fmt.Fprintf(stderr, "boxr deploy: service %s did not exit after SIGKILL\n", process.service)
 				return
 			}
 		}
@@ -3604,7 +3604,7 @@ func stopDeploymentProcesses(processes []*deploymentProcess, exited map[string]d
 			if _, seen := exited[exitedService.service]; !seen {
 				exited[exitedService.service] = exitedService
 				delete(pending, exitedService.service)
-				fmt.Fprintf(stdout, "stopped service %s\\n", exitedService.service)
+				fmt.Fprintf(stdout, "stopped service %s\n", exitedService.service)
 			}
 		case <-timer.C:
 		}
