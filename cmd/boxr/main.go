@@ -2817,6 +2817,12 @@ var implementedFeatures = []string{
 	"Zstandard decompression caps decoder memory and window at 256 MiB",
 	"rootfs layer application auto-detects Zstandard-compressed tar archives",
 	"pulled Zstandard layers are verified against OCI uncompressed diff IDs before application",
+	"Linux detached run launches a dedicated Boxr supervisor in a new session",
+	"detached run waits for a post-cgroup startup-barrier handshake before returning the container ID",
+	"detached supervisor captures launch diagnostics in an owner-only state-directory log",
+	"detached run reports container ID host PID and launch log path after successful startup",
+	"detached supervisor uses the standard persistent container lifecycle record and log stream",
+	"detached mode rejects dry-run and preserves workload arguments through the standard flag parser",
 }
 
 func printFeatures(stdout io.Writer) {
