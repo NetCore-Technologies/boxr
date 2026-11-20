@@ -532,3 +532,20 @@ func TestBearerTokenRejectsInsecureRealmForHTTPSRegistry(t *testing.T) {
 		t.Fatalf("expected insecure realm rejection, got %v", err)
 	}
 }
+
+func testLayer(t *testing.T) ([]byte, string) {
+	t.Helper()
+	return testRegistryLayer(t, true, registryLayerEntry{
+		name: "etc/boxr-test",
+		data: []byte("boxr registry layer fixture\n"),
+	})
+}
+
+func testConfig(t *testing.T, arch, diffID string, runtimeConfigs ...RuntimeConfig) []byte {
+	t.Helper()
+	var runtimeConfig RuntimeConfig
+	if len(runtimeConfigs) > 0 {
+		runtimeConfig = runtimeConfigs[0]
+	}
+	return testConfigWithDiffIDs(t, arch, []string{diffID}, runtimeConfig)
+}
