@@ -853,9 +853,10 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 844. top-level tag command creates local image aliases without copying content-addressed blobs
 845. top-level rmi command removes unused local image tags while preserving shared content-addressed blobs
 846. container namespace exposes Docker-style lifecycle subcommands through the native verified Boxr operations
-847. native create command records a verified image-backed container without starting it
-848. native start command launches a created image-backed container through the detached supervisor
-849. native start command restarts stopped image-backed containers through the detached supervisor
-850. native restart command stops then starts an image-backed container with a bounded graceful timeout
-851. Engine API start endpoint restarts stopped image-backed containers through the native detached supervisor
-852. Engine API restart endpoint performs a bounded graceful stop and launches the same saved container again
+847. native rm safely removes created containers without weakening running-container protection
+848. native create command records a verified image-backed container without starting it
+849. native start command launches a created image-backed container through the detached supervisor
+850. native start command restarts stopped image-backed containers through the detached supervisor
+851. native restart command stops then starts an image-backed container with a bounded graceful timeout
+852. Engine API start endpoint restarts stopped image-backed containers through the native detached supervisor
+853. Engine API restart endpoint performs a bounded graceful stop and launches the same saved container again
