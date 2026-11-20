@@ -2705,3 +2705,38 @@ func TestDeploymentServiceStartTimeoutOverridesStackDefault(t *testing.T) {
 	}
 }
 
+func TestDeploymentStopTimeoutUsesPersistedServiceOverride(t *testing.T) {
+	fallback := 10 * time.Second
+	tests := []struct {
+		name      string
+		labels    map[string]string
+		want      time.Duration
+		wantError bool
+	}{
+		{name: "inherit stack default", labels: map[string]string{}, want: fallback},
+		{name: "service override", labels: map[string]string{deploy.StopTimeoutLabel: "1500"}, want: 1500 * time.Millisecond},
+		{name: "minimum override", labels: map[string]string{deploy.StopTimeoutLabel: "10"}, want: 10 * time.Millisecond},
+		{name: "maximum override", labels: map[string]string{deploy.StopTimeoutLabel: "600000"}, want: 10 * time.Minute},
+		{name: "invalid integer", labels: map[string]string{deploy.StopTimeoutLabel: "slow"}, wantError: true},
+		{name: "below minimum", labels: map[string]string{deploy.StopTimeoutLabel: "9"}, wantError: true},
+		{name: "above maximum", labels: map[string]string{deploy.StopTimeoutLabel: "600001"}, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := deploymentStopTimeout(test.labels, fallback)
+			if test.wantError {
+				if err == nil {
+					t.Fatal("invalid persisted timeout unexpectedly accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("deploymentStopTimeout(): %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("deploymentStopTimeout() = %s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
