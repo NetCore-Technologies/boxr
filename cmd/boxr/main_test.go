@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
@@ -13,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -2737,6 +2739,61 @@ func TestDeploymentStopTimeoutUsesPersistedServiceOverride(t *testing.T) {
 				t.Fatalf("deploymentStopTimeout() = %s, want %s", got, test.want)
 			}
 		})
+	}
+}
+
+func TestDeploymentStopGraceChildProcess(t *testing.T) {
+	if os.Getenv("BOXR_STOP_GRACE_CHILD") != "1" {
+		return
+	}
+	signal.Ignore(os.Interrupt)
+	_, _ = fmt.Fprintln(os.Stdout, "ready")
+	select {}
+}
+
+func TestStopDeploymentProcessesHonorsIndependentGracePeriods(t *testing.T) {
+	startHelper := func(name string, timeout time.Duration) *deploymentProcess {
+		t.Helper()
+		command := exec.Command(os.Args[0], "-test.run=^TestDeploymentStopGraceChildProcess$")
+		command.Env = append(os.Environ(), "BOXR_STOP_GRACE_CHILD=1")
+		pipe, err := command.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		command.Stderr = io.Discard
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		line, err := bufio.NewReader(pipe).ReadString('\n')
+		if err != nil || line != "ready\n" {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+			t.Fatalf("stop helper did not become ready: line=%q err=%v", line, err)
+		}
+		return &deploymentProcess{service: name, stopTimeout: timeout, command: command}
+	}
+
+	short := startHelper("short", 50*time.Millisecond)
+	long := startHelper("long", 220*time.Millisecond)
+	exits := make(chan deploymentProcessExit, 2)
+	for _, process := range []*deploymentProcess{short, long} {
+		go func(process *deploymentProcess) {
+			exits <- deploymentProcessExit{service: process.service, err: process.command.Wait()}
+		}(process)
+	}
+	var out, errOut bytes.Buffer
+	exited := make(map[string]deploymentProcessExit)
+	started := time.Now()
+	stopDeploymentProcesses([]*deploymentProcess{short, long}, exited, exits, 2*time.Second, &out, &errOut)
+	elapsed := time.Since(started)
+	if elapsed < 150*time.Millisecond || elapsed > time.Second {
+		t.Fatalf("independent stop grace periods took %s; want roughly the longest 220ms service grace, not the 2s fallback", elapsed)
+	}
+	if len(exited) != 2 {
+		t.Fatalf("stopped %d services, want both: %#v", len(exited), exited)
+	}
+	if errOut.Len() != 0 {
+		t.Fatalf("stop process errors: %s", errOut.String())
 	}
 }
 
