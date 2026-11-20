@@ -244,9 +244,44 @@ func validateStoredNetworks(networks []Network) error {
 			}
 			allocated[addressText] = struct{}{}
 		}
+		for containerID, mappings := range network.Published {
+			if _, allocatedAddress := network.Allocations[containerID]; !allocatedAddress {
+				return fmt.Errorf("network store has published ports without an IPAM lease")
+			}
+			if len(mappings) == 0 || len(mappings) > 128 {
+				return fmt.Errorf("network store contains an invalid published port count")
+			}
+			normalized, err := normalizePortMappings(mappings)
+			if err != nil || len(normalized) != len(mappings) {
+				return fmt.Errorf("network store contains invalid published port mappings")
+			}
+			for index := range normalized {
+				if normalized[index] != mappings[index] {
+					return fmt.Errorf("network store contains non-canonical published port mappings")
+				}
+
+			}
+		}
 		names[network.Name] = struct{}{}
 		ids[network.ID] = struct{}{}
 		bridges[network.Bridge] = struct{}{}
+	}
+	return validateAllPublishedPortReservations(networks)
+}
+
+func validateAllPublishedPortReservations(networks []Network) error {
+	var seen []PortMapping
+	for _, network := range networks {
+		for _, mappings := range network.Published {
+			for _, mapping := range mappings {
+				for _, previous := range seen {
+					if portMappingsConflict(previous, mapping) {
+						return fmt.Errorf("network store contains conflicting published host ports")
+					}
+				}
+				seen = append(seen, mapping)
+			}
+		}
 	}
 	return nil
 }
