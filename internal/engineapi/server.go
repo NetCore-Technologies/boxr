@@ -14,8 +14,8 @@ import (
 	"os"
 	"runtime"
 	"strconv"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/manit6752025/boxr/internal/container"
@@ -938,8 +938,8 @@ func (s *Server) handleImageInspect(writer http.ResponseWriter, rawReference str
 		"Size": image.LayerBytes, "VirtualSize": image.LayerBytes,
 		"Config": config, "ContainerConfig": config,
 		"GraphDriver": map[string]any{"Name": "boxr-oci", "Data": map[string]string{}},
-		"RootFS": map[string]any{"Type": "layers", "Layers": append([]string{}, image.DiffIDs...)},
-		"Metadata": map[string]string{"LastTagTime": created},
+		"RootFS":      map[string]any{"Type": "layers", "Layers": append([]string{}, image.DiffIDs...)},
+		"Metadata":    map[string]string{"LastTagTime": created},
 	})
 }
 

@@ -528,7 +528,7 @@ func inspectDescriptor(dir, reference string, descriptor Descriptor) (Image, err
 		Reference: reference, Digest: descriptor.Digest, Created: config.Created,
 		OS: config.OS, Arch: config.Architecture, Variant: config.Variant,
 		LayerBytes: layer.Size, Layer: layer,
-		DiffIDs: append([]string(nil), config.RootFS.DiffIDs...),
+		DiffIDs:       append([]string(nil), config.RootFS.DiffIDs...),
 		RuntimeConfig: config.Config,
 	}, nil
 }
