@@ -301,22 +301,20 @@ func normalizeCreateArguments(args []string) []string {
 }
 
 func normalizeRunImageArgument(args []string) []string {
-	for _, value := range args {
-		if value == "--image" || strings.HasPrefix(value, "--image=") {
-			return args
-		}
-	}
 	position := -1
 	for index := 0; index < len(args); index++ {
 		value := args[index]
 		if value == "--" {
-			if index+1 < len(args) {
-				position = index + 1
-			}
-			break
+			// An explicit option terminator before the first positional
+			// argument means the caller is running a command, not naming an
+			// image. Image references belong before this separator.
+			return args
 		}
 		if strings.HasPrefix(value, "--") {
 			name, _, hasInlineValue := strings.Cut(value, "=")
+			if name == "--image" {
+				return args
+			}
 			if !hasInlineValue && createFlagTakesValue(name) {
 				index++
 			}
