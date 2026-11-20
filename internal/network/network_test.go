@@ -13,6 +13,7 @@ type fakeRunner struct {
 	calls       []string
 	failAt      int
 	failMessage string
+	aliases     map[string]string
 }
 
 func (runner *fakeRunner) Run(_ context.Context, executable string, args ...string) error {
@@ -28,7 +29,30 @@ func (runner *fakeRunner) Run(_ context.Context, executable string, args ...stri
 	if strings.Contains(call, "iptables -C ") {
 		return errors.New("Bad rule (does a matching rule exist in that chain?)")
 	}
+	if executable == "ip" && len(args) >= 6 && args[0] == "link" && args[1] == "set" && args[2] == "dev" && args[4] == "alias" {
+		if runner.aliases == nil {
+			runner.aliases = make(map[string]string)
+		}
+		runner.aliases[args[3]] = args[5]
+	}
+	if executable == "ip" && len(args) >= 4 && args[0] == "link" && args[1] == "del" && args[2] == "dev" {
+		delete(runner.aliases, args[3])
+	}
 	return nil
+}
+
+func (runner *fakeRunner) Output(_ context.Context, executable string, args ...string) ([]byte, error) {
+	call := executable + " " + strings.Join(args, " ")
+	runner.calls = append(runner.calls, "OUTPUT "+call)
+	if executable != "ip" || len(args) != 6 || args[0] != "-details" && args[0] != "-o" {
+		return nil, errors.New("unexpected output command: " + call)
+	}
+	device := args[len(args)-1]
+	alias, ok := runner.aliases[device]
+	if !ok {
+		return nil, errors.New("Cannot find device " + device)
+	}
+	return []byte("7: " + device + ": <BROADCAST,UP> alias " + alias + "\n"), nil
 }
 
 func TestCreateBridgePersistsNetworkAndConfiguresGateway(t *testing.T) {
