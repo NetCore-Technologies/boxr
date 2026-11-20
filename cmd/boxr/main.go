@@ -477,7 +477,10 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 			return nil
 		},
 		OnExit: func(_ int, executionErr error) error {
-			networkErr := boxrnetwork.LeaveAll(record.ID)
+			var networkErr error
+			if opts.NetworkMode == "bridge" || opts.NetworkMode == "none" {
+				networkErr = boxrnetwork.LeaveAll(record.ID)
+			}
 			stateErr := state.Finish(record.ID, executionErr)
 			if networkErr != nil && stateErr != nil {
 				return fmt.Errorf("disconnect bridge network: %v; finish container record: %w", networkErr, stateErr)
@@ -4560,40 +4563,40 @@ func runNetwork(args []string, stdout, stderr io.Writer) int {
 		networkName, containerQuery := flags.Arg(0), flags.Arg(1)
 		record, err := state.Get(containerQuery)
 		if err != nil {
-			fmt.Fprintf(stderr, "boxr network connect: %v\\n", err)
+			fmt.Fprintf(stderr, "boxr network connect: %v\n", err)
 			return 1
 		}
 		if record.Status != "running" || record.PID <= 1 {
-			fmt.Fprintf(stderr, "boxr network connect: container %s must be running\\n", record.ID)
+			fmt.Fprintf(stderr, "boxr network connect: container %s must be running\n", record.ID)
 			return 1
 		}
-		if record.Options.NetworkMode != "none" {
-			fmt.Fprintln(stderr, "boxr network connect: container must have been started with --network none so its network namespace is private")
+		if record.Options.NetworkMode != "none" || record.Options.UserNamespace {
+			fmt.Fprintln(stderr, "boxr network connect: container must have been started with --network none without --userns so its network namespace is safely manageable")
 			return 1
 		}
 		if err := verifyContainerNamespacePID(record.PID); err != nil {
-			fmt.Fprintf(stderr, "boxr network connect: refusing to enter container PID %d: %v\\n", record.PID, err)
+			fmt.Fprintf(stderr, "boxr network connect: refusing to enter container PID %d: %v\n", record.PID, err)
 			return 1
 		}
 		ports := make([]container.PortMapping, 0, len(publish))
 		for _, value := range publish {
 			mapping, err := parsePortMapping(value)
 			if err != nil {
-				fmt.Fprintf(stderr, "boxr network connect: invalid --publish: %v\\n", err)
+				fmt.Fprintf(stderr, "boxr network connect: invalid --publish: %v\n", err)
 				return 2
 			}
 			ports = append(ports, mapping)
 		}
 		if err := (container.Options{NetworkMode: "bridge", NetworkName: networkName, PublishedPorts: ports}).Validate(); err != nil {
-			fmt.Fprintf(stderr, "boxr network connect: %v\\n", err)
+			fmt.Fprintf(stderr, "boxr network connect: %v\n", err)
 			return 2
 		}
 		address, err := joinExistingContainerNetwork(networkName, record.PID, record.ID, ports...)
 		if err != nil {
-			fmt.Fprintf(stderr, "boxr network connect: %v\\n", err)
+			fmt.Fprintf(stderr, "boxr network connect: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "connected container %s to network %s with IPv4 %s\\n", record.ID, networkName, address)
+		fmt.Fprintf(stdout, "connected container %s to network %s with IPv4 %s\n", record.ID, networkName, address)
 		return 0
 	case "disconnect":
 		if len(args) != 3 || strings.TrimSpace(args[1]) == "" || strings.TrimSpace(args[2]) == "" {
@@ -4602,18 +4605,18 @@ func runNetwork(args []string, stdout, stderr io.Writer) int {
 		}
 		record, err := state.Get(args[2])
 		if err != nil {
-			fmt.Fprintf(stderr, "boxr network disconnect: %v\\n", err)
+			fmt.Fprintf(stderr, "boxr network disconnect: %v\n", err)
 			return 1
 		}
-		if record.Options.NetworkMode != "none" {
-			fmt.Fprintln(stderr, "boxr network disconnect: only containers started with --network none support live network attachment")
+		if record.Options.NetworkMode != "none" || record.Options.UserNamespace {
+			fmt.Fprintln(stderr, "boxr network disconnect: only containers started with --network none without --userns support live network attachment")
 			return 1
 		}
 		if err := leaveExistingContainerNetwork(args[1], record.ID); err != nil {
-			fmt.Fprintf(stderr, "boxr network disconnect: %v\\n", err)
+			fmt.Fprintf(stderr, "boxr network disconnect: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "disconnected container %s from network %s\\n", record.ID, args[1])
+		fmt.Fprintf(stdout, "disconnected container %s from network %s\n", record.ID, args[1])
 		return 0
 	case "rm":
 		if len(args) != 2 || strings.TrimSpace(args[1]) == "" {
