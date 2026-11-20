@@ -208,7 +208,6 @@ func containsComposeEnv(values []string, key, want string) bool {
 	return false
 }
 
-
 func TestLoadComposeTranslatesExternalVolumesAndExistingBindMounts(t *testing.T) {
 	dir := t.TempDir()
 	bindDir := filepath.Join(dir, "config")
@@ -265,8 +264,8 @@ func TestLoadComposeRejectsUnsafeOrImplicitVolumeSemantics(t *testing.T) {
 		topLevel string
 	}{
 		{
-			name:    "implicit named volume creation",
-			volumes: "volumes: [data:/data]",
+			name:     "implicit named volume creation",
+			volumes:  "volumes: [data:/data]",
 			topLevel: "volumes:\n  data: {}\n",
 		},
 		{
@@ -278,7 +277,7 @@ func TestLoadComposeRejectsUnsafeOrImplicitVolumeSemantics(t *testing.T) {
 			volumes: "volumes: [./config:/data:ro,z]",
 		},
 		{
-			name:    "long syntax",
+			name:     "long syntax",
 			volumes: "volumes:\n      - type: volume\n        source: data\n        target: /data\n",
 			topLevel: "volumes:\n  data:\n    external: true\n",
 		},
@@ -287,12 +286,12 @@ func TestLoadComposeRejectsUnsafeOrImplicitVolumeSemantics(t *testing.T) {
 			volumes: "volumes: [" + missingBind + ":/data]",
 		},
 		{
-			name:    "external volume mapping without name",
+			name:     "external volume mapping without name",
 			volumes: "volumes: [data:/data]",
 			topLevel: "volumes:\n  data:\n    external: {}\n",
 		},
 		{
-			name:    "external name conflicts with declared name",
+			name:     "external name conflicts with declared name",
 			volumes: "volumes: [data:/data]",
 			topLevel: "volumes:\n  data:\n    name: boxr-data\n    external:\n      name: another-volume\n",
 		},
