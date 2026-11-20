@@ -270,7 +270,7 @@ func TestLoadComposeRejectsUnsafeOrImplicitVolumeSemantics(t *testing.T) {
 		},
 		{
 			name:    "undeclared named volume",
-			volumes:  "volumes: [data:/data]",
+			volumes: "volumes: [data:/data]",
 		},
 		{
 			name:    "unsupported propagation mode",
@@ -278,7 +278,7 @@ func TestLoadComposeRejectsUnsafeOrImplicitVolumeSemantics(t *testing.T) {
 		},
 		{
 			name:     "long syntax",
-			volumes: "volumes:\n      - type: volume\n        source: data\n        target: /data\n",
+			volumes:  "volumes:\n      - type: volume\n        source: data\n        target: /data\n",
 			topLevel: "volumes:\n  data:\n    external: true\n",
 		},
 		{
@@ -287,12 +287,12 @@ func TestLoadComposeRejectsUnsafeOrImplicitVolumeSemantics(t *testing.T) {
 		},
 		{
 			name:     "external volume mapping without name",
-			volumes: "volumes: [data:/data]",
+			volumes:  "volumes: [data:/data]",
 			topLevel: "volumes:\n  data:\n    external: {}\n",
 		},
 		{
 			name:     "external name conflicts with declared name",
-			volumes: "volumes: [data:/data]",
+			volumes:  "volumes: [data:/data]",
 			topLevel: "volumes:\n  data:\n    name: boxr-data\n    external:\n      name: another-volume\n",
 		},
 	}
