@@ -24,6 +24,23 @@ func TestLoadValidVersionedConfig(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsPublishedPortConfiguration(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "ports.json")
+	contents := `{"version":1,"options":{"networkMode":"bridge","networkName":"frontend","publishedPorts":[{"hostIp":"127.0.0.1","hostPort":8080,"containerPort":80,"protocol":"tcp"},{"hostPort":5353,"containerPort":53,"protocol":"udp"}]}}`
+	if err := os.WriteFile(file, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(file)
+	if err != nil {
+		t.Fatalf("Load(published ports config): %v", err)
+	}
+	if len(loaded.Options.PublishedPorts) != 2 ||
+		loaded.Options.PublishedPorts[0].HostPort != 8080 ||
+		loaded.Options.PublishedPorts[1].Protocol != "udp" {
+		t.Fatalf("loaded published ports = %+v", loaded.Options.PublishedPorts)
+	}
+}
+
 func TestLoadAcceptsManagedBridgeNetworkConfig(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "bridge.json")
 	contents := `{"version":1,"name":"api","command":["/bin/sh"],"options":{"networkMode":"bridge","networkName":"frontend"}}`
@@ -128,5 +145,8 @@ func TestJSONSchemaIsStrictAndDescribesSecurityProfiles(t *testing.T) {
 	}
 	if _, ok := options.Properties["networkName"]; !ok {
 		t.Fatal("schema does not describe networkName")
+	}
+	if _, ok := options.Properties["publishedPorts"]; !ok {
+		t.Fatal("schema does not describe publishedPorts")
 	}
 }
