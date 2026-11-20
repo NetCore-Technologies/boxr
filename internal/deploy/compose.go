@@ -58,6 +58,8 @@ type composeService struct {
 	TTY           bool      `yaml:"tty"`
 	StdinOpen     bool      `yaml:"stdin_open"`
 	Privileged    bool      `yaml:"privileged"`
+	ReadOnly      bool      `yaml:"read_only"`
+	CapDrop       yaml.Node `yaml:"cap_drop"`
 }
 
 // decodeCompose reads the deliberately supported Compose subset into Boxr's
@@ -264,6 +266,10 @@ func convertComposeService(name string, source composeService, networkNames map[
 	if err != nil {
 		return result, err
 	}
+	capabilityDrops, err := parseComposeCapabilityDrops(&source.CapDrop)
+	if err != nil {
+		return result, err
+	}
 	namedVolumes, bindMounts, err := parseComposeVolumeMounts(&source.Volumes, volumeNames, baseDir)
 	if err != nil {
 		return result, err
@@ -279,8 +285,10 @@ func convertComposeService(name string, source composeService, networkNames map[
 		Workdir:        source.WorkingDir,
 		Hostname:       source.Hostname,
 		Env:            environment,
-		Labels:         labels,
-		BindMounts:     bindMounts,
+		Labels:           labels,
+		BindMounts:       bindMounts,
+		ReadOnlyRootFS:   source.ReadOnly,
+		DropCapabilities: capabilityDrops,
 	}
 	return Service{
 		Image:     source.Image,
@@ -772,6 +780,38 @@ func parseComposePortNumber(value string) (uint16, error) {
 		return 0, fmt.Errorf("port must be a single integer from 1 to 65535")
 	}
 	return uint16(number), nil
+}
+
+func parseComposeCapabilityDrops(node *yaml.Node) ([]string, error) {
+	if node.Kind == 0 {
+		return nil, nil
+	}
+	if node.Kind != yaml.SequenceNode {
+		return nil, fmt.Errorf("cap_drop must be a list of capability names")
+	}
+	if len(node.Content) > 64 {
+		return nil, fmt.Errorf("cap_drop supports at most 64 capability names")
+	}
+	result := make([]string, 0, len(node.Content))
+	seen := make(map[string]struct{}, len(node.Content))
+	for index, item := range node.Content {
+		if item.Kind != yaml.ScalarNode || strings.TrimSpace(item.Value) == "" {
+			return nil, fmt.Errorf("cap_drop entry %d must be a non-empty capability name", index+1)
+		}
+		name := strings.ToUpper(strings.TrimSpace(item.Value))
+		name = strings.TrimPrefix(name, "CAP_")
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		result = append(result, name)
+	}
+	// Reuse the runtime's canonical Linux capability validation so Compose
+	// cannot accept a value that the container launcher would later ignore.
+	if err := (container.Options{DropCapabilities: result}).Validate(); err != nil {
+		return nil, fmt.Errorf("cap_drop: %w", err)
+	}
+	return result, nil
 }
 
 func parseComposeLabels(node *yaml.Node) (map[string]string, error) {
