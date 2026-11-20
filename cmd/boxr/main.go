@@ -49,6 +49,11 @@ var (
 	verifyContainerNamespacePID = verifyContainerRuntimePID
 )
 
+var (
+	detachedReadyWriter *os.File
+	detachedReadySent   bool
+)
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -66,6 +71,28 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 125
 		}
 		return 0
+	}
+
+	// Detached supervisors are separate Boxr processes. File descriptor 3 is
+	// a one-shot startup handshake back to the launching CLI process.
+	if len(args) > 0 && args[0] == "__boxr-detached-run" {
+		if len(args) < 2 {
+			fmt.Fprintln(stderr, "boxr detached runner: run arguments are required")
+			return 125
+		}
+		detachedReadyWriter = os.NewFile(uintptr(3), "boxr-detached-ready")
+		if detachedReadyWriter == nil {
+			fmt.Fprintln(stderr, "boxr detached runner: startup handshake is unavailable")
+			return 125
+		}
+		detachedReadySent = false
+		code := runContainer(args[1:], stdout, stderr)
+		if !detachedReadySent {
+			_, _ = fmt.Fprintf(detachedReadyWriter, "ERROR %d\n", code)
+		}
+		_ = detachedReadyWriter.Close()
+		detachedReadyWriter = nil
+		return code
 	}
 
 	if len(args) == 0 {
