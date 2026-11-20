@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -36,6 +37,8 @@ const (
 	maxTotalLayerBytes       = int64(16 << 30)
 	maxRegistryLayerCount    = 128
 )
+
+const maxConcurrentLayerDownloads = 4
 
 var (
 	digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -388,30 +391,84 @@ func Pull(ctx context.Context, reference, platform string, credentials Credentia
 		}
 	}
 
-	layers := make([]LayerArtifact, 0, len(remote.Layers))
+	// Download and verify independent layers concurrently, but retain each result
+	// at its manifest index so filesystem application remains in manifest order.
+	layers := make([]LayerArtifact, len(remote.Layers))
 	keepLayers := false
 	defer func() {
 		if !keepLayers {
 			for _, layer := range layers {
-				_ = os.Remove(layer.Path)
+				if layer.Path != "" {
+					_ = os.Remove(layer.Path)
+				}
 			}
 		}
 	}()
-	for index, descriptor := range remote.Layers {
-		layerPath, actualDigest, written, err := fetcher.blobToTemp(ctx, descriptor, maxLayerBytes)
-		if err != nil {
-			return result, fmt.Errorf("download image layer %d: %w", index, err)
+
+	pullCtx, cancelPull := context.WithCancel(ctx)
+	defer cancelPull()
+	jobs := make(chan int, len(remote.Layers))
+	for index := range remote.Layers {
+		jobs <- index
+	}
+	close(jobs)
+
+	workerCount := maxConcurrentLayerDownloads
+	if workerCount > len(remote.Layers) {
+		workerCount = len(remote.Layers)
+	}
+	var workers sync.WaitGroup
+	var failOnce sync.Once
+	var pullErr error
+	fail := func(err error) {
+		failOnce.Do(func() {
+			pullErr = err
+			cancelPull()
+		})
+	}
+	for worker := 0; worker < workerCount; worker++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				if pullCtx.Err() != nil {
+					return
+				}
+				descriptor := remote.Layers[index]
+				layerPath, actualDigest, written, err := fetcher.blobToTemp(pullCtx, descriptor, maxLayerBytes)
+				if err != nil {
+					fail(fmt.Errorf("download image layer %d: %w", index, err))
+					return
+				}
+				diffID, err := uncompressedDigestForMediaType(layerPath, descriptor.MediaType)
+				if err != nil {
+					_ = os.Remove(layerPath)
+					fail(fmt.Errorf("verify uncompressed image layer %d: %w", index, err))
+					return
+				}
+				if diffID != config.RootFS.DiffIDs[index] {
+					_ = os.Remove(layerPath)
+					fail(fmt.Errorf("image layer %d diff_id mismatch: expected %s, received %s", index, config.RootFS.DiffIDs[index], diffID))
+					return
+				}
+				layers[index] = LayerArtifact{
+					MediaType: descriptor.MediaType, Digest: actualDigest,
+					DiffID: diffID, Path: layerPath, Size: written,
+				}
+			}
+		}()
+	}
+	workers.Wait()
+	if pullErr != nil {
+		return result, pullErr
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	for index, layer := range layers {
+		if layer.Path == "" {
+			return result, fmt.Errorf("registry image layer %d was not downloaded", index)
 		}
-		diffID, err := uncompressedDigestForMediaType(layerPath, descriptor.MediaType)
-		if err != nil {
-			_ = os.Remove(layerPath)
-			return result, fmt.Errorf("verify uncompressed image layer %d: %w", index, err)
-		}
-		if diffID != config.RootFS.DiffIDs[index] {
-			_ = os.Remove(layerPath)
-			return result, fmt.Errorf("image layer %d diff_id mismatch: expected %s, received %s", index, config.RootFS.DiffIDs[index], diffID)
-		}
-		layers = append(layers, LayerArtifact{MediaType: descriptor.MediaType, Digest: actualDigest, DiffID: diffID, Path: layerPath, Size: written})
 	}
 	artifact := Artifact{
 		Reference: parsed.LocalReference(), RuntimeConfig: config.Config,
@@ -452,6 +509,7 @@ type registryClient struct {
 	http                *http.Client
 	baseURL, repository string
 	credentials         Credentials
+	tokenMu             sync.Mutex
 	token               string
 	scope               string
 }
@@ -565,8 +623,14 @@ func (c *registryClient) get(ctx context.Context, endpoint, accept string, limit
 }
 
 func (c *registryClient) do(request *http.Request) (*http.Response, error) {
-	if c.token != "" && request.Header.Get("Authorization") == "" {
-		request.Header.Set("Authorization", "Bearer "+c.token)
+	tokenUsed := ""
+	if request.Header.Get("Authorization") == "" {
+		c.tokenMu.Lock()
+		tokenUsed = c.token
+		c.tokenMu.Unlock()
+		if tokenUsed != "" {
+			request.Header.Set("Authorization", "Bearer "+tokenUsed)
+		}
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
@@ -578,12 +642,22 @@ func (c *registryClient) do(request *http.Request) (*http.Response, error) {
 	challenge := response.Header.Get("WWW-Authenticate")
 	response.Body.Close()
 	if strings.HasPrefix(strings.ToLower(challenge), "bearer ") {
-		c.token = ""
-		token, tokenErr := c.bearerToken(request.Context(), challenge)
+		var token string
+		var tokenErr error
+		c.tokenMu.Lock()
+		if c.token != "" && c.token != tokenUsed {
+			// A concurrent request already refreshed the token.
+			token = c.token
+		} else {
+			token, tokenErr = c.bearerToken(request.Context(), challenge)
+			if tokenErr == nil {
+				c.token = token
+			}
+		}
+		c.tokenMu.Unlock()
 		if tokenErr != nil {
 			return nil, tokenErr
 		}
-		c.token = token
 		retry, cloneErr := cloneRequestForRetry(request)
 		if cloneErr != nil {
 			return nil, cloneErr

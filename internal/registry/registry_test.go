@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -277,6 +279,169 @@ func TestPullAcceptsDockerDistributionLayerMediaTypes(t *testing.T) {
 				t.Fatalf("single-layer compatibility metadata missing: %+v", artifact)
 			}
 		})
+	}
+}
+
+func TestPullDownloadsLayersConcurrentlyAndPreservesManifestOrder(t *testing.T) {
+	firstLayer, firstDiffID := testRegistryLayer(t, true, registryLayerEntry{name: "opt/first", data: []byte("first layer")})
+	secondLayer, secondDiffID := testRegistryLayer(t, true, registryLayerEntry{name: "opt/second", data: []byte("second layer")})
+	configData := testConfigWithDiffIDs(t, "amd64", []string{firstDiffID, secondDiffID}, RuntimeConfig{})
+	configDescriptor := Descriptor{MediaType: "application/vnd.oci.image.config.v1+json", Digest: digestBytes(configData), Size: int64(len(configData))}
+	layerDescriptors := []Descriptor{
+		{MediaType: ociGzipLayerMediaType, Digest: digestBytes(firstLayer), Size: int64(len(firstLayer))},
+		{MediaType: ociGzipLayerMediaType, Digest: digestBytes(secondLayer), Size: int64(len(secondLayer))},
+	}
+	manifestData, err := json.Marshal(manifest{SchemaVersion: 2, MediaType: "application/vnd.oci.image.manifest.v1+json", Config: configDescriptor, Layers: layerDescriptors})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{}, len(layerDescriptors))
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v2/team/app/manifests/latest":
+			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			_, _ = w.Write(manifestData)
+		case "/v2/team/app/blobs/" + configDescriptor.Digest:
+			_, _ = w.Write(configData)
+		case "/v2/team/app/blobs/" + layerDescriptors[0].Digest:
+			started <- struct{}{}
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+			_, _ = w.Write(firstLayer)
+		case "/v2/team/app/blobs/" + layerDescriptors[1].Digest:
+			started <- struct{}{}
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+			_, _ = w.Write(secondLayer)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	type pullResult struct {
+		artifact Artifact
+		err      error
+	}
+	done := make(chan pullResult, 1)
+	reference := strings.TrimPrefix(server.URL, "http://") + "/team/app:latest"
+	go func() {
+		artifact, pullErr := Pull(context.Background(), reference, "linux/amd64", Credentials{})
+		done <- pullResult{artifact: artifact, err: pullErr}
+	}()
+
+	startDeadline := time.NewTimer(2 * time.Second)
+	defer startDeadline.Stop()
+	for range layerDescriptors {
+		select {
+		case <-started:
+		case <-startDeadline.C:
+			close(release)
+			select {
+			case result := <-done:
+				if result.err == nil {
+					_ = result.artifact.Cleanup()
+				}
+			case <-time.After(5 * time.Second):
+			}
+			t.Fatal("registry layers were not downloaded concurrently")
+		}
+	}
+	close(release)
+
+	select {
+	case result := <-done:
+		if result.err != nil {
+			t.Fatalf("parallel image pull failed: %v", result.err)
+		}
+		defer result.artifact.Cleanup()
+		if len(result.artifact.Layers) != 2 {
+			t.Fatalf("pulled %d layers, want 2", len(result.artifact.Layers))
+		}
+		for index, descriptor := range layerDescriptors {
+			if result.artifact.Layers[index].Digest != descriptor.Digest {
+				t.Errorf("layer %d digest = %q, want manifest digest %q", index, result.artifact.Layers[index].Digest, descriptor.Digest)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("parallel image pull did not finish after releasing layer responses")
+	}
+}
+
+func TestConcurrentRegistryRequestsShareBearerTokenRefresh(t *testing.T) {
+	var tokenCalls atomic.Int32
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			tokenCalls.Add(1)
+			time.Sleep(25 * time.Millisecond)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"token":"shared-token"}`)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer shared-token" {
+			w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm=%q,service="test",scope="repository:team/app:pull"`, server.URL+"/token"))
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer server.Close()
+
+	client := &registryClient{http: server.Client(), baseURL: server.URL, repository: "team/app"}
+	const requestCount = 8
+	var workers sync.WaitGroup
+	results := make(chan error, requestCount)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for index := 0; index < requestCount; index++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/v2/team/app/blob", nil)
+			if err != nil {
+				results <- err
+				return
+			}
+			response, err := client.do(request)
+			if err != nil {
+				results <- err
+				return
+			}
+			body, readErr := io.ReadAll(response.Body)
+			closeErr := response.Body.Close()
+			if readErr != nil {
+				results <- readErr
+				return
+			}
+			if closeErr != nil {
+				results <- closeErr
+				return
+			}
+			if response.StatusCode != http.StatusOK || string(body) != "ok" {
+				results <- fmt.Errorf("unexpected registry response: status=%d body=%q", response.StatusCode, body)
+				return
+			}
+			results <- nil
+		}()
+	}
+	workers.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Error(err)
+		}
+	}
+	if got := tokenCalls.Load(); got != 1 {
+		t.Errorf("token endpoint called %d times for concurrent requests, want exactly one refresh", got)
 	}
 }
 
