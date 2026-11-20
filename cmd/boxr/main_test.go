@@ -3942,3 +3942,127 @@ services:
 		t.Fatalf("compose plan output omits deployment metadata: %q", stdout.String())
 	}
 }
+
+
+func TestContainerPruneRequiresExplicitModeAndPreservesActiveRecords(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+	labels := map[string]string{"team": "platform"}
+
+	created, err := state.Create("created-app", []string{"/bin/true"}, container.Options{}, labels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exited, err := state.Create("exited-app", []string{"/bin/true"}, container.Options{}, labels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(exited.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(exited.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	running, err := state.Create("running-app", []string{"/bin/sleep", "30"}, container.Options{}, labels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(running.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	restarting, err := state.Create("restarting-app", []string{"/bin/true"}, container.Options{RestartPolicy: "always"}, labels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(restarting.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(restarting.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.PrepareRestart(restarting.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"container", "prune"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("prune without an explicit mode returned %d, want 2: %s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"container", "prune", "--dry-run", "--force"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("prune with conflicting modes returned %d, want 2: %s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"container", "prune", "--dry-run", "--filter", "unsupported=value"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("prune with an unsupported filter returned %d, want 2: %s", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"container", "prune", "--dry-run", "--json", "--filter", "name=app", "--filter", "label=team=platform"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("prune dry-run returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var preview struct {
+		DryRun     bool
+		Count      int
+		Candidates []struct {
+			ID     string
+			Status string
+		}
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &preview); err != nil {
+		t.Fatalf("decode prune preview: %v (%s)", err, stdout.String())
+	}
+	if !preview.DryRun || preview.Count != 2 || len(preview.Candidates) != 2 {
+		t.Fatalf("preview included active containers or missed stopped records: %+v", preview)
+	}
+	for _, candidate := range preview.Candidates {
+		if candidate.ID != created.ID && candidate.ID != exited.ID {
+			t.Errorf("preview included unexpected container: %+v", candidate)
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"container", "prune", "--force", "--filter", "status=created"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("filtered force prune returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := state.Get(created.ID); err == nil {
+		t.Fatal("force prune left the matching created record")
+	}
+	if _, err := state.Get(exited.ID); err != nil {
+		t.Fatalf("filtered force prune removed a non-matching exited record: %v", err)
+	}
+	if _, err := state.Get(running.ID); err != nil {
+		t.Fatalf("prune removed a running record: %v", err)
+	}
+	if record, err := state.Get(restarting.ID); err != nil || record.Status != "restarting" {
+		t.Fatalf("prune changed a pending restart record: %+v, err=%v", record, err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"container", "prune", "--force", "--filter", "status=exited"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exited force prune returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := state.Get(exited.ID); err == nil {
+		t.Fatal("force prune left the matching exited record")
+	}
+
+	if err := state.RequestStop(running.ID); err != nil {
+		t.Fatalf("request stop for running fixture: %v", err)
+	}
+	if err := state.Finish(running.ID, nil); err != nil {
+		t.Fatalf("finish running fixture: %v", err)
+	}
+	if err := state.Remove(running.ID); err != nil {
+		t.Fatalf("remove running fixture after finishing: %v", err)
+	}
+	if err := state.RequestStop(restarting.ID); err != nil {
+		t.Fatalf("cancel restarting fixture: %v", err)
+	}
+	if err := state.Remove(restarting.ID); err != nil {
+		t.Fatalf("remove restarting fixture after cancellation: %v", err)
+	}
+}
