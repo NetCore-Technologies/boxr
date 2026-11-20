@@ -3516,7 +3516,10 @@ var implementedFeatures = []string{
 	"container namespace exposes Docker-style lifecycle subcommands through the native verified Boxr operations",,
 	"native rm safely removes created containers without weakening running-container protection",
 	"native rm --force stops running containers or cancels pending restarts before safe removal",
-	"native run accepts positional verified local image references while preserving ordinary command execution",
+	"native run accepts positional verified local image references while preserving ordinary command execution",,
+	"state store renames containers with unique names and persists rename lifecycle events",
+	"native rename and container rename commands preserve container IDs while changing unique names",
+	"Engine API POST containers rename updates unique container names and returns Docker-compatible errors"
 	"Engine API DELETE force true delegates to native safe forced removal for running or restarting containers"
 	"native create command records a verified image-backed container without starting it",
 	"native start command launches a created image-backed container through the detached supervisor",
