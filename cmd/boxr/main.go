@@ -3421,7 +3421,8 @@ var implementedFeatures = []string{
 	"top-level images command lists the verified local image store using Docker-style output flags",
 	"top-level tag command creates local image aliases without copying content-addressed blobs",
 	"top-level rmi command removes unused local image tags while preserving shared content-addressed blobs",
-	"container namespace exposes Docker-style lifecycle subcommands through the native verified Boxr operations",
+	"container namespace exposes Docker-style lifecycle subcommands through the native verified Boxr operations",,
+	"native rm safely removes created containers without weakening running-container protection"
 	"native create command records a verified image-backed container without starting it",
 	"native start command launches a created image-backed container through the detached supervisor",
 	"native start command restarts stopped image-backed containers through the detached supervisor",
