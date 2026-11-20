@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/creack/pty"
+
 	"github.com/manit6752025/boxr/internal/container"
 	"github.com/manit6752025/boxr/internal/state"
 )
@@ -118,5 +120,33 @@ func TestFindExecPathUsesContainerPath(t *testing.T) {
 func TestOpenProcDirectoryRejectsNonDirectory(t *testing.T) {
 	if _, err := openProcDirectory(os.Getpid(), "stat"); err == nil {
 		t.Fatal("opened /proc/PID/stat as a directory")
+	}
+}
+
+func TestExecHelpDocumentsInteractiveAndPTYFlags(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"exec", "--help"}, &out, &errOut); code != 0 {
+		t.Fatalf("exec --help returned %d: %q", code, errOut.String())
+	}
+	for _, option := range []string{"-i", "-t", "--interactive", "--tty"} {
+		if !strings.Contains(errOut.String(), option) {
+			t.Errorf("exec help does not document %s: %q", option, errOut.String())
+		}
+	}
+}
+
+func TestFirstExecTerminalSelectsFirstAvailableTerminal(t *testing.T) {
+	master, slave, err := pty.Open()
+	if err != nil {
+		t.Skipf("PTY device is unavailable: %v", err)
+	}
+	defer master.Close()
+	defer slave.Close()
+
+	if got := firstExecTerminal(nil, slave, master); got != slave {
+		t.Fatalf("selected terminal = %v, want first terminal %v", got, slave)
+	}
+	if got := firstExecTerminal(nil); got != nil {
+		t.Fatalf("selected terminal without candidates = %v, want nil", got)
 	}
 }
