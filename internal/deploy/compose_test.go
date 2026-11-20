@@ -7,7 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/manit6752025/boxr/internal/container"\n\t"gopkg.in/yaml.v3"
+	"github.com/manit6752025/boxr/internal/container"
+	"gopkg.in/yaml.v3"
 )
 
 func TestLoadComposeYAMLTranslatesSupportedServices(t *testing.T) {
