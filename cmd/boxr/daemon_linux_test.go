@@ -3,10 +3,15 @@
 package main
 
 import (
+	"context"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/manit6752025/boxr/internal/engineapi"
 )
 
 func TestParseDaemonHostAcceptsOnlyAbsoluteUnixSockets(t *testing.T) {
@@ -96,3 +101,61 @@ func TestListenDaemonSocketDoesNotReplaceRegularFile(t *testing.T) {
 	}
 }
 
+
+
+func TestDaemonUnixSocketServesDockerPing(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "engine.sock")
+	listener, _, err := listenDaemonSocket(socketPath)
+	if err != nil {
+		t.Fatalf("listen on daemon socket: %v", err)
+	}
+	server := &http.Server{Handler: engineapi.New("test-version")}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+		<-serveDone
+	})
+
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+		},
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport}
+	response, err := client.Get("http://boxr/_ping")
+	if err != nil {
+		t.Fatalf("GET /_ping over unix socket: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("ping status=%d", response.StatusCode)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "OK" || response.Header.Get("API-Version") != "1.45" {
+		t.Fatalf("ping response body=%q API-Version=%q", body, response.Header.Get("API-Version"))
+	}
+}
+
+func TestRunDaemonRejectsTCPAndPrintsHelp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := runDaemon([]string{"--help"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("daemon --help returned %d: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "unix:///absolute/path") {
+		t.Fatalf("daemon help missing Unix socket usage: %s", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runDaemon([]string{"--host", "tcp://127.0.0.1:2375"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("daemon TCP host returned %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "TCP listeners are disabled") {
+		t.Fatalf("daemon TCP rejection message = %q", stderr.String())
+	}
+}
