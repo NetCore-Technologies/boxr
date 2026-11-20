@@ -3046,8 +3046,7 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 	for _, group := range startGroups {
 		groupProcesses := make([]*deploymentProcess, 0, len(group))
 		for _, serviceName := range group {
-			planned, exists := plannedByName[serviceName]
-			if !exists {
+			if _, exists := plannedByName[serviceName]; !exists {
 				fmt.Fprintf(stderr, "boxr deploy up: start plan references unknown service %q\n", serviceName)
 				stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
 				return 1
