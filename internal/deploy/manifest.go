@@ -63,23 +63,23 @@ type Service struct {
 // ServicePlan contains only safe-to-display metadata. It deliberately excludes
 // command contents, environment values, labels and host paths.
 type ServicePlan struct {
-	Name                  string   `json:"name"`
-	ContainerName         string   `json:"containerName,omitempty"`
-	Image                 string   `json:"image,omitempty"`
-	DependsOn             []string `json:"dependsOn,omitempty"`
+	Name                  string        `json:"name"`
+	ContainerName         string        `json:"containerName,omitempty"`
+	Image                 string        `json:"image,omitempty"`
+	DependsOn             []string      `json:"dependsOn,omitempty"`
 	ReadinessType         string        `json:"readinessType,omitempty"`
 	Volumes               []VolumeMount `json:"volumes,omitempty"`
 	NetworkMode           string        `json:"networkMode"`
-	SecurityProfile       string   `json:"securityProfile,omitempty"`
-	ResourceProfile       string   `json:"resourceProfile,omitempty"`
-	RootFSConfigured      bool     `json:"rootfsConfigured"`
-	ReadOnlyRootFS        bool     `json:"readOnlyRootfs"`
-	MemoryLimitBytes      int64    `json:"memoryLimitBytes,omitempty"`
-	CPUs                  float64  `json:"cpus,omitempty"`
-	PidsLimit             int64    `json:"pidsLimit,omitempty"`
-	CommandArgumentCount  int      `json:"commandArgumentCount"`
-	EnvironmentEntryCount int      `json:"environmentEntryCount"`
-	LabelCount            int      `json:"labelCount"`
+	SecurityProfile       string        `json:"securityProfile,omitempty"`
+	ResourceProfile       string        `json:"resourceProfile,omitempty"`
+	RootFSConfigured      bool          `json:"rootfsConfigured"`
+	ReadOnlyRootFS        bool          `json:"readOnlyRootfs"`
+	MemoryLimitBytes      int64         `json:"memoryLimitBytes,omitempty"`
+	CPUs                  float64       `json:"cpus,omitempty"`
+	PidsLimit             int64         `json:"pidsLimit,omitempty"`
+	CommandArgumentCount  int           `json:"commandArgumentCount"`
+	EnvironmentEntryCount int           `json:"environmentEntryCount"`
+	LabelCount            int           `json:"labelCount"`
 }
 
 // Plan is deterministic for the same deployment file. Services are listed in

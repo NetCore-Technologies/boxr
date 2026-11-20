@@ -159,9 +159,9 @@ func TestBuildFromLocalImageBaseInheritsAndOverridesRuntimeConfig(t *testing.T) 
 		t.Fatalf("unpack derived image: %v", err)
 	}
 	for path, want := range map[string]string{
-		"etc-os-release":             "BOXR_BASE=1\n",
-		"usr/bin/base-entrypoint":    "base binary\n",
-		"opt/web/server":             "child application\n",
+		"etc-os-release":          "BOXR_BASE=1\n",
+		"usr/bin/base-entrypoint": "base binary\n",
+		"opt/web/server":          "child application\n",
 	} {
 		got, err := os.ReadFile(filepath.Join(unpacked, filepath.FromSlash(path)))
 		if err != nil {

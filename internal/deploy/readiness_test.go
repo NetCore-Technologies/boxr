@@ -67,9 +67,9 @@ func TestReadinessProbeDoesNotFollowRedirects(t *testing.T) {
 	defer redirect.Close()
 
 	err := WaitForReadiness(context.Background(), &ReadinessProbe{
-		HTTPURL:    redirect.URL,
-		Attempts:   1,
-		TimeoutMS:  250,
+		HTTPURL:   redirect.URL,
+		Attempts:  1,
+		TimeoutMS: 250,
 	})
 	if err == nil {
 		t.Fatal("redirect unexpectedly satisfied the HTTP readiness probe")
@@ -94,15 +94,15 @@ func TestReadinessProbeHonorsCancellation(t *testing.T) {
 
 func TestReadinessProbeRejectsUnsafeAndUnboundedTargets(t *testing.T) {
 	tests := map[string]ReadinessProbe{
-		"missing target":                  {},
-		"whitespace TCP with HTTP target": {TCPAddress: " ", HTTPURL: "http://127.0.0.1/"},
-		"whitespace HTTP with TCP target": {TCPAddress: "127.0.0.1:80", HTTPURL: " "},
-		"both target types":               {TCPAddress: "127.0.0.1:80", HTTPURL: "http://127.0.0.1/"},
+		"missing target":                   {},
+		"whitespace TCP with HTTP target":  {TCPAddress: " ", HTTPURL: "http://127.0.0.1/"},
+		"whitespace HTTP with TCP target":  {TCPAddress: "127.0.0.1:80", HTTPURL: " "},
+		"both target types":                {TCPAddress: "127.0.0.1:80", HTTPURL: "http://127.0.0.1/"},
 		"external tcp host":                {TCPAddress: "example.com:80"},
 		"localhost hostname":               {TCPAddress: "localhost:80"},
-		"TCP probe with HTTP status":        {TCPAddress: "127.0.0.1:80", ExpectedStatus: http.StatusOK},
+		"TCP probe with HTTP status":       {TCPAddress: "127.0.0.1:80", ExpectedStatus: http.StatusOK},
 		"invalid tcp port":                 {TCPAddress: "127.0.0.1:0"},
-		"TCP port with plus sign":           {TCPAddress: "127.0.0.1:+80"},
+		"TCP port with plus sign":          {TCPAddress: "127.0.0.1:+80"},
 		"external http host":               {HTTPURL: "http://example.com/health"},
 		"credentials in url":               {HTTPURL: "http://user:password@127.0.0.1/health"},
 		"query in url":                     {HTTPURL: "http://127.0.0.1/health?token=secret"},

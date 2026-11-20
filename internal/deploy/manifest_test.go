@@ -271,7 +271,6 @@ func TestBuildPlanValidatesNamedVolumeMounts(t *testing.T) {
 	}
 }
 
-
 func TestContainerNameIsStableAndBounded(t *testing.T) {
 	stack := "deployment-stack-with-a-long-name"
 	service := "service-name-that-is-also-very-long-and-near-the-limit"

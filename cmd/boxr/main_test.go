@@ -831,9 +831,9 @@ func TestDeployLogsPrefixesServicesAndFiltersByName(t *testing.T) {
 	create := func(service, name, content string, order int) state.Record {
 		t.Helper()
 		record, err := state.Create(name, []string{"/bin/service"}, container.Options{}, map[string]string{
-			deploy.StackLabel: "logs-stack",
+			deploy.StackLabel:   "logs-stack",
 			deploy.ServiceLabel: service,
-			deploy.OrderLabel: strconv.Itoa(order),
+			deploy.OrderLabel:   strconv.Itoa(order),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -874,7 +874,7 @@ func TestDeployLogsPrefixesServicesAndFiltersByName(t *testing.T) {
 func TestDeployLogsFollowDrainsFinalServiceOutput(t *testing.T) {
 	t.Setenv("BOXR_STATE_DIR", t.TempDir())
 	record, err := state.Create("logs-follow-api", []string{"/bin/service"}, container.Options{}, map[string]string{
-		deploy.StackLabel: "logs-follow-stack",
+		deploy.StackLabel:   "logs-follow-stack",
 		deploy.ServiceLabel: "api",
 	})
 	if err != nil {
@@ -1017,7 +1017,7 @@ func TestDeployUpFailsVolumePreflightBeforeCreatingAnyContainer(t *testing.T) {
 	t.Setenv("BOXR_DATA_DIR", filepath.Join(t.TempDir(), "data"))
 	file := deploy.File{
 		Version: 1,
-		Name: "volume-preflight",
+		Name:    "volume-preflight",
 		Services: map[string]deploy.Service{
 			"database": {
 				Command: []string{"/bin/true"},
@@ -1042,7 +1042,6 @@ func TestDeployUpFailsVolumePreflightBeforeCreatingAnyContainer(t *testing.T) {
 		t.Fatalf("service records were created before volume preflight completed: %+v", records)
 	}
 }
-
 
 func TestVersionJSONOutput(t *testing.T) {
 	var out, errOut bytes.Buffer

@@ -508,7 +508,7 @@ func copyContextDirectory(source, destination, root, sourceRelative string, igno
 		path string
 		mode os.FileMode
 	}
-	err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
