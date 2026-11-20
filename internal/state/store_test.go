@@ -250,3 +250,101 @@ func TestEventJournalRejectsSymlink(t *testing.T) {
 		t.Fatalf("failed create left state record behind: %v", err)
 	}
 }
+
+func TestRestartLifecyclePersistsAttemptsAndManualStopIntent(t *testing.T) {
+	useTempState(t)
+	record, err := Create("restart-test", []string{"/bin/false"}, container.Options{
+		RestartPolicy: "on-failure", RestartMaxRetries: 2, RestartDelayMS: 250,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Start(record.ID, 4321); err != nil {
+		t.Fatal(err)
+	}
+	if err := Finish(record.ID, &container.ExitError{Code: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareRestart(record.ID); err != nil {
+		t.Fatalf("PrepareRestart(): %v", err)
+	}
+	restarting, err := Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarting.Status != "restarting" || restarting.RestartCount != 1 ||
+		restarting.ExitCode == nil || *restarting.ExitCode != 7 ||
+		restarting.LastExitCode == nil || *restarting.LastExitCode != 7 || restarting.PID != 0 {
+		t.Fatalf("restart record = %+v", restarting)
+	}
+	items, err := List(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range items {
+		if item.ID == record.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("restarting record is missing from active container listing")
+	}
+	if err := Start(record.ID, 4322); err != nil {
+		t.Fatalf("Start(restart attempt): %v", err)
+	}
+	if err := RequestStop(record.ID); err != nil {
+		t.Fatalf("RequestStop(): %v", err)
+	}
+	if err := RequestStop(record.ID); err != nil {
+		t.Fatalf("repeated RequestStop(): %v", err)
+	}
+	stopping, err := Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stopping.StopRequested || stopping.Status != "running" {
+		t.Fatalf("stop intent was not persisted on running record: %+v", stopping)
+	}
+	if err := Finish(record.ID, &container.ExitError{Code: 143}); err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stopped.StopRequested || stopped.Status != "failed" {
+		t.Fatalf("finished manual stop state = %+v", stopped)
+	}
+	if err := PrepareRestart(record.ID); err == nil {
+		t.Fatal("restart was prepared despite a persisted stop request")
+	}
+}
+
+func TestRequestStopCancelsPendingRestartWithoutSignallingPID(t *testing.T) {
+	useTempState(t)
+	record, err := Create("restart-cancel", []string{"/bin/true"}, container.Options{RestartPolicy: "always"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Start(record.ID, 4323); err != nil {
+		t.Fatal(err)
+	}
+	if err := Finish(record.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareRestart(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := RequestStop(record.ID); err != nil {
+		t.Fatalf("RequestStop(restarting): %v", err)
+	}
+	loaded, err := Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status != "exited" || loaded.PID != 0 || !loaded.StopRequested || loaded.RestartCount != 1 {
+		t.Fatalf("cancelled restart state = %+v", loaded)
+	}
+}
+
