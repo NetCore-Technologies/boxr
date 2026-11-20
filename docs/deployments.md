@@ -37,6 +37,13 @@ Version 1 is strict JSON. Unknown fields, trailing JSON values, oversized files,
         "memoryLimitBytes": 268435456,
         "pidsLimit": 64
       },
+      "readiness": {
+        "httpUrl": "http://127.0.0.1:8080/healthz",
+        "intervalMs": 250,
+        "timeoutMs": 500,
+        "attempts": 40,
+        "expectedStatus": 200
+      },
       "dependsOn": ["database"]
     }
   }
@@ -62,11 +69,11 @@ boxr deploy down sample-app
 boxr deploy down --time 20s --remove sample-app
 ```
 
-`deploy up` runs in the foreground, creates a private temporary run config for each service, and starts services using the existing `boxr run` runtime. Services whose dependencies are satisfied form deterministic startup waves and are launched concurrently. Boxr waits for every service in a wave to reach the runtime's `running` state before starting the next wave. It does not claim that an application-level health check has passed. A service exit is fail-fast: the supervisor stops the remaining services in reverse startup order and exits with the service's status where available. Ctrl+C or SIGTERM requests graceful shutdown; services that exceed the stop timeout are killed.
+`deploy up` runs in the foreground, creates a private temporary run config for each service, and starts services using the existing `boxr run` runtime. Services whose dependencies are satisfied form deterministic startup waves and are launched concurrently. A service without a readiness probe is considered started when its runtime record reaches `running`. A service with a probe must also pass that application-level check before the next dependency wave is allowed to start. TCP probes connect to an explicit loopback IP and port; HTTP probes issue a GET to a loopback IP URL and require the configured status (default `200`). HTTP redirects and environment proxy settings are not followed. Targets must use literal loopback IP addresses, contain no URL credentials, query or fragment, and require host networking; `networkMode: "none"` cannot be combined with a probe. Probe interval, per-attempt timeout, attempt count and expected status are bounded and validated before any workload starts. The probe target is omitted from plan output. A readiness probe gates startup only: it is not a recurring liveness check and does not restart an unhealthy service after startup. A service exit is fail-fast: the supervisor stops the remaining services in reverse startup order and exits with the service's status where available. Ctrl+C or SIGTERM requests graceful shutdown; services that exceed the stop timeout are killed.
 
 Each service receives a stable stack-scoped container name and reserved metadata labels so `deploy ps` and `deploy down` only operate on that deployment. `deploy ps --json` omits command text, environment values, labels and host paths. Existing records with the same generated names must be removed with `deploy down --remove` before reusing a stack name. `deploy down` keeps completed records and logs by default; use `--remove` to delete them.
 
-The supervisor is attached and must remain running to monitor unexpected service exits. Detached mode, restart policies, application health checks, service DNS, bridge networking, port publishing, cross-host scheduling and rolling updates are not implemented by this milestone. Dependencies currently guarantee start order only; they do not wait for a TCP port or application readiness.
+The supervisor is attached and must remain running to monitor unexpected service exits. Detached mode, restart policies, service DNS, bridge networking, port publishing, secret mounts, cross-host scheduling and rolling updates are not implemented by this milestone. Dependencies guarantee start order and, when configured, a one-time readiness gate; they do not provide recurring liveness monitoring.
 
 ## Deterministic ordering
 
