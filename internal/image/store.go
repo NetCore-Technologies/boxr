@@ -888,6 +888,10 @@ func Save(reference, archivePath string) error {
 // Load imports a portable OCI image-layout archive. Every descriptor and blob
 // is verified before the local index is atomically updated.
 func Load(archivePath string) ([]Image, error) {
+	if isDockerSaveArchive(archivePath) {
+		return LoadDockerArchive(archivePath)
+	}
+
 	stageParent, err := os.MkdirTemp("", "boxr-oci-load-*")
 	if err != nil {
 		return nil, err

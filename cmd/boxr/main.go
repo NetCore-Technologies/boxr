@@ -1998,7 +1998,7 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "load":
 		if len(args) != 2 {
-			fmt.Fprintln(stderr, "Usage: boxr image load ARCHIVE.tar.gz")
+			fmt.Fprintln(stderr, "Usage: boxr image load ARCHIVE.tar[.gz]")
 			return 2
 		}
 		items, err := imageStore.Load(args[1])
@@ -2461,6 +2461,18 @@ var implementedFeatures = []string{
 	"image prune aggregates reclaimable bytes before deletion",
 	"image prune dry-run preserves every unreferenced blob",
 	"image prune retains explicit force confirmation for deletion",
+	"standard Docker save archive import through image load",
+	"plain tar and gzip-compressed Docker archive support",
+	"bounded Docker archive extraction and strict path validation",
+	"Docker archive manifest and config size validation",
+	"Docker archive repository tag and platform validation",
+	"multi-layer Docker root filesystem application in layer order",
+	"Docker layer uncompressed SHA-256 diff_id verification",
+	"Docker layer whiteout deletion semantics",
+	"Docker opaque-directory whiteout semantics",
+	"Docker image environment entrypoint command working-directory user and label preservation",
+	"Docker archive multi-tag import with complete preflight validation",
+	"Docker layer safe symlink and hard-link handling with special-file rejection",
 }
 
 func printFeatures(stdout io.Writer) {

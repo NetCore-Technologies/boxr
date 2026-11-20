@@ -223,7 +223,7 @@ Use `--file PATH` to select another recipe, `--platform linux/ARCH[/VARIANT]` to
 
 ## Local image workflow
 
-Boxr can import a prepared rootfs directory into a local OCI image-layout store using a Boxr-specific compressed rootfs layer media type. The store uses content-addressed SHA-256 blobs, validates descriptors and layer diff IDs, and supports portable OCI-layout archives. Rootfs tar creation normalizes timestamps and owner metadata so equivalent filesystem trees produce byte-identical layer archives across build times. Boxr also supports OCI Distribution registry pull and push for this Boxr-specific, single-rootfs-layer format, including Bearer-token authentication, manifest-list platform selection, digest verification and streamed layer uploads. It does **not** yet apply arbitrary multi-layer Docker/OCI images or their whiteout semantics.
+Boxr can import a prepared rootfs directory into a local OCI image-layout store using a Boxr-specific compressed rootfs layer media type. The store uses content-addressed SHA-256 blobs, validates descriptors and layer diff IDs, and supports portable OCI-layout archives. Rootfs tar creation normalizes timestamps and owner metadata so equivalent filesystem trees produce byte-identical layer archives across build times. Boxr also imports standard Docker save archives through `boxr image load`: plain tar and gzip-compressed tar archives are accepted, every uncompressed layer diff ID is verified, layers are applied in order with Docker whiteout and opaque-directory handling, supported runtime settings and platform metadata are preserved, and all listed repository tags are imported. Imported layered images are flattened into Boxr's native rootfs layer. OCI Distribution registry pull and push remain limited to Boxr's own single-rootfs-layer media type; arbitrary multi-layer registry manifests are not yet supported. The supported archive entry types and import limits are documented in [Docker archive import](docs/docker-archive.md).
 
 ```bash
 boxr image import ./rootfs alpine:local
@@ -238,6 +238,8 @@ boxr image tag alpine:local alpine:stable
 boxr image save alpine:local alpine-local.oci.tar.gz
 boxr image rm alpine:local
 boxr image load alpine-local.oci.tar.gz
+docker save -o alpine.docker.tar alpine:latest
+boxr image load alpine.docker.tar
 boxr image unpack alpine:local ./rootfs-restored
 boxr image prune --dry-run
 boxr image prune --force
@@ -275,7 +277,7 @@ boxr completion bash
 
 - Linux kernel with support for PID, UTS, mount and IPC namespaces. Network and user namespaces are optional runtime flags.
 - cgroup v2 must be mounted and writable with requested controllers delegated for resource-limit options.
-- `--rootfs` is an existing directory owned/prepared by the operator. `boxr image pull` can fetch Boxr-format single-layer images from OCI Distribution registries; ordinary multi-layer Docker/OCI images are not yet supported.
+- `--rootfs` is an existing directory owned/prepared by the operator. `boxr image pull` and `push` currently support Boxr-format single-layer images from OCI Distribution registries. Import ordinary multi-layer Docker archives with `docker save` followed by `boxr image load`; arbitrary multi-layer OCI registry manifests are not yet supported.
 - `--network none` has no network provisioning; only loopback is enabled. `host` is the default network mode. `--seccomp-profile baseline` enables a fixed architecture-specific denylist and automatically enables no-new-privileges; it is defense-in-depth, not a sandbox policy.
 - Named volumes require `--rootfs`; they are not a host-wide container filesystem abstraction and must not be treated as encrypted storage.
 - OverlayFS provides a persistent writable rootfs view. The OCI-layout image store is separate and currently supports a single Boxr rootfs layer for registry pull/push. boxr does not provide arbitrary multi-layer Docker/OCI application, customizable seccomp profiles, device filtering, LSM policy management, veth/bridge/NAT networking or daemonized detached containers.

@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 523 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 535 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -529,3 +529,15 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 521. image prune aggregates reclaimable bytes before deletion
 522. image prune dry-run preserves every unreferenced blob
 523. image prune retains explicit force confirmation for deletion
+524. standard Docker save archive import through image load
+525. plain tar and gzip-compressed Docker archive support
+526. bounded Docker archive extraction and strict path validation
+527. Docker archive manifest and config size validation
+528. Docker archive repository tag and platform validation
+529. multi-layer Docker root filesystem application in layer order
+530. Docker layer uncompressed SHA-256 diff_id verification
+531. Docker layer whiteout deletion semantics
+532. Docker opaque-directory whiteout semantics
+533. Docker image environment entrypoint command working-directory user and label preservation
+534. Docker archive multi-tag import with complete preflight validation
+535. Docker layer safe symlink and hard-link handling with special-file rejection
