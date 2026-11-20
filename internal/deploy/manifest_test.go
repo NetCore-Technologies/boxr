@@ -21,6 +21,7 @@ func TestBuildPlanOrdersServicesDeterministicallyAndRedactsSecrets(t *testing.T)
 				Command:   []string{"/bin/sh", "-c", "echo private-command-token"},
 				Options:   container.Options{Env: []string{"TOKEN=private-environment-token"}, Labels: map[string]string{"owner": "private-label"}},
 				DependsOn: []string{"database"},
+				Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:5432", Attempts: 2},
 			},
 			"worker": {
 				Command:   []string{"/bin/worker"},
@@ -69,6 +70,12 @@ func TestBuildPlanOrdersServicesDeterministicallyAndRedactsSecrets(t *testing.T)
 	if plan.Services[1].CommandArgumentCount != 3 || plan.Services[1].EnvironmentEntryCount != 1 || plan.Services[1].LabelCount != 1 {
 		t.Fatalf("redacted service summary lost useful counts: %+v", plan.Services[1])
 	}
+	if plan.Services[1].ReadinessType != "tcp" {
+		t.Fatalf("readiness type = %q, want tcp", plan.Services[1].ReadinessType)
+	}
+	if strings.Contains(string(encoded), "127.0.0.1") {
+		t.Fatalf("deployment plan leaked the private readiness target: %s", encoded)
+	}
 }
 
 func TestBuildPlanRejectsInvalidGraphsAndServices(t *testing.T) {
@@ -95,6 +102,12 @@ func TestBuildPlanRejectsInvalidGraphsAndServices(t *testing.T) {
 		}},
 		"invalid options": {Version: 1, Services: map[string]Service{
 			"web": {Command: []string{"/bin/true"}, Options: container.Options{NetworkMode: "bridge"}},
+		}},
+		"non-loopback readiness URL": {Version: 1, Services: map[string]Service{
+			"web": {Command: []string{"/bin/true"}, Readiness: &ReadinessProbe{HTTPURL: "http://example.com/health"}},
+		}},
+		"isolated network readiness": {Version: 1, Services: map[string]Service{
+			"web": {Command: []string{"/bin/true"}, Options: container.Options{NetworkMode: "none"}, Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:8080"}},
 		}},
 		"duplicate container names": {Version: 1, Services: map[string]Service{
 			"api": {Command: []string{"/bin/true"}, Options: container.Options{Name: "same-name"}},
