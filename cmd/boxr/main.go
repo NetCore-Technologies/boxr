@@ -236,6 +236,8 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	var existingID string
+	flags.StringVar(&existingID, "internal-existing-id", "", "internal Engine API existing container identity")
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: boxr run [options] [--] COMMAND [ARG...]")
 		fmt.Fprintln(stderr, "\nOptions:")
@@ -293,6 +295,36 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 	if detached && dryRun {
 		fmt.Fprintln(stderr, "boxr run: --detach cannot be combined with --dry-run")
 		return 2
+	}
+	if existingID != "" {
+		if !detached || dryRun {
+			fmt.Fprintln(stderr, "boxr run: internal existing-ID mode requires --detach and cannot use --dry-run")
+			return 2
+		}
+		existingRecord, getErr := state.Get(existingID)
+		if getErr != nil {
+			fmt.Fprintf(stderr, "boxr run: load existing container %s: %v\n", existingID, getErr)
+			return 1
+		}
+		if existingRecord.Status != "created" {
+			fmt.Fprintf(stderr, "boxr run: existing container %s must be in created state (state: %s)\n", existingID, existingRecord.Status)
+			return 1
+		}
+		savedImage := existingRecord.Labels["io.boxr.image"]
+		if savedImage == "" {
+			fmt.Fprintln(stderr, "boxr run: existing Engine API container has no saved image reference")
+			return 1
+		}
+		if imageReference != "" && imageReference != savedImage {
+			fmt.Fprintln(stderr, "boxr run: image reference does not match the created container")
+			return 1
+		}
+		configEnvironment := append([]string(nil), opts.Env...)
+		opts = existingRecord.Options
+		opts.Env = configEnvironment
+		opts.Labels = existingRecord.Labels
+		opts.Name = existingRecord.Name
+		imageReference = savedImage
 	}
 	if restartDelay != 0 {
 		if restartDelay%time.Millisecond != 0 {
@@ -516,14 +548,27 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 		return runDetachedContainer(args, stdout, stderr)
 	}
 
-	record, err := state.Create(opts.Name, commandArgs, opts, opts.Labels)
+	var record state.Record
+	if existingID != "" {
+		record, err = state.Get(existingID)
+		if err == nil && record.Status != "created" {
+			err = fmt.Errorf("existing container is no longer in created state (state: %s)", record.Status)
+		}
+		if err == nil && !equalStringSlices(commandArgs, record.Command) {
+			err = fmt.Errorf("resolved image command does not match the created container command")
+		}
+	} else {
+		record, err = state.Create(opts.Name, commandArgs, opts, opts.Labels)
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "boxr run: state: %v\n", err)
 		return 1
 	}
 	logFile, err := state.OpenLog(record.ID)
 	if err != nil {
-		_ = state.RemoveCreated(record.ID)
+		if existingID == "" {
+			_ = state.RemoveCreated(record.ID)
+		}
 		fmt.Fprintf(stderr, "boxr run: log setup: %v\n", err)
 		return 1
 	}
@@ -604,7 +649,7 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	if !startedAny && (opts.RestartPolicy == "" || opts.RestartPolicy == "no") {
+	if existingID == "" && !startedAny && (opts.RestartPolicy == "" || opts.RestartPolicy == "no") {
 		_ = state.RemoveCreated(record.ID)
 	}
 	if opts.AutoRemove && startedAny {
@@ -632,6 +677,18 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, " exited successfully")
 	}
 	return 0
+}
+
+func equalStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func restartPolicyApplies(options container.Options, record state.Record) bool {
