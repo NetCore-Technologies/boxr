@@ -524,3 +524,37 @@ func TestBuildPlanValidatesServiceEnvironmentFiles(t *testing.T) {
 	}
 }
 
+func TestBuildPlanCarriesPerServiceStartupTimeout(t *testing.T) {
+	file := File{
+		Version: 1,
+		Services: map[string]Service{
+			"database": {Command: []string{"/bin/database"}, StartTimeoutMS: 120000},
+			"web":      {Command: []string{"/bin/web"}},
+		},
+	}
+	plan, err := BuildPlan(file)
+	if err != nil {
+		t.Fatalf("BuildPlan(): %v", err)
+	}
+	if plan.Services[0].Name != "database" || plan.Services[0].StartTimeoutMS != 120000 {
+		t.Fatalf("database plan = %+v, want 120000ms startup timeout", plan.Services[0])
+	}
+	if plan.Services[1].Name != "web" || plan.Services[1].StartTimeoutMS != 0 {
+		t.Fatalf("web plan = %+v, want default startup timeout", plan.Services[1])
+	}
+
+	for _, invalid := range []int{-1, 1, 9, 600001} {
+		t.Run(fmt.Sprintf("invalid_%d", invalid), func(t *testing.T) {
+			candidate := File{
+				Version: 1,
+				Services: map[string]Service{
+					"web": {Command: []string{"/bin/web"}, StartTimeoutMS: invalid},
+				},
+			}
+			if _, err := BuildPlan(candidate); err == nil {
+				t.Fatalf("startTimeoutMs %d unexpectedly validated", invalid)
+			}
+		})
+	}
+}
+
