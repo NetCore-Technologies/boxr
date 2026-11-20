@@ -168,6 +168,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func runContainer(args []string, stdout, stderr io.Writer) int {
+	forwardedArgs, detached, err := extractDetachedFlag(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr run: %v\\n", err)
+		return 2
+	}
+	if detached {
+		return runDetachedContainer(forwardedArgs, stdout, stderr)
+	}
+	args = forwardedArgs
+
 	var opts container.Options
 	var memory, memoryHigh, memoryLow, memoryMin, memorySwap string
 	var configPath string
@@ -502,6 +512,12 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 				return err
 			}
 			started = true
+			if detachedReadyWriter != nil && !detachedReadySent {
+				_, _ = fmt.Fprintf(detachedReadyWriter, "READY %s %d\\n", record.ID, pid)
+				detachedReadySent = true
+				_ = detachedReadyWriter.Close()
+				detachedReadyWriter = nil
+			}
 			return nil
 		},
 		OnExit: func(_ int, executionErr error) error {
