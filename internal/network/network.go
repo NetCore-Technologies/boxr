@@ -221,6 +221,7 @@ func validateStoredNetworks(networks []Network) error {
 	ids := make(map[string]struct{}, len(networks))
 	bridges := make(map[string]struct{}, len(networks))
 	prefixes := make([]netip.Prefix, 0, len(networks))
+	containerNetworks := make(map[string]string)
 	for _, network := range networks {
 		if !networkNameRE.MatchString(network.Name) || len(network.ID) != 16 {
 			return fmt.Errorf("network store contains an invalid network identity")
@@ -252,6 +253,10 @@ func validateStoredNetworks(networks []Network) error {
 		prefixes = append(prefixes, prefix)
 		allocated := make(map[string]struct{}, len(network.Allocations))
 		for containerID, addressText := range network.Allocations {
+			if previousNetwork, exists := containerNetworks[containerID]; exists {
+				return fmt.Errorf("network store attaches container %q to both %q and %q", containerID, previousNetwork, network.Name)
+			}
+			containerNetworks[containerID] = network.Name
 			address, err := netip.ParseAddr(addressText)
 			if containerID == "" || strings.ContainsAny(containerID, "/\\\x00") ||
 				err != nil || !address.Is4() || !prefix.Contains(address) || address == gateway || address == prefix.Addr() || address == broadcastAddress(prefix) {
@@ -546,8 +551,10 @@ func JoinWithRunner(ctx context.Context, networkName string, pid int, containerI
 		return "", fmt.Errorf("network %q does not exist", networkName)
 	}
 	network := &current.Networks[index]
-	if _, exists := network.Allocations[containerID]; exists {
-		return "", fmt.Errorf("container %q is already connected to network %q", containerID, networkName)
+	for _, existingNetwork := range current.Networks {
+		if existingNetworkName := existingNetwork.Allocations[containerID]; existingNetworkName != "" {
+			return "", fmt.Errorf("container %q is already attached to managed network %q; disconnect it first", containerID, existingNetwork.Name)
+		}
 	}
 	normalizedPorts, err := normalizePortMappings(ports)
 	if err != nil {
