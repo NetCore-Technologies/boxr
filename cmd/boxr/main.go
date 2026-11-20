@@ -209,7 +209,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 func runContainerCommand(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "Usage: boxr container create|run|start|restart|stop|kill|wait|logs|exec|ls|ps|inspect|rm|stats ...")
+		fmt.Fprintln(stderr, "Usage: boxr container create|run|start|restart|rename|stop|kill|wait|logs|exec|ls|ps|inspect|rm|stats ...")
 		return 2
 	}
 	switch args[0] {
@@ -1355,7 +1355,7 @@ func runRemove(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if flags.NArg() == 0 {
-		fmt.Fprintln(stderr, "Usage: boxr rm ID|NAME [ID|NAME...]")
+		fmt.Fprintln(stderr, "Usage: boxr rm [-f|--force] ID|NAME [ID|NAME...]")
 		return 2
 	}
 	for _, query := range flags.Args() {
