@@ -186,9 +186,9 @@ func SaveDockerMany(references []string, archivePath string) error {
 		entry := images[groupKey]
 		if entry == nil {
 			entry = &dockerSaveManifestEntry{
-				Config: configName,
+				Config:   configName,
 				RepoTags: []string{},
-				Layers: []string{layerName},
+				Layers:   []string{layerName},
 			}
 			images[groupKey] = entry
 		}

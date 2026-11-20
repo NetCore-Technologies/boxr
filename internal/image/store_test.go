@@ -598,7 +598,6 @@ func TestSaveDockerArchiveRoundTrip(t *testing.T) {
 	}
 }
 
-
 func TestSaveDockerManyDeduplicatesImagesAndLayers(t *testing.T) {
 	useStore(t)
 	root := newRoot(t)
