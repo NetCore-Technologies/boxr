@@ -111,6 +111,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return 0
+	case "daemon":
+		return runDaemon(args[1:], stdout, stderr)
 	case "version", "--version":
 		if len(args) == 2 && args[1] == "--json" {
 			return writeJSON(stdout, map[string]string{"version": version, "commit": commit, "buildDate": buildDate, "goVersion": runtime.Version()}, stderr, "boxr version")
@@ -1599,6 +1601,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `boxr — lightweight Linux process isolation
 
 Usage:
+  boxr daemon [--host unix:///absolute/path/engine.sock]
   boxr run [options] [--detach|-d] [--dry-run] COMMAND [ARG...]
   boxr exec [options] CONTAINER COMMAND [ARG...]
   boxr version [--json]
