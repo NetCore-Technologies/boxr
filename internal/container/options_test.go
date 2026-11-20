@@ -317,3 +317,85 @@ func TestOptionsValidateManagedBridgeNetworking(t *testing.T) {
 	}
 }
 
+func TestPortMappingNormalizeUsesSafeIPv4AndProtocolDefaults(t *testing.T) {
+	normalized, err := (PortMapping{HostPort: 8080, ContainerPort: 80}).Normalize()
+	if err != nil {
+		t.Fatalf("Normalize(): %v", err)
+	}
+	want := PortMapping{HostIP: "0.0.0.0", HostPort: 8080, ContainerPort: 80, Protocol: "tcp"}
+	if normalized != want {
+		t.Fatalf("normalized mapping = %+v, want %+v", normalized, want)
+	}
+	udp, err := (PortMapping{HostIP: "127.0.0.1", HostPort: 5353, ContainerPort: 53, Protocol: "UDP"}).Normalize()
+	if err != nil {
+		t.Fatalf("Normalize(UDP): %v", err)
+	}
+	if udp.Protocol != "udp" || udp.HostIP != "127.0.0.1" {
+		t.Fatalf("normalized UDP mapping = %+v", udp)
+	}
+}
+
+func TestPortMappingNormalizeRejectsInvalidMappings(t *testing.T) {
+	tests := map[string]PortMapping{
+		"zero host port":       {HostPort: 0, ContainerPort: 80},
+		"zero container port":  {HostPort: 8080, ContainerPort: 0},
+		"ipv6 host address":    {HostIP: "::1", HostPort: 8080, ContainerPort: 80},
+		"noncanonical host ip": {HostIP: "127.000.0.1", HostPort: 8080, ContainerPort: 80},
+		"unknown protocol":     {HostPort: 8080, ContainerPort: 80, Protocol: "sctp"},
+	}
+	for name, mapping := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := mapping.Normalize(); err == nil {
+				t.Fatal("invalid port mapping unexpectedly normalized")
+			}
+		})
+	}
+}
+
+func TestOptionsValidatePublishedPortsOnlyForBridgeAndRejectConflicts(t *testing.T) {
+	valid := Options{
+		NetworkMode: "bridge",
+		NetworkName: "frontend",
+		PublishedPorts: []PortMapping{
+			{HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 80},
+			{HostPort: 5353, ContainerPort: 53, Protocol: "udp"},
+		},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("Validate(valid published ports): %v", err)
+	}
+	tests := map[string]Options{
+		"host mode": {
+			NetworkMode: "host", PublishedPorts: []PortMapping{{HostPort: 8080, ContainerPort: 80}},
+		},
+		"none mode": {
+			NetworkMode: "none", PublishedPorts: []PortMapping{{HostPort: 8080, ContainerPort: 80}},
+		},
+		"wildcard conflicts with specific host": {
+			NetworkMode: "bridge", NetworkName: "frontend",
+			PublishedPorts: []PortMapping{
+				{HostPort: 8080, ContainerPort: 80},
+				{HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 8080},
+			},
+		},
+		"same endpoint duplicate": {
+			NetworkMode: "bridge", NetworkName: "frontend",
+			PublishedPorts: []PortMapping{
+				{HostPort: 8080, ContainerPort: 80},
+				{HostPort: 8080, ContainerPort: 8080},
+			},
+		},
+		"mapping count exceeded": {
+			NetworkMode: "bridge", NetworkName: "frontend",
+			PublishedPorts: make([]PortMapping, 129),
+		},
+	}
+	for name, options := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := options.Validate(); err == nil {
+				t.Fatal("invalid published port configuration unexpectedly validated")
+			}
+		})
+	}
+}
+
