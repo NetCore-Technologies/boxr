@@ -27,8 +27,9 @@ var storeMu sync.Mutex
 type Record struct {
 	ID            string            `json:"id"`
 	Name          string            `json:"name,omitempty"`
-	PID           int               `json:"pid,omitempty"`
-	Command       []string          `json:"command"`
+	PID               int               `json:"pid,omitempty"`
+	ProcessStartTicks uint64            `json:"processStartTicks,omitempty"`
+	Command           []string          `json:"command"`
 	Status        string            `json:"status"`
 	ExitCode      *int              `json:"exitCode,omitempty"`
 	LastExitCode  *int              `json:"lastExitCode,omitempty"`
@@ -126,6 +127,9 @@ func Start(id string, pid int) error {
 	if pid <= 0 {
 		return fmt.Errorf("host PID must be positive")
 	}
+	// Best-effort capture retains compatibility with records written before
+	// process identity was introduced while protecting newly launched containers.
+	startTicks, _ := processStartTicks(pid)
 	return update(id, func(record *Record) error {
 		if record.Status != "created" && record.Status != "restarting" {
 			return fmt.Errorf("cannot start container in %q state", record.Status)
@@ -135,6 +139,7 @@ func Start(id string, pid int) error {
 		}
 		now := time.Now().UTC()
 		record.Status, record.PID, record.StartedAt = "running", pid, &now
+		record.ProcessStartTicks = startTicks
 		record.ExitCode = nil
 		record.LastExitCode = nil
 		record.Error = ""
@@ -162,6 +167,7 @@ func PrepareRestart(id string) error {
 		}
 		record.RestartCount++
 		record.PID = 0
+		record.ProcessStartTicks = 0
 		record.Status = "restarting"
 		return appendEvent(Event{Time: time.Now().UTC(), Action: "restart", ID: record.ID, Name: record.Name})
 	})
@@ -174,6 +180,7 @@ func RequestStop(id string) error {
 		if record.Status == "restarting" {
 			record.StopRequested = true
 			record.PID = 0
+			record.ProcessStartTicks = 0
 			if record.ExitCode != nil && *record.ExitCode != 0 {
 				record.Status = "failed"
 			} else {

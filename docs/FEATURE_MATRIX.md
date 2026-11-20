@@ -785,3 +785,10 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 777. Dockerfile RUN enforces user namespaces no-new-privileges baseline seccomp and drops all capabilities
 778. Dockerfile RUN failures abort the build before the image tag is published
 779. Dockerfile RUN after a non-root USER is rejected rather than silently run as root
+780. exec launches an additional command in a running container
+781. exec enters pinned mount UTS IPC network PID and optional user namespaces
+782. exec joins the existing container cgroup before namespace entry
+783. exec inherits the live environment and supports environment and env-file overrides
+784. exec reapplies configured capability no-new-privileges and seccomp restrictions
+785. exec forwards standard input output and error and propagates command exit status
+786. lifecycle records store Linux process start-time ticks to detect PID reuse

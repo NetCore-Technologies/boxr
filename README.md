@@ -168,13 +168,15 @@ boxr logs --tail 100 web         # recent stdout/stderr output
 boxr logs --follow web           # stream output until exit
 boxr stop --time 10s web         # graceful stop, then forced kill
 boxr kill --signal KILL web      # send a named signal
+boxr exec web /bin/sh            # run another process in the container
+boxr exec --workdir /app --env LOG_LEVEL=debug web ./bin/migrate
 boxr wait web                    # print the final exit code
 boxr stats web                  # live cgroup metrics; requires an active cgroup
 boxr events --limit 50          # recent lifecycle events
 boxr events --action die --since 1h --format json
 boxr events --container web --action start
 boxr rm web                     # remove a completed record
-boxr prune --older-than 168h    # remove old completed records
+`boxr exec` enters the running container's existing mount, UTS, IPC, network and PID namespaces (and user namespace when enabled). It inherits the live container environment, accepts additional repeatable `--env` and `--env-file` values, and runs under the container's configured capability, no-new-privileges and seccomp restrictions. When resource limits are configured, the exec launcher joins that container's cgroup before namespace entry so the new process is covered by the same limits. Standard input/output/error are passed through. A pseudo-terminal is not allocated yet, so interactive terminal applications may not behave like `docker exec -it`.
 
 boxr volume create --label app=web web-data
 boxr volume ls

@@ -17,6 +17,9 @@ func Signal(query, name string) error {
 	if record.PID <= 0 {
 		return fmt.Errorf("container %s has no host PID", record.ID)
 	}
+	if err := VerifyProcessIdentity(record); err != nil {
+		return fmt.Errorf("refuse to signal container %s: %w", record.ID, err)
+	}
 	signal, err := parseSignal(name)
 	if err != nil {
 		return err

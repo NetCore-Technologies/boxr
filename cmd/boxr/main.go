@@ -61,6 +61,13 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) int {
 	// The helper is PID 1 inside the newly-created namespaces. It waits for the
 	// parent to attach it to its cgroup before it executes the requested command.
+	if len(args) > 0 && args[0] == "__boxr-exec-launch" {
+		return runExecLaunch(args[1:])
+	}
+	if len(args) > 0 && args[0] == "__boxr-exec" {
+		return runExecChild(args[1:], stdout, stderr)
+	}
+
 	if len(args) > 0 && args[0] == "__boxr-init" {
 		if err := container.Init(args[1:]); err != nil {
 			var exitErr *container.ExitError
@@ -160,6 +167,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runPrune(args[1:], stdout, stderr)
 	case "run":
 		return runContainer(args[1:], stdout, stderr)
+	case "exec":
+		return runExec(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "boxr: unknown command %q\n\n", args[0])
 		printUsage(stderr)
@@ -1591,6 +1600,7 @@ func printUsage(w io.Writer) {
 
 Usage:
   boxr run [options] [--detach|-d] [--dry-run] COMMAND [ARG...]
+  boxr exec [options] CONTAINER COMMAND [ARG...]
   boxr version [--json]
   boxr info [--json]
   boxr system df [--json]
@@ -1602,6 +1612,7 @@ Usage:
   boxr kill [--signal KILL] ID|NAME [...]
   boxr wait [--condition running|stopped] [--timeout 30s] [--interval 100ms] [--json] ID|NAME [...]
   boxr logs [--tail 100] [--follow] ID|NAME
+  boxr exec [--workdir PATH] [--env KEY=VALUE] [--env-file PATH] ID|NAME COMMAND [ARG...]
   boxr network create --subnet CIDR [--gateway IP] [--no-nat] NAME
   boxr network ls [--json]
   boxr network inspect [--json] NAME
@@ -2974,6 +2985,13 @@ var implementedFeatures = []string{
 	"Dockerfile RUN enforces user namespaces no-new-privileges baseline seccomp and drops all capabilities",
 	"Dockerfile RUN failures abort the build before the image tag is published",
 	"Dockerfile RUN after a non-root USER is rejected rather than silently run as root",
+	"exec runs an additional command in an existing container",
+	"exec enters pinned mount UTS IPC network PID and optional user namespaces",
+	"exec launcher joins the container resource cgroup before namespace entry",
+	"exec inherits container environment and supports environment and env-file overrides",
+	"exec reapplies configured capability no-new-privileges and seccomp restrictions",
+	"exec forwards standard input output and error and propagates command exit status",
+	"container records capture Linux process start-time ticks to detect PID reuse",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -3024,7 +3042,7 @@ func runCompletion(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Usage: boxr completion bash|zsh|fish|powershell")
 		return 2
 	}
-	commands := "run ps inspect stop kill wait logs network volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
+	commands := "run exec ps inspect stop kill wait logs network volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
 	switch args[0] {
 	case "bash":
 		fmt.Fprintf(stdout, `_boxr_complete() { COMPREPLY=($(compgen -W "%s" -- "${COMP_WORDS[COMP_CWORD]}")); }
