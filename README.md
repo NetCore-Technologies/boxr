@@ -26,7 +26,7 @@ It is an early-stage runtime and **not a hardened security boundary or Docker re
 - **Security controls:** capability drops, `no_new_privileges`, and an opt-in architecture-guarded seccomp baseline denylist. These are defense-in-depth controls, not a sandbox guarantee.
 - **cgroup v2:** memory max/high/low/min/swap, CPU quota/weight, I/O weight, PID limits and group OOM policy. The blocked helper is attached before workload execution.
 - **Configuration and deployment:** versioned JSON run files, strict multi-service manifests, dependency-aware parallel startup, bounded TCP/HTTP loopback readiness gates, service-specific resource and lifecycle budgets, published TCP/UDP ports, and secret-redacted plans.
-- **Local lifecycle:** persistent records, `ps`, `inspect`, `stats`, `events`, `logs` (tail/follow), `stop` (graceful TERM then KILL), `kill`, `wait`, `rm`, automatic record removal and age-based pruning.
+- **Local lifecycle:** persistent records, foreground and detached per-container supervisors, `ps`, `inspect`, `stats`, `events`, `logs` (tail/follow), `stop` (graceful TERM then KILL), `kill`, `wait`, `rm`, automatic record removal and age-based pruning.
 - **Persistent storage:** named, owner-private volumes with labels, name/label filtering, inspection, listing, safe removal, usage protection, filtered pruning, SHA-256-described gzip-tar export/import, and `--volume NAME:/PATH[:ro|rw]` mounts (requires `--rootfs`). Export archives are atomically published and never overwrite an existing backup. OverlayFS upper/work data can also persist between runs.
 - **Rootfs workflows:** pack/unpack gzip-tar archives, inspect and verify rootfs, deterministic SHA-256 tree digest and directory diff.
 - **Tooling:** host diagnostics, JSON output (including `boxr features --json`), shell completions, cross-platform CLI builds, CI, vulnerability scanning, CodeQL, release checksums and GitHub Pages.
@@ -131,7 +131,7 @@ sudo boxr run \
 
 ### Detached containers
 
-On Linux, `boxr run --detach` (or `-d`) starts a separate Boxr supervisor in a new session. The launching CLI waits until the container's namespace helper has passed cgroup configuration and the startup barrier has been released, then prints the container ID and host PID. The supervisor retains the container lifecycle and captures output in the private state/log directory; use `boxr ps`, `boxr logs --follow`, `boxr stop` and `boxr rm` for normal management.
+On Linux, `boxr run --detach` (or `-d`) starts a separate Boxr supervisor in a new session. The launching CLI waits until the container's namespace helper has passed cgroup configuration and the startup barrier has been released, then prints the container ID and host PID. The supervisor retains the container lifecycle and captures output in the private state/log directory; use `boxr ps`, `boxr logs --follow`, `boxr stop` and `boxr rm` for normal management. If the startup handshake times out, Boxr does not kill an unknown in-flight supervisor: it leaves it discoverable and directs you to inspect `boxr ps --all` and the private launch log.
 
 ```bash
 sudo boxr run -d --name worker -- /usr/bin/sleep 3600
