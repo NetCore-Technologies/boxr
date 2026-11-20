@@ -1109,3 +1109,69 @@ func TestDockerContainerStartRestartsStoppedEngineContainer(t *testing.T) {
 		t.Fatalf("Engine API start arguments = %#v", launchedArgs)
 	}
 }
+
+
+func TestDockerContainerRestartUsesBoundedNativeRestartCommand(t *testing.T) {
+	server := setupEngineAPITest(t)
+	const reference = "registry.example/team/boxr-api-restart:v1"
+	importEngineAPITestImage(t, reference)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1.45/containers/create?name=api-restart", strings.NewReader(`{"Image":"`+reference+`"}`))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created struct {
+		ID string `json:"Id"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	record, err := state.Get(created.ID)
+	if err != nil {
+		t.Fatalf("load created record: %v", err)
+	}
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatalf("model first start: %v", err)
+	}
+	if err := state.RequestStop(record.ID); err != nil {
+		t.Fatalf("model stop request: %v", err)
+	}
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatalf("model stopped workload: %v", err)
+	}
+
+	originalLauncher := launchEngineAPICreatedContainer
+	var launchedExecutable string
+	var launchedArgs []string
+	launchEngineAPICreatedContainer = func(executable string, args []string) (string, string, error) {
+		launchedExecutable = executable
+		launchedArgs = append([]string(nil), args...)
+		return "", "", nil
+	}
+	t.Cleanup(func() { launchEngineAPICreatedContainer = originalLauncher })
+
+	response = engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+record.ID+"/restart?t=5")
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("restart status=%d body=%s", response.Code, response.Body.String())
+	}
+	if launchedExecutable == "" || len(launchedArgs) != 4 ||
+		launchedArgs[0] != "restart" ||
+		launchedArgs[1] != "--time" ||
+		launchedArgs[2] != "5s" ||
+		launchedArgs[3] != record.ID {
+		t.Fatalf("restart command executable=%q args=%#v", launchedExecutable, launchedArgs)
+	}
+
+	for _, target := range []string{
+		"/v1.45/containers/" + record.ID + "/restart?t=301",
+		"/v1.45/containers/" + record.ID + "/restart?t=-2",
+		"/v1.45/containers/" + record.ID + "/restart?t=5&t=10",
+	} {
+		response = engineAPIRequest(server, http.MethodPost, target)
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("%s returned %d, want 400", target, response.Code)
+		}
+	}
+}
