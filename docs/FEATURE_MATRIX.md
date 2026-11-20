@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 681 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 699 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -687,3 +687,21 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 679. bridge mode creates a private network namespace before host-side attachment
 680. container run joins and leaves bridge networks through lifecycle hooks
 681. network metadata rejects duplicate IDs names bridges and invalid allocations
+682. host TCP port mappings support IPv4 host bind addresses and container destination ports
+683. host UDP port mappings support IPv4 host bind addresses and container destination ports
+684. published port protocol defaults to TCP and accepts explicit TCP or UDP
+685. published port bindings validate host and container port ranges from 1 to 65535
+686. published port bindings normalize wildcard IPv4 host address and protocol
+687. wildcard host port mappings conflict with specific address mappings on same port
+688. host port reservations are checked across all managed bridge networks
+689. bridge port mappings install destination NAT rules for inbound traffic
+690. bridge port mappings install host OUTPUT NAT rules for host-originated connections
+691. published port forwarding allows new traffic only to mapped container addresses and ports
+692. published port firewall rules are removed when bridge container exits
+693. partial port mapping firewall setup is rolled back with veth and IPAM state
+694. published port mappings are persisted with network leases in private network metadata
+695. network store validates canonical published port mapping and cross-network reservation uniqueness
+696. run CLI supports repeatable --publish and -p mappings with IPv4 host bind and protocol syntax
+697. run config JSON schema describes strict published port mapping objects
+698. dry-run plans show normalized published port mapping values without starting container
+699. published ports are accepted only with a named managed bridge network
