@@ -212,13 +212,14 @@ func TestJoinAllocatesConfiguresAndLeaveReleasesAddress(t *testing.T) {
 	if address != "172.30.40.2" {
 		t.Fatalf("allocated address = %s, want 172.30.40.2", address)
 	}
-	if len(runner.calls) != 9 {
-		t.Fatalf("join command count = %d, want 9: %v", len(runner.calls), runner.calls)
+	if len(runner.calls) != 10 {
+		t.Fatalf("join command count = %d, want 10: %v", len(runner.calls), runner.calls)
 	}
 	if !strings.Contains(runner.calls[0], "link add vbx") ||
-		!strings.Contains(runner.calls[3], "netns 1234") ||
-		!strings.Contains(runner.calls[4], "nsenter -t 1234 -n -- ip link set dev cbx") ||
-		!strings.Contains(runner.calls[8], "route add default via "+network.Gateway) {
+		!strings.Contains(runner.calls[1], "alias boxr:"+network.ID+":container-01") ||
+		!strings.Contains(runner.calls[4], "netns 1234") ||
+		!strings.Contains(runner.calls[5], "nsenter -t 1234 -n -- ip link set dev cbx") ||
+		!strings.Contains(runner.calls[9], "route add default via "+network.Gateway) {
 		t.Fatalf("unexpected veth/namespace setup sequence: %v", runner.calls)
 	}
 	if _, err := JoinWithRunner(context.Background(), "backend", 1235, "container-01", runner); err == nil {
@@ -325,7 +326,7 @@ func TestJoinPublishesPortsAndLeaveRemovesScopedRules(t *testing.T) {
 	if err := LeaveWithRunner(context.Background(), "frontend", "container-ports", runner); err != nil {
 		t.Fatalf("LeaveWithRunner(): %v", err)
 	}
-	leaveCalls := strings.Join(runner.calls[len(runner.calls)-7:], "\n")
+	leaveCalls := strings.Join(runner.calls[len(runner.calls)-8:], "\n")
 	for _, expected := range []string{
 		"iptables -t nat -D PREROUTING -p tcp -d 127.0.0.1 --dport 8080",
 		"iptables -t nat -D OUTPUT -p tcp -d 127.0.0.1 --dport 8080",
