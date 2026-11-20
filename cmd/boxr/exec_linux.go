@@ -286,6 +286,9 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	}
+	if terminalCleanup != nil {
+		defer terminalCleanup()
+	}
 	_ = releaseReader.Close()
 	_ = environmentReader.Close()
 
@@ -326,10 +329,6 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	_ = releaseWriter.Close()
 
 	waitErr := launcher.Wait()
-	if terminalCleanup != nil {
-		terminalCleanup()
-		_ = terminalMaster.Close()
-	}
 	environmentWriteErr := <-environmentWriteDone
 	if environmentWriteErr != nil && waitErr == nil {
 		fmt.Fprintf(stderr, "boxr exec: transfer container environment: %v\n", environmentWriteErr)
