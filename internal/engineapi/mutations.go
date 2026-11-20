@@ -199,7 +199,7 @@ func dockerPullReference(query url.Values) (remoteReference, localReference, pla
 	if _, present := query["tag"]; present && strings.TrimSpace(tag) == "" {
 		return "", "", "", fmt.Errorf("tag query parameter must not be empty")
 	}
-	remoteReference := fromImage
+	remoteReference = fromImage
 	if tag != "" {
 		lastSlash := strings.LastIndex(remoteReference, "/")
 		lastColon := strings.LastIndex(remoteReference, ":")
