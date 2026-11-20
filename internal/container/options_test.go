@@ -63,7 +63,6 @@ func TestOptionsValidateRootFSRequirements(t *testing.T) {
 		})
 	}
 }
-
 func TestOptionsValidateResourceWeightsAndMountTargets(t *testing.T) {
 	valid := Options{CPUWeight: 10000, IOWeight: 1, PidsLimit: 1, RootFS: "/tmp/rootfs", BindMounts: []BindMount{{Source: "/etc/hosts", Target: "/etc/hosts", ReadOnly: true}}, TmpfsMounts: []TmpfsMount{{Target: "/tmp", SizeBytes: 64 << 20, Mode: 01777}}}
 	if err := valid.Validate(); err != nil {
