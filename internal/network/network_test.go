@@ -670,13 +670,9 @@ func TestStaleAttachmentPruneRemovesOnlyVerifiedBoxrLinks(t *testing.T) {
 	}
 	joined := strings.Join(runner.calls, "\n")
 	for _, expected := range []string{
-		"ip -link -delete", // placeholder checked below using the actual ip command spelling
 		"OUTPUT ip -details -o link show dev vbx",
 		"ip link del dev vbx",
 	} {
-		if expected == "ip -link -delete" {
-			continue
-		}
 		if !strings.Contains(joined, expected) {
 			t.Errorf("stale prune did not perform %q: %s", expected, joined)
 		}
