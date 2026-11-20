@@ -3,8 +3,8 @@ package image
 import (
 	"archive/tar"
 	"bufio"
-	"compress/gzip"
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,9 +26,9 @@ const (
 	maxBuildAddArchiveBytes = int64(8 << 30)
 )
 
-// BuildSpec is a deliberately small, non-executing Boxr build recipe. Only a
-// scratch base and explicit context copies are supported; no shell RUN step is
-// accepted, so building an image never executes arbitrary build instructions.
+// BuildSpec is a bounded Boxr image-build plan. JSON recipes use explicit
+// context copies; Dockerfile plans may include ordered namespace-isolated RUN
+// steps and local ADD archive extraction.
 type BuildSpec struct {
 	Version int                `json:"version"`
 	Base    string             `json:"base"`

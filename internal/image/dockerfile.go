@@ -156,25 +156,26 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 			// Global ARG declarations are used for FROM expansion only.
 			args = make(map[string]string)
 
-		case "COPY":
+		case "COPY", "ADD":
+			instructionName := instruction
 			var words []string
 			if strings.HasPrefix(expanded, "[") {
 				if err := json.Unmarshal([]byte(expanded), &words); err != nil {
-					return fmt.Errorf("line %d: invalid JSON COPY: %w", lineNumber, err)
+					return fmt.Errorf("line %d: invalid JSON %s: %w", lineNumber, instructionName, err)
 				}
 			} else {
 				var err error
 				words, err = dockerfileWords(expanded)
 				if err != nil {
-					return fmt.Errorf("line %d: parse COPY: %w", lineNumber, err)
+					return fmt.Errorf("line %d: parse %s: %w", lineNumber, instructionName, err)
 				}
 			}
 			if len(words) < 2 {
-				return fmt.Errorf("line %d: COPY expects source(s) and a destination", lineNumber)
+				return fmt.Errorf("line %d: %s expects source(s) and a destination", lineNumber, instructionName)
 			}
 			for _, option := range words[:len(words)-1] {
 				if strings.HasPrefix(option, "--") {
-					return fmt.Errorf("line %d: COPY flags such as --from, --chown and --chmod are not supported yet", lineNumber)
+					return fmt.Errorf("line %d: %s flags such as --from, --chown and --chmod are not supported yet", lineNumber, instructionName)
 				}
 			}
 			rawDestination := path.Clean(words[len(words)-1])
@@ -190,10 +191,10 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 				}
 				cleanSource := path.Clean(source)
 				if strings.HasPrefix(cleanSource, "/") || cleanSource == ".." || strings.HasPrefix(cleanSource, "../") {
-					return fmt.Errorf("line %d: COPY source %q must stay inside the build context", lineNumber, source)
+					return fmt.Errorf("line %d: %s source %q must stay inside the build context", lineNumber, instructionName, source)
 				}
 				if strings.ContainsAny(cleanSource, "*?[]") {
-					return fmt.Errorf("line %d: COPY wildcard sources are not supported yet", lineNumber)
+					return fmt.Errorf("line %d: %s wildcard sources are not supported yet", lineNumber, instructionName)
 				}
 				validatedDestination := destination
 				stepDestination := rawDestination
@@ -202,8 +203,12 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 					stepDestination = path.Join(rawDestination, path.Base(cleanSource))
 				}
 				spec.Copy = append(spec.Copy, CopyInstruction{Source: cleanSource, Destination: validatedDestination})
+				stepKind := "copy"
+				if instructionName == "ADD" {
+					stepKind = "add"
+				}
 				spec.dockerfileSteps = append(spec.dockerfileSteps, dockerfileStep{
-					kind: "copy", source: cleanSource, destination: stepDestination,
+					kind: stepKind, source: cleanSource, destination: stepDestination,
 				})
 			}
 
@@ -318,8 +323,6 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 				env:  mergeBuildEnvironment(argEnv, spec.Config.Env),
 				user: currentUser,
 			})
-		case "ADD":
-			return fmt.Errorf("line %d: ADD is not supported yet; use COPY for local context files", lineNumber)
 		case "ONBUILD", "HEALTHCHECK", "EXPOSE", "VOLUME", "STOPSIGNAL", "SHELL":
 			return fmt.Errorf("line %d: Dockerfile instruction %s is not supported yet", lineNumber, instruction)
 		default:
@@ -469,6 +472,11 @@ func dockerfileLabelKey(value string) bool {
 		}
 	}
 	return true
+}
+
+func isRemoteDockerfileSource(value string) bool {
+	lower := strings.ToLower(value)
+	return strings.Contains(lower, "://") || strings.HasPrefix(lower, "git@") || strings.HasPrefix(lower, "git+")
 }
 
 func dockerfileIdentifier(value string) bool {
