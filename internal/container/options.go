@@ -138,6 +138,9 @@ func (o Options) Validate() error {
 	if o.RestartMaxRetries > 0 && policy != "on-failure" {
 		return fmt.Errorf("restart max retries can only be set with on-failure")
 	}
+	if policy == "no" && (o.RestartMaxRetries != 0 || o.RestartDelayMS != 0) {
+		return fmt.Errorf("restart limits require a non-no restart policy")
+	}
 	if o.RestartDelayMS < 0 || o.RestartDelayMS > 300000 || (o.RestartDelayMS > 0 && o.RestartDelayMS < 100) {
 		return fmt.Errorf("restart delay must be 0 (default) or between 100 and 300000 milliseconds")
 	}
