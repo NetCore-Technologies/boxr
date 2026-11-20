@@ -3357,3 +3357,141 @@ func TestCompletionIncludesDockerEngineDaemon(t *testing.T) {
 		t.Fatalf("completion does not include daemon command: %s", stdout.String())
 	}
 }
+
+
+func TestCreateAndStartImageBackedContainer(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	t.Setenv("BOXR_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "os-release"), []byte("NAME=BoxrTest\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	const reference = "local/create-test:latest"
+	if _, err := imageStore.ImportRootFSWithConfig(root, reference, "linux", runtime.GOARCH, "", imageStore.ImageRuntimeConfig{
+		Cmd: []string{"/bin/sh"},
+		Env: []string{"IMAGE_ENV=base"},
+	}); err != nil {
+		t.Fatalf("import test image: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"create", "--name", "created-test", "--env", "APP_ENV=test", reference}, &stdout, &stderr); code != 0 {
+		t.Fatalf("create returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	record, err := state.Get("created-test")
+	if err != nil {
+		t.Fatalf("load created container: %v", err)
+	}
+	defer state.RemoveCreated(record.ID)
+	if record.Status != "created" {
+		t.Fatalf("create started workload; state=%q", record.Status)
+	}
+	if record.Labels["io.boxr.image"] != reference {
+		t.Fatalf("image reference was not recorded: %#v", record.Labels)
+	}
+	if !reflect.DeepEqual(record.Command, []string{"/bin/sh"}) {
+		t.Fatalf("resolved default image command = %#v, want [/bin/sh]", record.Command)
+	}
+	if len(record.Options.Env) != 0 {
+		t.Fatalf("environment values leaked into container record: %#v", record.Options.Env)
+	}
+
+	privateConfig, err := state.ReadEngineConfig(record.ID)
+	if err != nil {
+		t.Fatalf("read private start config: %v", err)
+	}
+	var saved struct {
+		Version  int               `json:"version"`
+		Command  []string          `json:"command"`
+		Options  container.Options `json:"options"`
+		Metadata map[string]string `json:"metadata"`
+	}
+	if err := json.Unmarshal(privateConfig, &saved); err != nil {
+		t.Fatalf("decode private start config: %v", err)
+	}
+	if saved.Version != 1 || !reflect.DeepEqual(saved.Options.Env, []string{"IMAGE_ENV=base", "APP_ENV=test"}) {
+		t.Fatalf("private config lost version or effective environment: %+v", saved)
+	}
+	configPath, err := state.EngineConfigPath(record.ID)
+	if err != nil {
+		t.Fatalf("resolve private config path: %v", err)
+	}
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("stat private config: %v", err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("private config permissions = %04o, want 0600", info.Mode().Perm())
+	}
+
+	originalLauncher := launchCreatedContainer
+	var launchedExecutable string
+	var launchedArgs []string
+	launchCreatedContainer = func(executable string, args []string, childStdout, childStderr io.Writer) error {
+		launchedExecutable = executable
+		launchedArgs = append([]string(nil), args...)
+		return nil
+	}
+	t.Cleanup(func() { launchCreatedContainer = originalLauncher })
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"start", "created-test"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("start returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if launchedExecutable == "" {
+		t.Fatal("start did not invoke the Boxr executable")
+	}
+	wantArgs := []string{"run", "--config", configPath, "--image", reference, "--detach", "--internal-existing-id", record.ID}
+	if !reflect.DeepEqual(launchedArgs, wantArgs) {
+		t.Fatalf("start arguments = %#v, want %#v", launchedArgs, wantArgs)
+	}
+	if !strings.Contains(stdout.String(), "started "+record.ID) {
+		t.Fatalf("start output does not identify the container: %q", stdout.String())
+	}
+}
+
+func TestCreateNormalizesDockerStyleImagePosition(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "flags before image and command after image",
+			args: []string{"--name", "web", "--memory", "128m", "nginx:latest", "nginx", "-g", "daemon off;"},
+			want: []string{"--name", "web", "--memory", "128m", "--image", "nginx:latest", "nginx", "-g", "daemon off;"},
+		},
+		{
+			name: "image after end of options",
+			args: []string{"--name", "web", "--", "nginx:latest", "/bin/sh"},
+			want: []string{"--name", "web", "--image", "nginx:latest", "--", "/bin/sh"},
+		},
+		{
+			name: "explicit image flag is preserved",
+			args: []string{"--image", "nginx:latest", "/bin/sh"},
+			want: []string{"--image", "nginx:latest", "/bin/sh"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := normalizeCreateArguments(test.args); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("normalizeCreateArguments(%#v) = %#v, want %#v", test.args, got, test.want)
+			}
+		})
+	}
+}
+
+func TestTopLevelPullAliasRequiresImageReference(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"pull"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("pull without image reference returned %d, want 2: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Usage: boxr image pull") {
+		t.Fatalf("unexpected pull usage output: %q", stderr.String())
+	}
+}
