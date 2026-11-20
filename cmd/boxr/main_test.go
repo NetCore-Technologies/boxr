@@ -3106,3 +3106,46 @@ func TestContainerNamespaceHelperAliveRejectsTestProcess(t *testing.T) {
 	}
 }
 
+func TestRunDetachCannotBeCombinedWithDryRun(t *testing.T) {
+	for _, args := range [][]string{
+		{"run", "--detach", "--dry-run", "/bin/true"},
+		{"run", "-d", "--dry-run", "/bin/true"},
+	} {
+		var out, errOut bytes.Buffer
+		code := run(args, &out, &errOut)
+		if code != 2 || !strings.Contains(errOut.String(), "--detach cannot be combined with --dry-run") {
+			t.Errorf("run(%v) returned %d: stdout=%q stderr=%q", args, code, out.String(), errOut.String())
+		}
+	}
+}
+
+func TestRunDetachFalseKeepsForegroundDryRun(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"run", "--detach=false", "--dry-run", "/bin/true"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("run --detach=false --dry-run returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	var plan runPlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatalf("decode foreground plan: %v", err)
+	}
+	if !plan.NoContainerStateMade || plan.Command != "/bin/true" {
+		t.Fatalf("foreground dry-run plan = %+v", plan)
+	}
+}
+
+func TestRunDoesNotTreatCommandArgumentAsDetachFlag(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"run", "--dry-run", "--", "/bin/echo", "--detach"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("run command argument --detach returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	var plan runPlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatalf("decode command argument plan: %v", err)
+	}
+	if plan.Command != "/bin/echo" || plan.ArgumentCount != 1 {
+		t.Fatalf("command argument was interpreted as a run option: %+v", plan)
+	}
+}
+
