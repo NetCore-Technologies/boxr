@@ -1509,7 +1509,8 @@ Run options:
   --mount-proc      mount a new proc filesystem inside rootfs
   --mount SRC:DST[:ro|rw] bind mount a host path (repeatable)
   --tmpfs DST[:SIZE[:MODE]] mount a bounded tmpfs (repeatable)
-  --network host|none use host networking or a private network namespace
+  --network host|none|bridge use host, isolated, or managed IPv4 bridge networking
+  --network-name NAME  select a managed bridge when --network bridge
   --userns          map the invoking UID/GID to root in a private user namespace
   --cap-drop NAME   remove a Linux capability, or ALL (repeatable)
   --no-new-privileges block privilege gain through execve
@@ -1529,6 +1530,8 @@ Examples:
   sudo boxr run --image alpine:local --mount-proc --read-only-rootfs -- /bin/sh
   sudo boxr run --rootfs ./rootfs --mount-proc --read-only-rootfs -- /bin/sh
   sudo boxr run --userns --network none --cap-drop NET_RAW --no-new-privileges -- /bin/sh
+  sudo boxr network create --subnet 172.30.10.0/24 app-net
+  sudo boxr run --network bridge --network-name app-net -- /bin/sh
   sudo boxr run --tmpfs /tmp:64m:1777 --rootfs ./rootfs -- /bin/sh
 
 Without --image or --rootfs, the host filesystem remains visible. The default network mode
