@@ -190,7 +190,7 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	config := execHelperConfig{
+	helperConfig := execHelperConfig{
 		RootFS:           record.Options.RootFS != "",
 		Workdir:          workdir,
 		Command:          command,
@@ -204,7 +204,7 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 			helperConfig.Workdir = "/"
 		}
 	}
-	configJSON, err := json.Marshal(config)
+	configJSON, err := json.Marshal(helperConfig)
 	if err != nil {
 		fmt.Fprintf(stderr, "boxr exec: encode helper configuration: %v\n", err)
 		return 1
