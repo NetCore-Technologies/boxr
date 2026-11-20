@@ -1,6 +1,6 @@
 # Docker Engine API compatibility
 
-Boxr includes an initial, intentionally read-only Docker Engine HTTP API for local tooling. Start the daemon:
+Boxr includes an initial, intentionally limited Docker Engine HTTP API for local tooling. It exposes runtime-backed read operations plus a narrow set of safe container lifecycle mutations; unsupported operations fail explicitly. Start the daemon:
 
 ```sh
 boxr daemon
@@ -8,7 +8,7 @@ boxr daemon
 
 By default it listens on `$XDG_RUNTIME_DIR/boxr/engine.sock`, or `~/.cache/boxr/run/engine.sock` when `XDG_RUNTIME_DIR` is unset. Override the path with `--host unix:///absolute/path/engine.sock`. The socket is owner-only (`0600`); the daemon refuses TCP listeners, symlinked socket paths, unsafe socket directories, replacement of regular files, and a second live listener.
 
-A Docker CLI can use that socket for the implemented read operations:
+A Docker CLI can use that socket for the implemented operations shown below; most container lifecycle and image workflows still require native Boxr commands:
 
 ```sh
 export DOCKER_HOST=unix:///absolute/path/engine.sock
@@ -41,4 +41,4 @@ Boxr persists combined stdout/stderr output in one log file; the compatibility e
 
 **This is not a Docker Engine replacement yet.** Container create/start/stop/restart, attach/exec upgrades, archive copy, image pull/push/build, volume/network mutation APIs, Docker plugins, swarm and TCP listeners are not implemented by this API layer. Kill signals and removal of created/stopped containers are implemented; forced removal of running containers and anonymous-volume deletion are explicitly rejected. The CLI's read commands are not evidence of full Docker CLI compatibility. Boxr's native CLI remains available for creating and controlling containers. The server does not expose an unauthenticated TCP endpoint.
 
-The goal of this read API milestone is to provide a secure local control socket and a truthful compatibility boundary. Docker CLI workloads that need mutation operations still require Docker Engine until those endpoints are implemented and tested.
+The goal of this initial API milestone is to provide a secure local control socket and a truthful compatibility boundary. Docker CLI workloads that need mutation operations still require Docker Engine until those endpoints are implemented and tested.
