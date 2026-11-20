@@ -193,6 +193,100 @@ func WaitForReadiness(ctx context.Context, probe *ReadinessProbe) error {
 	return fmt.Errorf("%s readiness probe failed after %d attempt(s): %w", probe.Type(), attempts, lastErr)
 }
 
+const (
+	defaultHealthcheckInterval = 5 * time.Second
+	maxHealthcheckInterval     = 60 * time.Second
+	maxHealthcheckRetries      = 10
+	maxHealthcheckStartPeriod  = 10 * time.Minute
+)
+
+// Healthcheck continuously monitors a service after its startup gates have
+// passed. Probe targets retain the loopback-only restrictions of ReadinessProbe.
+type Healthcheck struct {
+	Probe         ReadinessProbe `json:"probe"`
+	IntervalMS    int            `json:"intervalMs,omitempty"`
+	Retries       int            `json:"retries,omitempty"`
+	StartPeriodMS int            `json:"startPeriodMs,omitempty"`
+}
+
+// Validate checks probe safety and bounds all recurring healthcheck budgets.
+func (h Healthcheck) Validate() error {
+	if err := h.Probe.Validate(); err != nil {
+		return fmt.Errorf("probe: %w", err)
+	}
+	if h.Probe.Attempts > 1 || h.Probe.IntervalMS != 0 {
+		return fmt.Errorf("healthcheck probe must use one attempt; configure recurring intervalMs on healthcheck")
+	}
+	if h.IntervalMS < 0 || h.IntervalMS > int(maxHealthcheckInterval/time.Millisecond) ||
+		(h.IntervalMS > 0 && h.IntervalMS < 10) {
+		return fmt.Errorf("intervalMs must be 0 (default) or between 10 and %d", int(maxHealthcheckInterval/time.Millisecond))
+	}
+	if h.Retries < 0 || h.Retries > maxHealthcheckRetries {
+		return fmt.Errorf("retries must be 0 (default) or between 1 and %d", maxHealthcheckRetries)
+	}
+	if h.StartPeriodMS < 0 || h.StartPeriodMS > int(maxHealthcheckStartPeriod/time.Millisecond) {
+		return fmt.Errorf("startPeriodMs must be 0 or between 0 and %d", int(maxHealthcheckStartPeriod/time.Millisecond))
+	}
+	return nil
+}
+
+// MonitorHealth checks a service immediately (after its optional start period)
+// and then at a fixed interval until the failure threshold is reached or the
+// supervisor cancels the context. A successful check resets consecutive failures.
+func MonitorHealth(ctx context.Context, health *Healthcheck) error {
+	if health == nil {
+		return nil
+	}
+	if err := health.Validate(); err != nil {
+		return err
+	}
+	if health.StartPeriodMS > 0 {
+		timer := time.NewTimer(time.Duration(health.StartPeriodMS) * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	interval := defaultHealthcheckInterval
+	if health.IntervalMS > 0 {
+		interval = time.Duration(health.IntervalMS) * time.Millisecond
+	}
+	retries := health.Retries
+	if retries == 0 {
+		retries = 3
+	}
+	probe := health.Probe
+	probe.Attempts = 1
+	probe.IntervalMS = 0
+	failures := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := WaitForReadiness(ctx, &probe)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			failures++
+			if failures >= retries {
+				return fmt.Errorf("healthcheck failed after %d consecutive failure(s): %w", failures, err)
+			}
+		} else {
+			failures = 0
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 func checkReadinessOnce(parent context.Context, probe *ReadinessProbe, timeout time.Duration, expectedStatus int) error {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
