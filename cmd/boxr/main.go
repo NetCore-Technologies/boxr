@@ -3055,8 +3055,13 @@ func runVolume(args []string, stdout, stderr io.Writer) int {
 		}
 		for _, item := range items {
 			if err := ensureVolumeUnused(item.Path); err != nil {
-				report.InUse = append(report.InUse, volumePruneBlocked{Name: item.Name, Reason: err.Error()})
-				continue
+				var inUse *volumeInUseError
+				if errors.As(err, &inUse) {
+					report.InUse = append(report.InUse, volumePruneBlocked{Name: item.Name, Reason: err.Error()})
+					continue
+				}
+				fmt.Fprintf(stderr, "boxr volume prune: inspect %s: %v\n", item.Name, err)
+				return 1
 			}
 			if *dryRun {
 				report.Candidates = append(report.Candidates, volumePruneCandidate{Name: item.Name, Labels: item.Labels, CreatedAt: item.CreatedAt})
@@ -3118,6 +3123,14 @@ func parseLabels(values []string) (map[string]string, error) {
 	return labels, nil
 }
 
+type volumeInUseError struct {
+	ContainerID string
+}
+
+func (e *volumeInUseError) Error() string {
+	return fmt.Sprintf("volume is mounted by active container %s", e.ContainerID)
+}
+
 func ensureVolumeUnused(path string) error {
 	records, err := state.List(false)
 	if err != nil {
@@ -3126,7 +3139,7 @@ func ensureVolumeUnused(path string) error {
 	for _, record := range records {
 		for _, mount := range record.Options.BindMounts {
 			if mount.Source == path {
-				return fmt.Errorf("volume is mounted by active container %s", record.ID)
+				return &volumeInUseError{ContainerID: record.ID}
 			}
 		}
 	}

@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -103,5 +105,28 @@ func TestVolumePruneRequiresForceOrDryRun(t *testing.T) {
 		if code := run(args, &stdout, &stderr); code != 2 {
 			t.Errorf("run(%v) returned %d, want 2", args, code)
 		}
+	}
+}
+
+
+func TestVolumePruneStopsOnUnreadableContainerState(t *testing.T) {
+	t.Setenv("BOXR_DATA_DIR", t.TempDir())
+	stateDir := t.TempDir()
+	t.Setenv("BOXR_STATE_DIR", stateDir)
+	if err := os.WriteFile(filepath.Join(stateDir, "corrupt.json"), []byte("{not-json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := volume.Create("do-not-remove", nil); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"volume", "prune", "--dry-run"}, &stdout, &stderr); code != 1 {
+		t.Fatalf("volume prune with unreadable state returned %d, want 1: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "decode state record") {
+		t.Fatalf("state error was not surfaced accurately: %q", stderr.String())
+	}
+	if _, err := volume.Get("do-not-remove"); err != nil {
+		t.Fatalf("failed preview unexpectedly removed volume: %v", err)
 	}
 }
