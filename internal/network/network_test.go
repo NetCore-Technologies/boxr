@@ -540,3 +540,39 @@ func TestLeaveKeepsIPAMReservationUntilPublishedRulesAreRemoved(t *testing.T) {
 		t.Fatalf("released port could not be reused after cleanup: %v", err)
 	}
 }
+
+func TestContainerCannotJoinTwoManagedBridgeNetworksAtOnce(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	for _, item := range []struct {
+		name, subnet string
+	}{
+		{name: "frontend", subnet: "172.30.81.0/24"},
+		{name: "backend", subnet: "172.30.82.0/24"},
+	} {
+		if _, err := CreateWithRunner(context.Background(), item.name, CreateOptions{Subnet: item.subnet}, &fakeRunner{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := JoinWithRunner(context.Background(), "frontend", 4101, "container-shared", &fakeRunner{}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{}
+	if _, err := JoinWithRunner(context.Background(), "backend", 4101, "container-shared", runner); err == nil {
+		t.Fatal("container was attached to two bridge networks with colliding eth0/veth identity")
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("second network attempted host mutation before rejecting the container: %v", runner.calls)
+	}
+	frontend, err := Inspect("frontend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err := Inspect("backend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if frontend.ContainerCount != 1 || backend.ContainerCount != 0 {
+		t.Fatalf("unexpected network membership: frontend=%+v backend=%+v", frontend, backend)
+	}
+}
+
