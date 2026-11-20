@@ -24,6 +24,21 @@ func TestLoadValidVersionedConfig(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsRestartPolicyConfiguration(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "restart.json")
+	contents := `{"version":1,"options":{"restartPolicy":"on-failure","restartMaxRetries":4,"restartDelayMs":1500}}`
+	if err := os.WriteFile(file, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(file)
+	if err != nil {
+		t.Fatalf("Load(restart config): %v", err)
+	}
+	if loaded.Options.RestartPolicy != "on-failure" || loaded.Options.RestartMaxRetries != 4 || loaded.Options.RestartDelayMS != 1500 {
+		t.Fatalf("loaded restart options = %+v", loaded.Options)
+	}
+}
+
 func TestLoadAcceptsPublishedPortConfiguration(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "ports.json")
 	contents := `{"version":1,"options":{"networkMode":"bridge","networkName":"frontend","publishedPorts":[{"hostIp":"127.0.0.1","hostPort":8080,"containerPort":80,"protocol":"tcp"},{"hostPort":5353,"containerPort":53,"protocol":"udp"}]}}`
@@ -148,5 +163,10 @@ func TestJSONSchemaIsStrictAndDescribesSecurityProfiles(t *testing.T) {
 	}
 	if _, ok := options.Properties["publishedPorts"]; !ok {
 		t.Fatal("schema does not describe publishedPorts")
+	}
+	for _, name := range []string{"restartPolicy", "restartMaxRetries", "restartDelayMs"} {
+		if _, ok := options.Properties[name]; !ok {
+			t.Errorf("schema does not describe %s", name)
+		}
 	}
 }
