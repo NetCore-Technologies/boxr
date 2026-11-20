@@ -505,15 +505,13 @@ func (s *Server) handleContainerRename(writer http.ResponseWriter, request *http
 		writeError(writer, http.StatusBadRequest, fmt.Errorf("query parameter name is required"))
 		return
 	}
-	record, err := state.Get(query)
-	if err != nil {
-		writeError(writer, http.StatusNotFound, err)
-		return
-	}
-	if _, err := state.Rename(record.ID, newName); err != nil {
-		if strings.Contains(err.Error(), "already in use") {
+	if _, err := state.Rename(query, newName); err != nil {
+		switch {
+		case strings.Contains(err.Error(), "no container matches"):
+			writeError(writer, http.StatusNotFound, err)
+		case strings.Contains(err.Error(), "already in use"):
 			writeError(writer, http.StatusConflict, err)
-		} else {
+		default:
 			writeError(writer, http.StatusBadRequest, err)
 		}
 		return
