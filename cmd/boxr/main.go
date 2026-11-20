@@ -1522,6 +1522,7 @@ Run options:
   --tmpfs DST[:SIZE[:MODE]] mount a bounded tmpfs (repeatable)
   --network host|none|bridge use host, isolated, or managed IPv4 bridge networking
   --network-name NAME  select a managed bridge when --network bridge
+  --publish, -p SPEC  publish [HOST_IP:]HOST_PORT:CONTAINER_PORT[/tcp|udp] (bridge only)
   --userns          map the invoking UID/GID to root in a private user namespace
   --cap-drop NAME   remove a Linux capability, or ALL (repeatable)
   --no-new-privileges block privilege gain through execve
@@ -1542,7 +1543,7 @@ Examples:
   sudo boxr run --rootfs ./rootfs --mount-proc --read-only-rootfs -- /bin/sh
   sudo boxr run --userns --network none --cap-drop NET_RAW --no-new-privileges -- /bin/sh
   sudo boxr network create --subnet 172.30.10.0/24 app-net
-  sudo boxr run --network bridge --network-name app-net -- /bin/sh
+  sudo boxr run --network bridge --network-name app-net --publish 127.0.0.1:8080:80/tcp -- /bin/sh
   sudo boxr run --tmpfs /tmp:64m:1777 --rootfs ./rootfs -- /bin/sh
 
 Without --image or --rootfs, the host filesystem remains visible. The default network mode
@@ -2702,6 +2703,24 @@ var implementedFeatures = []string{
 	"bridge mode creates a private network namespace before host-side attachment",
 	"container run joins and leaves bridge networks through lifecycle hooks",
 	"network metadata rejects duplicate IDs names bridges and invalid allocations",
+	"host TCP port mappings support IPv4 host bind addresses and container destination ports",
+	"host UDP port mappings support IPv4 host bind addresses and container destination ports",
+	"published port protocol defaults to TCP and accepts explicit TCP or UDP",
+	"published port bindings validate host and container port ranges from 1 to 65535",
+	"published port bindings normalize wildcard IPv4 host address and protocol",
+	"wildcard host port mappings conflict with specific address mappings on same port",
+	"host port reservations are checked across all managed bridge networks",
+	"bridge port mappings install destination NAT rules for inbound traffic",
+	"bridge port mappings install host OUTPUT NAT rules for host-originated connections",
+	"published port forwarding allows new traffic only to mapped container addresses and ports",
+	"published port firewall rules are removed when bridge container exits",
+	"partial port mapping firewall setup is rolled back with veth and IPAM state",
+	"published port mappings are persisted with network leases in private network metadata",
+	"network store validates canonical published port mapping and cross-network reservation uniqueness",
+	"run CLI supports repeatable --publish and -p mappings with IPv4 host bind and protocol syntax",
+	"run config JSON schema describes strict published port mapping objects",
+	"dry-run plans show normalized published port mapping values without starting container",
+	"published ports are accepted only with a named managed bridge network",
 }
 
 func printFeatures(stdout io.Writer) {
