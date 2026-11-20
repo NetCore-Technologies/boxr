@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 633 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 639 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -639,3 +639,9 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 631. always-enabled services appear separately from opt-in profiles
 632. services assigned to multiple profiles appear in every matching group
 633. secret-free JSON and text profile inventory output
+634. per-service ordered environment file loading in deployments
+635. deployment environment files override earlier service environment values in declaration order
+636. explicit service environment entries override environment file values
+637. environment file path traversal and duplicate path rejection
+638. deployment environment file count and path length bounds
+639. secret-free environment file metadata in deployment plans
