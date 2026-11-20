@@ -15,9 +15,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
+	"strconv"
 	"time"
 
 	"github.com/manit6752025/boxr/internal/engineapi"
@@ -101,9 +101,9 @@ func defaultDaemonHost() string {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "unix:///tmp/boxr-engine.sock"
+		return "unix://" + filepath.Join(os.TempDir(), "boxr-"+strconv.Itoa(os.Getuid()), "engine.sock")
 	}
-	return "unix://" + filepath.Join(home, ".local", "run", "boxr", "engine.sock")
+	return "unix://" + filepath.Join(home, ".cache", "boxr", "run", "engine.sock")
 }
 
 func parseDaemonHost(value string) (string, error) {
@@ -191,8 +191,15 @@ func ensureDaemonSocketDirectory(path string) error {
 			return fmt.Errorf("socket directory path %s must not contain symlinks or non-directories", current)
 		}
 	}
-	if err := os.Chmod(absolute, 0700); err != nil {
-		return fmt.Errorf("secure socket directory: %w", err)
+	info, err := os.Lstat(absolute)
+	if err != nil {
+		return fmt.Errorf("inspect final socket directory: %w", err)
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || stat.Uid != uint32(os.Getuid()) {
+		return fmt.Errorf("socket directory %s must be owned by the current user", absolute)
+	}
+	if info.Mode().Perm()&0022 != 0 {
+		return fmt.Errorf("socket directory %s must not be group- or world-writable", absolute)
 	}
 	return nil
 }
