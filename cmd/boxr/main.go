@@ -2701,7 +2701,6 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-
 func runDeploy(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "Usage: boxr deploy validate FILE.json | plan [--json] FILE.json | example")
