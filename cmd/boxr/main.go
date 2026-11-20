@@ -3616,7 +3616,8 @@ func stopDeploymentProcesses(processes []*deploymentProcess, exited map[string]d
 			}
 			if state.killed && !now.Before(state.killDeadline) {
 				fmt.Fprintf(stderr, "boxr deploy: service %s did not exit after SIGKILL\n", process.service)
-				return
+				delete(pending, process.service)
+				continue
 			}
 		}
 		if len(pending) == 0 {
