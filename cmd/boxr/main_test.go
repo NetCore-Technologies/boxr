@@ -3353,7 +3353,7 @@ func TestCompletionIncludesDockerAndNativeImageContainerCommands(t *testing.T) {
 	if code := runCompletion([]string{"bash"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("bash completion returned %d: %s", code, stderr.String())
 	}
-	for _, command := range []string{"daemon", "pull", "push", "build", "images", "tag", "rmi", "container", "create", "start", "restart"} {
+	for _, command := range []string{"daemon", "pull", "push", "build", "images", "tag", "rmi", "container", "create", "start", "restart", "rename"} {
 		if !strings.Contains(stdout.String(), command) {
 			t.Errorf("completion does not include %q command: %s", command, stdout.String())
 		}
