@@ -241,6 +241,8 @@ func runContainerCommand(args []string, stdout, stderr io.Writer) int {
 		return runRemove(args[1:], stdout, stderr)
 	case "stats":
 		return runStats(args[1:], stdout, stderr)
+	case "prune":
+		return runContainerPrune(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "boxr container: unknown action %q\n", args[0])
 		return 2
@@ -1074,6 +1076,107 @@ func runRestart(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	return runStart([]string{record.ID}, stdout, stderr)
+}
+
+type containerPruneReport struct {
+	DryRun     bool             `json:"dryRun"`
+	Count      int              `json:"count"`
+	Candidates []pruneCandidate `json:"candidates"`
+	Removed    []string         `json:"removed,omitempty"`
+}
+
+func runContainerPrune(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("container prune", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	dryRun := flags.Bool("dry-run", false, "preview stopped container records without removing them")
+	force := flags.Bool("force", false, "remove every matching stopped container")
+	jsonOutput := flags.Bool("json", false, "write the prune report as JSON")
+	var filters envList
+	flags.Var(&filters, "filter", "filter by name=VALUE, status=VALUE, or label=KEY[=VALUE]")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || *dryRun == *force {
+		fmt.Fprintln(stderr, "Usage: boxr container prune (--dry-run|--force) [--json] [--filter name=VALUE|status=VALUE|label=KEY[=VALUE]]")
+		return 2
+	}
+	records, err := state.List(true)
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr container prune: %v\n", err)
+		return 1
+	}
+	report := containerPruneReport{
+		DryRun: *dryRun, Candidates: make([]pruneCandidate, 0),
+		Removed: make([]string, 0),
+	}
+	for _, record := range records {
+		if record.Status == "running" || record.Status == "restarting" {
+			continue
+		}
+		matched, filterErr := matchesContainerPruneFilters(record, filters)
+		if filterErr != nil {
+			fmt.Fprintf(stderr, "boxr container prune: %v\n", filterErr)
+			return 2
+		}
+		if !matched {
+			continue
+		}
+		candidate := pruneCandidate{ID: record.ID, Name: record.Name, Status: record.Status, CreatedAt: record.CreatedAt}
+		report.Candidates = append(report.Candidates, candidate)
+		if *force {
+			if record.Status == "created" {
+				err = state.RemoveCreated(record.ID)
+			} else {
+				err = state.Remove(record.ID)
+			}
+			if err != nil {
+				fmt.Fprintf(stderr, "boxr container prune: remove %s: %v\n", record.ID, err)
+				return 1
+			}
+			report.Removed = append(report.Removed, record.ID)
+		}
+	}
+	report.Count = len(report.Candidates)
+	if *jsonOutput {
+		return writeJSON(stdout, report, stderr, "boxr container prune")
+	}
+	if *dryRun {
+		fmt.Fprintf(stdout, "would remove %d stopped container record(s)\n", report.Count)
+		for _, item := range report.Candidates {
+			fmt.Fprintf(stdout, "%-12s %-24s %s\n", item.ID, item.Name, item.Status)
+		}
+		return 0
+	}
+	fmt.Fprintf(stdout, "removed %d stopped container record(s)\n", len(report.Removed))
+	return 0
+}
+
+func matchesContainerPruneFilters(record state.Record, filters []string) (bool, error) {
+	for _, raw := range filters {
+		key, value, ok := strings.Cut(raw, "=")
+		if !ok || value == "" {
+			return false, fmt.Errorf("invalid filter %q", raw)
+		}
+		switch key {
+		case "name":
+			if !strings.Contains(record.Name, value) {
+				return false, nil
+			}
+		case "status":
+			if record.Status != value {
+				return false, nil
+			}
+		case "label":
+			labelKey, labelValue, hasValue := strings.Cut(value, "=")
+			stored, exists := record.Labels[labelKey]
+			if !exists || hasValue && stored != labelValue {
+				return false, nil
+			}
+		default:
+			return false, fmt.Errorf("unsupported filter key %q", key)
+		}
+	}
+	return true, nil
 }
 
 func runRename(args []string, stdout, stderr io.Writer) int {
@@ -2040,7 +2143,7 @@ Usage:
   boxr start ID|NAME
   boxr restart [--time 10s] ID|NAME
   boxr rename ID|NAME NEW_NAME
-  boxr container create|run|start|restart|rename|stop|kill|wait|logs|exec|ls|inspect|rm|stats ...
+  boxr container create|run|start|restart|rename|stop|kill|wait|logs|exec|ls|inspect|rm|stats|prune ...
   boxr run [options] [--detach|-d] [--dry-run] COMMAND [ARG...]
   boxr exec [options] CONTAINER COMMAND [ARG...]
   boxr version [--json]
