@@ -341,7 +341,17 @@ sudo boxr run --network bridge --network-name app-net \
 
 Boxr installs per-container DNAT rules for incoming traffic and host-originated connections, plus a forwarding allow rule limited to the allocated container address, protocol and destination port. Host port reservations are checked across all Boxr-managed networks; wildcard binds conflict with a specific address on the same protocol/port. The mapping metadata is stored alongside the IP lease, and its firewall rules are removed when the container leaves the network. If attachment or firewall setup fails, Boxr rolls back the port rules, veth and IP lease. Port publishing currently supports IPv4 TCP and UDP only; it does not reserve the host socket against unrelated host applications, so avoid assigning a port already used by a host service.
 
-Bridge networking currently provides host-local IPv4 connectivity only. It does not yet configure DNS inside containers, support IPv6 or multi-host overlays, or attach networks to already-running containers. The `--no-nat` option only omits Boxr's NAT rules; host routing and firewall policy still govern any other forwarding path. Treat this as an early runtime feature, not a hardened multi-tenant network boundary.
+A running container can also join or leave a managed bridge without restarting, provided it was started in an isolated network namespace with `--network none` and without `--userns`:
+
+```bash
+sudo boxr run --name live-api --network none -- /bin/sh
+sudo boxr network connect --publish 127.0.0.1:8081:80/tcp app-net live-api
+sudo boxr network disconnect app-net live-api
+```
+
+Live attachment verifies that the recorded PID is the Boxr namespace helper before entering its network namespace. A container can be attached to one managed bridge at a time; Boxr rejects host-network and user-namespace containers for this operation. Dynamic attachments and their published ports are automatically detached when the container exits.
+
+Bridge networking currently provides host-local IPv4 connectivity only. It does not yet configure DNS inside containers, support IPv6 or multi-host overlays. The `--no-nat` option only omits Boxr's NAT rules; host routing and firewall policy still govern any other forwarding path. Treat this as an early runtime feature, not a hardened multi-tenant network boundary.
 
 ## Runtime requirements and security limits
 
