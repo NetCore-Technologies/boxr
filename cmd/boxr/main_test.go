@@ -2797,3 +2797,51 @@ func TestStopDeploymentProcessesHonorsIndependentGracePeriods(t *testing.T) {
 	}
 }
 
+func TestRunDryRunSupportsManagedBridgeNetwork(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{
+		"run", "--dry-run", "--network", "bridge", "--network-name", "frontend",
+		"/bin/echo", "bridge-ready",
+	}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("bridge dry-run returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	var plan runPlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatalf("decode bridge dry-run plan: %v", err)
+	}
+	if plan.NetworkMode != "bridge" || plan.NetworkName != "frontend" || !plan.NoContainerStateMade {
+		t.Fatalf("bridge dry-run plan = %+v", plan)
+	}
+}
+
+func TestRunBridgeModeRequiresNetworkNameBeforeExecution(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"run", "--dry-run", "--network", "bridge", "/bin/true"}, &out, &errOut)
+	if code != 2 || !strings.Contains(errOut.String(), "requires --network-name") {
+		t.Fatalf("bridge without network name returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+}
+
+func TestNetworkListCommandReturnsEmptyJSONWithoutHostMutation(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	var out, errOut bytes.Buffer
+	code := run([]string{"network", "ls", "--json"}, &out, &errOut)
+	if code != 0 || strings.TrimSpace(out.String()) != "[]" {
+		t.Fatalf("network ls --json returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	if errOut.Len() != 0 {
+		t.Fatalf("network ls wrote unexpected errors: %s", errOut.String())
+	}
+}
+
+func TestNetworkCommandValidatesUsageAndUnknownActions(t *testing.T) {
+	for _, args := range [][]string{{"network"}, {"network", "create"}, {"network", "inspect"}, {"network", "unknown"}} {
+		var out, errOut bytes.Buffer
+		code := run(args, &out, &errOut)
+		if code != 2 {
+			t.Errorf("run(%v) returned %d, want 2: stdout=%q stderr=%q", args, code, out.String(), errOut.String())
+		}
+	}
+}
+
