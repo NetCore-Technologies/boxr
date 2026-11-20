@@ -60,7 +60,7 @@ func TestLoadRejectsInvalidConfigFiles(t *testing.T) {
 	tests := map[string]string{
 		"unsupported version": `{"version":2,"options":{}}`,
 		"unknown field":       `{"version":1,"options":{"notARealOption":true}}`,
-		"bridge missing name":  `{"version":1,"options":{"networkMode":"bridge"}}`,
+		"bridge missing name": `{"version":1,"options":{"networkMode":"bridge"}}`,
 		"relative rootfs":     `{"version":1,"options":{"rootfs":"rootfs"}}`,
 		"empty command arg":   `{"version":1,"command":[""],"options":{}}`,
 		"trailing json":       `{"version":1,"options":{}} {}`,
