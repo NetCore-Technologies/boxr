@@ -136,9 +136,6 @@ func ParseDockerfile(data []byte) (BuildSpec, error) {
 			}
 			destination = path.Clean(destination)
 			sources := words[:len(words)-1]
-			if len(sources) > 1 && !strings.HasSuffix(words[len(words)-1], "/") {
-				return fmt.Errorf("line %d: multiple COPY sources require a destination ending in /", lineNumber)
-			}
 			for _, source := range sources {
 				cleanSource := path.Clean(source)
 				if strings.HasPrefix(cleanSource, "/") || cleanSource == ".." || strings.HasPrefix(cleanSource, "../") {
@@ -359,11 +356,27 @@ func dockerfileAssignments(words []string, allowLegacy bool) (map[string]string,
 		}
 	}
 	for key := range assignments {
-		if !dockerfileIdentifier(key) {
+		valid := dockerfileIdentifier(key)
+		if !allowLegacy {
+			valid = dockerfileLabelKey(key)
+		}
+		if !valid {
 			return nil, fmt.Errorf("invalid key %q", key)
 		}
 	}
 	return assignments, nil
+}
+
+func dockerfileLabelKey(value string) bool {
+	if value == "" || len(value) > 256 {
+		return false
+	}
+	for _, character := range value {
+		if character == '=' || unicode.IsSpace(character) || unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
 }
 
 func dockerfileIdentifier(value string) bool {

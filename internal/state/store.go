@@ -25,21 +25,21 @@ const maxEventFileBytes = 4 << 20
 var storeMu sync.Mutex
 
 type Record struct {
-	ID         string            `json:"id"`
-	Name       string            `json:"name,omitempty"`
-	PID        int               `json:"pid,omitempty"`
-	Command    []string          `json:"command"`
-	Status     string            `json:"status"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name,omitempty"`
+	PID           int               `json:"pid,omitempty"`
+	Command       []string          `json:"command"`
+	Status        string            `json:"status"`
 	ExitCode      *int              `json:"exitCode,omitempty"`
 	LastExitCode  *int              `json:"lastExitCode,omitempty"`
 	RestartCount  int               `json:"restartCount,omitempty"`
 	StopRequested bool              `json:"stopRequested,omitempty"`
 	Error         string            `json:"error,omitempty"`
-	Labels     map[string]string `json:"labels,omitempty"`
-	Options    container.Options `json:"options"`
-	CreatedAt  time.Time         `json:"createdAt"`
-	StartedAt  *time.Time        `json:"startedAt,omitempty"`
-	FinishedAt *time.Time        `json:"finishedAt,omitempty"`
+	Labels        map[string]string `json:"labels,omitempty"`
+	Options       container.Options `json:"options"`
+	CreatedAt     time.Time         `json:"createdAt"`
+	StartedAt     *time.Time        `json:"startedAt,omitempty"`
+	FinishedAt    *time.Time        `json:"finishedAt,omitempty"`
 }
 
 type Event struct {

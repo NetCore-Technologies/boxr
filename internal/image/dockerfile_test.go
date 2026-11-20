@@ -8,7 +8,7 @@ import (
 )
 
 func TestParseDockerfileSupportedInstructions(t *testing.T) {
-	spec, err := ParseDockerfile([]byte("# syntax=docker/dockerfile:1\nARG APP_ROOT=/opt/demo\nFROM scratch AS runtime\nWORKDIR $APP_ROOT\nCOPY [\"server\", \"config/\", \".\"]\nENV APP_MODE=production GREETING=\"hello world\"\nLABEL org.example.component=api org.example.tier=\"edge service\"\nUSER 1000:1000\nENTRYPOINT [\"/opt/demo/server\"]\nCMD --serve --port 8080\n"))
+	spec, err := ParseDockerfile([]byte("# syntax=docker/dockerfile:1\nARG APP_ROOT=/opt/demo\nFROM scratch AS runtime\nWORKDIR $APP_ROOT\nCOPY [\"server\", \"config/\", \".\"]\nENV APP_MODE=production GREETING=\"hello world\"\nLABEL org.example.component=api org.example.tier=\"edge service\"\nUSER 1000:1000\nENTRYPOINT [\"/opt/demo/server\"]\nCMD echo --serve --port 8080\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestParseDockerfileSupportedInstructions(t *testing.T) {
 	if strings.Join(spec.Config.Entrypoint, " ") != "/opt/demo/server" {
 		t.Errorf("Entrypoint = %#v", spec.Config.Entrypoint)
 	}
-	if strings.Join(spec.Config.Cmd, " ") != "/bin/sh -c --serve --port 8080" {
+	if strings.Join(spec.Config.Cmd, " ") != "/bin/sh -c echo --serve --port 8080" {
 		t.Errorf("Cmd = %#v", spec.Config.Cmd)
 	}
 }

@@ -67,16 +67,16 @@ type CreateOptions struct {
 // StaleAttachment is a managed network lease whose container is not in the
 // caller's verified set of live Boxr namespace helpers.
 type StaleAttachment struct {
-	Network      string        `json:"network"`
-	ContainerID  string        `json:"containerId"`
-	Address      string        `json:"address"`
+	Network        string        `json:"network"`
+	ContainerID    string        `json:"containerId"`
+	Address        string        `json:"address"`
 	PublishedPorts []PortMapping `json:"publishedPorts,omitempty"`
 }
 
 // PruneReport counts verified stale bridge attachments removed from the host.
 type PruneReport struct {
-	AttachmentsRemoved int `json:"attachmentsRemoved"`
-	AddressesReleased  int `json:"addressesReleased"`
+	AttachmentsRemoved    int `json:"attachmentsRemoved"`
+	AddressesReleased     int `json:"addressesReleased"`
 	PublishedPortsRemoved int `json:"publishedPortsRemoved"`
 }
 
@@ -919,7 +919,7 @@ func StaleAttachments(liveContainerIDs map[string]struct{}) ([]StaleAttachment, 
 		for _, containerID := range containerIDs {
 			result = append(result, StaleAttachment{
 				Network: network.Name, ContainerID: containerID,
-				Address: network.Allocations[containerID],
+				Address:        network.Allocations[containerID],
 				PublishedPorts: append([]PortMapping(nil), network.Published[containerID]...),
 			})
 		}

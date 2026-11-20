@@ -3296,5 +3296,3 @@ func TestRunKillTermCancelsContainerPendingRestart(t *testing.T) {
 		t.Fatalf("kill did not cancel restart: record=%+v stdout=%q", cancelled, out.String())
 	}
 }
-
-

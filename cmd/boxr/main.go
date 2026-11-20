@@ -43,10 +43,10 @@ var (
 // These hooks keep live namespace connection testable without requiring
 // privileged iproute2 and firewall access in the CLI unit-test suite.
 var (
-	joinExistingContainerNetwork = boxrnetwork.Join
-	leaveExistingContainerNetwork = boxrnetwork.Leave
+	joinExistingContainerNetwork   = boxrnetwork.Join
+	leaveExistingContainerNetwork  = boxrnetwork.Leave
 	pruneManagedNetworkAttachments = boxrnetwork.PruneStale
-	verifyContainerNamespacePID = verifyContainerRuntimePID
+	verifyContainerNamespacePID    = verifyContainerRuntimePID
 )
 
 var (
@@ -2963,6 +2963,8 @@ var implementedFeatures = []string{
 	"Dockerfile USER and shell or exec CMD and ENTRYPOINT metadata are preserved",
 	"Dockerfile builds apply bounded .dockerignore exclusions without mutating the context",
 	"Dockerfile RUN ADD multi-stage builds and unsupported flags fail explicitly",
+	"Dockerfile LABEL accepts dotted and namespaced metadata keys",
+	"Dockerfile COPY supports multiple local sources with inferred destination directories",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -5041,7 +5043,7 @@ func runDetachedContainer(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "use 'boxr logs %s' to follow container output\n", fields[1])
 			return 0
 		}
-		_, _ = command.Wait()
+		_ = command.Wait()
 		fields = strings.Fields(received.line)
 		if len(fields) == 2 && fields[0] == "ERROR" {
 			if code, err := strconv.Atoi(fields[1]); err == nil && code != 0 {

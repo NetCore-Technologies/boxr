@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 769 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 771 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -775,3 +775,5 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 767. Dockerfile USER and shell or exec CMD and ENTRYPOINT metadata are preserved
 768. Dockerfile builds apply bounded .dockerignore exclusions without mutating the context
 769. Dockerfile RUN ADD multi-stage builds and unsupported flags fail explicitly
+770. Dockerfile LABEL accepts dotted and namespaced metadata keys
+771. Dockerfile COPY supports multiple local sources with inferred destination directories

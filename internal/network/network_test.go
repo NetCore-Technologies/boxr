@@ -749,4 +749,3 @@ func TestLeaveRefusesVethWithMismatchedOwnershipAlias(t *testing.T) {
 		t.Fatalf("ownership mismatch released allocation: %+v", summary)
 	}
 }
-

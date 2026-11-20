@@ -412,10 +412,10 @@ func TestOptionsValidateRestartPoliciesAndBudgets(t *testing.T) {
 		}
 	}
 	invalid := map[string]Options{
-		"unknown policy":          {RestartPolicy: "sometimes"},
-		"negative retries":        {RestartPolicy: "on-failure", RestartMaxRetries: -1},
-		"too many retries":        {RestartPolicy: "on-failure", RestartMaxRetries: 1001},
-		"retries with always":     {RestartPolicy: "always", RestartMaxRetries: 1},
+		"unknown policy":         {RestartPolicy: "sometimes"},
+		"negative retries":       {RestartPolicy: "on-failure", RestartMaxRetries: -1},
+		"too many retries":       {RestartPolicy: "on-failure", RestartMaxRetries: 1001},
+		"retries with always":    {RestartPolicy: "always", RestartMaxRetries: 1},
 		"delay below minimum":    {RestartPolicy: "always", RestartDelayMS: 99},
 		"delay above maximum":    {RestartPolicy: "always", RestartDelayMS: 300001},
 		"delay without policy":   {RestartPolicy: "no", RestartDelayMS: 1000},
@@ -429,4 +429,3 @@ func TestOptionsValidateRestartPoliciesAndBudgets(t *testing.T) {
 		})
 	}
 }
-

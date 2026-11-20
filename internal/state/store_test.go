@@ -373,4 +373,3 @@ func TestRemoveRefusesContainerDuringRestartBackoff(t *testing.T) {
 		t.Fatalf("Remove() after restart cancellation: %v", err)
 	}
 }
-
