@@ -131,11 +131,18 @@ func Start(id string, pid int) error {
 	// process identity was introduced while protecting newly launched containers.
 	startTicks, _ := processStartTicks(pid)
 	return update(id, func(record *Record) error {
-		if record.Status != "created" && record.Status != "restarting" {
+		manualRestart := record.Status == "exited" || record.Status == "failed"
+		if record.Status != "created" && record.Status != "restarting" && !manualRestart {
 			return fmt.Errorf("cannot start container in %q state", record.Status)
 		}
-		if record.StopRequested {
+		if record.StopRequested && !manualRestart {
 			return fmt.Errorf("container %s has a pending stop request", record.ID)
+		}
+		if manualRestart {
+			// An explicit user start acknowledges the previous stop request.
+			// This must not affect the automatic restart path, which only
+			// enters from the dedicated "restarting" state.
+			record.StopRequested = false
 		}
 		now := time.Now().UTC()
 		record.Status, record.PID, record.StartedAt = "running", pid, &now
