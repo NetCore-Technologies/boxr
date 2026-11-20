@@ -2802,7 +2802,7 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 		}
 		file, err := deploy.Load(flags.Arg(0))
 		if err != nil {
-			fmt.Fprintf(stderr, "boxr deploy profiles: %v\\n", err)
+			fmt.Fprintf(stderr, "boxr deploy profiles: %v\n", err)
 			return 1
 		}
 		inventory := deploy.ListProfiles(file)
@@ -2811,7 +2811,7 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 			selected = append(selected, profile.Name)
 		}
 		if _, err := deploy.BuildPlanWithProfiles(file, selected); err != nil {
-			fmt.Fprintf(stderr, "boxr deploy profiles: %v\\n", err)
+			fmt.Fprintf(stderr, "boxr deploy profiles: %v\n", err)
 			return 1
 		}
 		if *jsonOutput {
@@ -2825,12 +2825,12 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintln(stdout, service)
 			}
 		}
-		fmt.Fprintln(stdout, "\\nSERVICE PROFILES")
+		fmt.Fprintln(stdout, "\nSERVICE PROFILES")
 		if len(inventory.Profiles) == 0 {
 			fmt.Fprintln(stdout, "No service profiles are defined.")
 		} else {
 			for _, profile := range inventory.Profiles {
-				fmt.Fprintf(stdout, "%s\\t%s\\n", profile.Name, strings.Join(profile.Services, ", "))
+				fmt.Fprintf(stdout, "%s\t%s\n", profile.Name, strings.Join(profile.Services, ", "))
 			}
 		}
 		return 0
