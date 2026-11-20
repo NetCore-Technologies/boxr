@@ -377,8 +377,8 @@ func buildPlan(file File) (Plan, error) {
 		if len(service.Volumes) > 32 {
 			return plan, fmt.Errorf("service %q has more than 32 named volume mounts", name)
 		}
-		if len(service.Volumes) > 0 && service.Options.RootFS == "" {
-			return plan, fmt.Errorf("service %q must configure a rootfs to mount named volumes", name)
+		if len(service.Volumes) > 0 && service.Options.RootFS == "" && service.Image == "" {
+			return plan, fmt.Errorf("service %q must configure a rootfs or image to mount named volumes", name)
 		}
 		volumeTargets := make(map[string]string, len(service.Options.BindMounts)+len(service.Options.TmpfsMounts)+len(service.Volumes))
 		for _, mount := range service.Options.BindMounts {
@@ -409,7 +409,13 @@ func buildPlan(file File) (Plan, error) {
 			}
 			volumeTargets[target] = "named volume"
 		}
-		if err := service.Options.Validate(); err != nil {
+		validationOptions := service.Options
+		if service.Image != "" && validationOptions.RootFS == "" {
+			// Image services receive their private unpacked rootfs immediately
+			// before boxr run validates the final mount configuration.
+			validationOptions.RootFS = "/boxr-image-rootfs-validation"
+		}
+		if err := validationOptions.Validate(); err != nil {
 			return plan, fmt.Errorf("service %q has invalid container options: %w", name, err)
 		}
 		readinessType := ""
