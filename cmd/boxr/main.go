@@ -192,11 +192,51 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runStart(args[1:], stdout, stderr)
 	case "restart":
 		return runRestart(args[1:], stdout, stderr)
+	case "container":
+		return runContainerCommand(args[1:], stdout, stderr)
 	case "exec":
 		return runExec(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "boxr: unknown command %q\n\n", args[0])
 		printUsage(stderr)
+		return 2
+	}
+}
+
+func runContainerCommand(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "Usage: boxr container create|run|start|restart|stop|kill|wait|logs|exec|ls|ps|inspect|rm|stats ...")
+		return 2
+	}
+	switch args[0] {
+	case "create":
+		return runCreate(args[1:], stdout, stderr)
+	case "run":
+		return runContainer(args[1:], stdout, stderr)
+	case "start":
+		return runStart(args[1:], stdout, stderr)
+	case "restart":
+		return runRestart(args[1:], stdout, stderr)
+	case "stop":
+		return runStop(args[1:], stdout, stderr)
+	case "kill":
+		return runKill(args[1:], stdout, stderr)
+	case "wait":
+		return runWait(args[1:], stdout, stderr)
+	case "logs":
+		return runLogs(args[1:], stdout, stderr)
+	case "exec":
+		return runExec(args[1:], stdout, stderr)
+	case "ls", "list", "ps":
+		return runPS(args[1:], stdout, stderr)
+	case "inspect":
+		return runInspect(args[1:], stdout, stderr)
+	case "rm", "remove":
+		return runRemove(args[1:], stdout, stderr)
+	case "stats":
+		return runStats(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "boxr container: unknown action %q\n", args[0])
 		return 2
 	}
 }
@@ -1896,6 +1936,7 @@ Usage:
   boxr create [options] IMAGE [COMMAND [ARG...]]
   boxr start ID|NAME
   boxr restart [--time 10s] ID|NAME
+  boxr container create|run|start|restart|stop|kill|wait|logs|exec|ls|inspect|rm|stats ...
   boxr run [options] [--detach|-d] [--dry-run] COMMAND [ARG...]
   boxr exec [options] CONTAINER COMMAND [ARG...]
   boxr version [--json]
@@ -3370,6 +3411,7 @@ var implementedFeatures = []string{
 	"top-level images command lists the verified local image store using Docker-style output flags",
 	"top-level tag command creates local image aliases without copying content-addressed blobs",
 	"top-level rmi command removes unused local image tags while preserving shared content-addressed blobs",
+	"container namespace exposes Docker-style lifecycle subcommands through the native verified Boxr operations",
 	"native create command records a verified image-backed container without starting it",
 	"native start command launches a created image-backed container through the detached supervisor",
 	"native start command restarts stopped image-backed containers through the detached supervisor",
@@ -3426,7 +3468,7 @@ func runCompletion(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Usage: boxr completion bash|zsh|fish|powershell")
 		return 2
 	}
-	commands := "daemon pull push build images tag rmi create start restart run exec ps inspect stop kill wait logs network volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
+	commands := "daemon pull push build images tag rmi container create start restart run exec ps inspect stop kill wait logs network volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
 	switch args[0] {
 	case "bash":
 		fmt.Fprintf(stdout, `_boxr_complete() { COMPREPLY=($(compgen -W "%s" -- "${COMP_WORDS[COMP_CWORD]}")); }
