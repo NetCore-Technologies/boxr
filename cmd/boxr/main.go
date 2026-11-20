@@ -2605,6 +2605,11 @@ var implementedFeatures = []string{
 	"unknown deployment profiles are rejected",
 	"profile-filtered dependency graphs reject inactive dependencies",
 	"deployment image prefetch and startup are limited to selected profiles",
+	"deterministic service profile inventory",
+	"profile inventory groups services by opt-in profile",
+	"always-enabled services appear separately from opt-in profiles",
+	"services assigned to multiple profiles appear in every matching group",
+	"secret-free JSON and text profile inventory output",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -2773,7 +2778,7 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 
 func runDeploy(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "Usage: boxr deploy validate [--profile NAME] FILE.json | plan [--profile NAME] [--json] FILE.json | pull [--profile NAME] [--platform ...] [--authfile PATH] FILE.json | up [--profile NAME] [--dry-run] FILE.json | ps [--json] STACK | logs [--tail N] [--follow] STACK [SERVICE] | wait [--condition running|stopped] STACK | down [--time 10s] [--remove] STACK | example")
+		fmt.Fprintln(stderr, "Usage: boxr deploy validate [--profile NAME] FILE.json | plan [--profile NAME] [--json] FILE.json | pull [--profile NAME] [--platform ...] [--authfile PATH] FILE.json | up [--profile NAME] [--dry-run] FILE.json | ps [--json] STACK | logs [--tail N] [--follow] STACK [SERVICE] | wait [--condition running|stopped] STACK | down [--time 10s] [--remove] STACK | profiles [--json] FILE.json | example")
 		return 2
 	}
 	switch args[0] {
@@ -2783,6 +2788,51 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		fmt.Fprint(stdout, deploy.Example())
+		return 0
+	case "profiles":
+		flags := flag.NewFlagSet("deploy profiles", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		jsonOutput := flags.Bool("json", false, "write profile inventory as JSON")
+		if err := flags.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if flags.NArg() != 1 {
+			fmt.Fprintln(stderr, "Usage: boxr deploy profiles [--json] FILE.json")
+			return 2
+		}
+		file, err := deploy.Load(flags.Arg(0))
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr deploy profiles: %v\\n", err)
+			return 1
+		}
+		inventory := deploy.ListProfiles(file)
+		selected := make([]string, 0, len(inventory.Profiles))
+		for _, profile := range inventory.Profiles {
+			selected = append(selected, profile.Name)
+		}
+		if _, err := deploy.BuildPlanWithProfiles(file, selected); err != nil {
+			fmt.Fprintf(stderr, "boxr deploy profiles: %v\\n", err)
+			return 1
+		}
+		if *jsonOutput {
+			return writeJSON(stdout, inventory, stderr, "boxr deploy profiles")
+		}
+		fmt.Fprintln(stdout, "DEFAULT SERVICES")
+		if len(inventory.DefaultServices) == 0 {
+			fmt.Fprintln(stdout, "(none)")
+		} else {
+			for _, service := range inventory.DefaultServices {
+				fmt.Fprintln(stdout, service)
+			}
+		}
+		fmt.Fprintln(stdout, "\\nSERVICE PROFILES")
+		if len(inventory.Profiles) == 0 {
+			fmt.Fprintln(stdout, "No service profiles are defined.")
+		} else {
+			for _, profile := range inventory.Profiles {
+				fmt.Fprintf(stdout, "%s\\t%s\\n", profile.Name, strings.Join(profile.Services, ", "))
+			}
+		}
 		return 0
 	case "validate", "plan":
 		action := args[0]
