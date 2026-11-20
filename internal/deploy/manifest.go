@@ -28,6 +28,7 @@ const (
 	StackLabel       = "io.boxr.deployment"
 	ServiceLabel     = "io.boxr.service"
 	OrderLabel       = "io.boxr.deployment-order"
+	StopTimeoutLabel = "io.boxr.deployment-stop-timeout-ms"
 )
 
 var (
@@ -61,6 +62,7 @@ type Service struct {
 	Profiles  []string          `json:"profiles,omitempty"`
 	EnvFiles      []string          `json:"envFiles,omitempty"`
 	StartTimeoutMS int               `json:"startTimeoutMs,omitempty"`
+	StopTimeoutMS  int               `json:"stopTimeoutMs,omitempty"`
 	Readiness     *ReadinessProbe   `json:"readiness,omitempty"`
 }
 
@@ -86,6 +88,7 @@ type ServicePlan struct {
 	EnvironmentEntryCount int           `json:"environmentEntryCount"`
 	EnvironmentFileCount  int           `json:"environmentFileCount"`
 	StartTimeoutMS        int           `json:"startTimeoutMs,omitempty"`
+	StopTimeoutMS         int           `json:"stopTimeoutMs,omitempty"`
 	LabelCount            int           `json:"labelCount"`
 }
 
@@ -305,6 +308,9 @@ func buildPlan(file File) (Plan, error) {
 		if service.StartTimeoutMS < 0 || service.StartTimeoutMS > 600000 || (service.StartTimeoutMS > 0 && service.StartTimeoutMS < 10) {
 			return plan, fmt.Errorf("service %q startTimeoutMs must be 0 (default) or between 10 and 600000", name)
 		}
+		if service.StopTimeoutMS < 0 || service.StopTimeoutMS > 600000 || (service.StopTimeoutMS > 0 && service.StopTimeoutMS < 10) {
+			return plan, fmt.Errorf("service %q stopTimeoutMs must be 0 (default) or between 10 and 600000", name)
+		}
 		if len(service.EnvFiles) > 16 {
 			return plan, fmt.Errorf("service %q has more than 16 environment files", name)
 		}
@@ -337,7 +343,7 @@ func buildPlan(file File) (Plan, error) {
 			}
 		}
 		for key := range service.Options.Labels {
-			if key == StackLabel || key == ServiceLabel || key == OrderLabel {
+			if key == StackLabel || key == ServiceLabel || key == OrderLabel || key == StopTimeoutLabel {
 				return plan, fmt.Errorf("service %q uses reserved Boxr deployment label %q", name, key)
 			}
 		}
@@ -444,6 +450,7 @@ func buildPlan(file File) (Plan, error) {
 			EnvironmentEntryCount: len(service.Options.Env),
 			EnvironmentFileCount:  len(service.EnvFiles),
 			StartTimeoutMS:        service.StartTimeoutMS,
+			StopTimeoutMS:         service.StopTimeoutMS,
 			LabelCount:            len(service.Options.Labels),
 		}
 	}
