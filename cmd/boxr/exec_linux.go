@@ -262,11 +262,10 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	launcherArgs = append(launcherArgs, nsenterArgs[1:]...)
 	launcher := exec.Command(executable, launcherArgs...)
 	launcher.ExtraFiles = extraFiles
-	var terminalMaster *os.File
 	var terminalCleanup func()
 	if tty {
 		var terminalErr error
-		terminalMaster, terminalCleanup, terminalErr = startExecTerminal(launcher, stdout)
+		_, terminalCleanup, terminalErr = startExecTerminal(launcher, stdout)
 		if terminalErr != nil {
 			fmt.Fprintf(stderr, "boxr exec: allocate terminal: %v\n", terminalErr)
 			_ = releaseReader.Close()
