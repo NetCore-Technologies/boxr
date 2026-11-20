@@ -157,12 +157,11 @@ func TestLoadComposeRejectsSemanticsBoxrCannotRepresent(t *testing.T) {
 	}
 }
 
-
 func TestLoadComposeValidatesCapabilityDrops(t *testing.T) {
 	tests := map[string]string{
-		"non-list": "NET_RAW",
+		"non-list":           "NET_RAW",
 		"unknown capability": "[NOT_A_LINUX_CAPABILITY]",
-		"empty capability": "[NET_RAW, '']",
+		"empty capability":   "[NET_RAW, '']",
 	}
 	for name, value := range tests {
 		t.Run(name, func(t *testing.T) {

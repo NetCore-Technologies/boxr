@@ -279,12 +279,12 @@ func convertComposeService(name string, source composeService, networkNames map[
 		return result, err
 	}
 	options := container.Options{
-		NetworkMode:    networkMode,
-		NetworkName:    networkName,
-		PublishedPorts: ports,
-		Workdir:        source.WorkingDir,
-		Hostname:       source.Hostname,
-		Env:            environment,
+		NetworkMode:      networkMode,
+		NetworkName:      networkName,
+		PublishedPorts:   ports,
+		Workdir:          source.WorkingDir,
+		Hostname:         source.Hostname,
+		Env:              environment,
 		Labels:           labels,
 		BindMounts:       bindMounts,
 		ReadOnlyRootFS:   source.ReadOnly,

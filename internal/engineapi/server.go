@@ -271,7 +271,7 @@ func (s *Server) handleContainers(writer http.ResponseWriter, request *http.Requ
 			"ImageID": imageID, "Command": command, "Created": record.CreatedAt.Unix(),
 			"Ports": portsForOptions(record.Options), "Labels": record.Labels,
 			"State": containerState(record), "Status": containerStatus(record),
-			"HostConfig": map[string]any{"NetworkMode": dockerNetworkMode(record.Options)},
+			"HostConfig":      map[string]any{"NetworkMode": dockerNetworkMode(record.Options)},
 			"NetworkSettings": map[string]any{"Networks": map[string]any{}},
 		}
 		result = append(result, item)
@@ -454,7 +454,7 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 		"NetworkMode": dockerNetworkMode(record.Options), "Memory": record.Options.MemoryLimitBytes,
 		"NanoCpus": int64(record.Options.CPUs * 1e9), "PidsLimit": record.Options.PidsLimit,
 		"RestartPolicy": map[string]any{"Name": dockerRestartPolicy(record.Options.RestartPolicy), "MaximumRetryCount": record.Options.RestartMaxRetries},
-		"PortBindings": dockerPortBindings(record.Options), "Binds": dockerBinds(record.Options),
+		"PortBindings":  dockerPortBindings(record.Options), "Binds": dockerBinds(record.Options),
 		"Privileged": false, "ReadonlyRootfs": record.Options.ReadOnlyRootFS,
 	}
 	networkSettings := map[string]any{
@@ -671,22 +671,22 @@ func dockerStatsSnapshot(record state.Record) (map[string]any, error) {
 		memoryLimit = value
 	}
 	cpuUsage := map[string]any{
-		"total_usage": stats.CPUUsageUsec * 1000,
+		"total_usage":         stats.CPUUsageUsec * 1000,
 		"usage_in_kernelmode": stats.CPUSystemUsec * 1000,
-		"usage_in_usermode": stats.CPUUserUsec * 1000,
+		"usage_in_usermode":   stats.CPUUserUsec * 1000,
 	}
 	return map[string]any{
-		"read": time.Now().UTC().Format(time.RFC3339Nano),
-		"preread": "",
-		"pids_stats": map[string]any{"current": stats.PIDsCurrent, "limit": record.Options.PidsLimit},
+		"read":        time.Now().UTC().Format(time.RFC3339Nano),
+		"preread":     "",
+		"pids_stats":  map[string]any{"current": stats.PIDsCurrent, "limit": record.Options.PidsLimit},
 		"memory_stats": map[string]any{"usage": stats.MemoryCurrent, "limit": memoryLimit, "stats": map[string]int64{}},
-		"cpu_stats": map[string]any{
+		"cpu_stats":   map[string]any{
 			"cpu_usage": cpuUsage, "system_cpu_usage": 0, "online_cpus": runtime.NumCPU(),
 		},
 		"precpu_stats": map[string]any{"cpu_usage": cpuUsage, "system_cpu_usage": 0, "online_cpus": runtime.NumCPU()},
 		"blkio_stats": map[string]any{"io_service_bytes_recursive": []any{}},
-		"networks": map[string]any{},
-		"name": displayName(record), "id": record.ID,
+		"networks":    map[string]any{},
+		"name":        displayName(record), "id": record.ID,
 	}, nil
 }
 
@@ -862,4 +862,3 @@ func write(writer http.ResponseWriter, status int, contentType string, data []by
 		_, _ = writer.Write(data)
 	}
 }
-
