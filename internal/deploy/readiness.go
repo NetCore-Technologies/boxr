@@ -53,6 +53,9 @@ func (p ReadinessProbe) Validate() error {
 		return fmt.Errorf("exactly one of tcpAddress or httpUrl must be set")
 	}
 	if tcpAddress != "" {
+		if p.ExpectedStatus != 0 {
+			return fmt.Errorf("expectedStatus can only be used with an HTTP probe")
+		}
 		if tcpAddress != p.TCPAddress {
 			return fmt.Errorf("tcpAddress must not contain surrounding whitespace")
 		}
