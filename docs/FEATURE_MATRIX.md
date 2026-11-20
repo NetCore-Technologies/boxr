@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 837 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 838 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -843,3 +843,4 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 835. Engine API inspects verified local OCI images using Docker-compatible image metadata and uncompressed layer DiffIDs
 836. Engine API removes unused local image tags and rejects removal while containers reference them
 837. Engine API pulls and verifies OCI/Docker registry images using Docker X-Registry-Auth and Linux platform selection
+838. Engine API pushes verified local single-layer OCI images using Docker X-Registry-Auth and registry upload verification
