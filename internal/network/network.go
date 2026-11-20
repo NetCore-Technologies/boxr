@@ -64,6 +64,22 @@ type CreateOptions struct {
 	NAT     bool
 }
 
+// StaleAttachment is a managed network lease whose container is not in the
+// caller's verified set of live Boxr namespace helpers.
+type StaleAttachment struct {
+	Network      string        `json:"network"`
+	ContainerID  string        `json:"containerId"`
+	Address      string        `json:"address"`
+	PublishedPorts []PortMapping `json:"publishedPorts,omitempty"`
+}
+
+// PruneReport counts verified stale bridge attachments removed from the host.
+type PruneReport struct {
+	AttachmentsRemoved int `json:"attachmentsRemoved"`
+	AddressesReleased  int `json:"addressesReleased"`
+	PublishedPortsRemoved int `json:"publishedPortsRemoved"`
+}
+
 // Summary is safe for CLI output; it omits per-container allocation identities.
 type Summary struct {
 	ID             string    `json:"id"`
@@ -877,6 +893,87 @@ func leaveFromStore(ctx context.Context, runner Runner, current *store, dir stri
 	delete(network.Allocations, containerID)
 	delete(network.Published, containerID)
 	return saveStore(dir, *current)
+}
+
+// StaleAttachments returns network leases whose container IDs are absent from
+// the supplied live set. It does not mutate network state or host interfaces.
+func StaleAttachments(liveContainerIDs map[string]struct{}) ([]StaleAttachment, error) {
+	unlock, err := lockStore()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	current, _, err := loadStore()
+	if err != nil {
+		return nil, err
+	}
+	var result []StaleAttachment
+	for _, network := range current.Networks {
+		containerIDs := make([]string, 0, len(network.Allocations))
+		for containerID := range network.Allocations {
+			if _, live := liveContainerIDs[containerID]; !live {
+				containerIDs = append(containerIDs, containerID)
+			}
+		}
+		sort.Strings(containerIDs)
+		for _, containerID := range containerIDs {
+			result = append(result, StaleAttachment{
+				Network: network.Name, ContainerID: containerID,
+				Address: network.Allocations[containerID],
+				PublishedPorts: append([]PortMapping(nil), network.Published[containerID]...),
+			})
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Network != result[j].Network {
+			return result[i].Network < result[j].Network
+		}
+		return result[i].ContainerID < result[j].ContainerID
+	})
+	return result, nil
+}
+
+// PruneStaleWithRunner disconnects stale leases only after proving that any
+// remaining host veth carries the Boxr ownership alias for that network/ID.
+// A foreign or unmarked interface is left untouched and its lease is retained.
+func PruneStaleWithRunner(ctx context.Context, liveContainerIDs map[string]struct{}, runner Runner) (PruneReport, error) {
+	var report PruneReport
+	if runner == nil {
+		return report, fmt.Errorf("network command runner is required")
+	}
+	unlock, err := lockStore()
+	if err != nil {
+		return report, err
+	}
+	defer unlock()
+	current, dir, err := loadStore()
+	if err != nil {
+		return report, err
+	}
+	var failures []string
+	for index := range current.Networks {
+		containerIDs := make([]string, 0, len(current.Networks[index].Allocations))
+		for containerID := range current.Networks[index].Allocations {
+			if _, live := liveContainerIDs[containerID]; !live {
+				containerIDs = append(containerIDs, containerID)
+			}
+		}
+		sort.Strings(containerIDs)
+		for _, containerID := range containerIDs {
+			ports := len(current.Networks[index].Published[containerID])
+			if err := leaveFromStore(ctx, runner, &current, dir, index, containerID); err != nil {
+				failures = append(failures, fmt.Sprintf("%s/%s: %v", current.Networks[index].Name, containerID, err))
+				continue
+			}
+			report.AttachmentsRemoved++
+			report.AddressesReleased++
+			report.PublishedPortsRemoved += ports
+		}
+	}
+	if len(failures) > 0 {
+		return report, fmt.Errorf("some stale network attachments could not be safely removed: %s", strings.Join(failures, "; "))
+	}
+	return report, nil
 }
 
 // List returns networks sorted by name without exposing allocation identities.
