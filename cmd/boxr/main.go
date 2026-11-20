@@ -156,6 +156,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runConfig(args[1:], stdout, stderr)
 	case "deploy":
 		return runDeploy(args[1:], stdout, stderr)
+	case "compose":
+		return runDeploy(args[1:], stdout, stderr)
 	case "ps":
 		return runPS(args[1:], stdout, stderr)
 	case "stop":
@@ -2098,8 +2100,9 @@ Usage:
   boxr image prune [--dry-run|--force] [--json]
   boxr config validate FILE.json
   boxr config example
-  boxr deploy validate [--profile NAME] FILE.json
-  boxr deploy plan [--profile NAME] [--json] FILE.json
+  boxr deploy validate [--profile NAME] FILE.json|FILE.yaml|FILE.yml
+  boxr deploy plan [--profile NAME] [--json] FILE.json|FILE.yaml|FILE.yml
+  boxr compose validate|plan|pull|up|ps|logs|wait|down ...
   boxr deploy pull [--profile NAME] [--platform linux/ARCH[/VARIANT]] [--authfile PATH] FILE.json
   boxr deploy up [--profile NAME] [--dry-run] FILE.json
   boxr deploy profiles [--json] FILE.json
@@ -3519,7 +3522,8 @@ var implementedFeatures = []string{
 	"native run accepts positional verified local image references while preserving ordinary command execution",,
 	"state store renames containers with unique names and persists rename lifecycle events",
 	"native rename and container rename commands preserve container IDs while changing unique names",
-	"Engine API POST containers rename updates unique container names and returns Docker-compatible errors"
+	"Engine API POST containers rename updates unique container names and returns Docker-compatible errors",
+	"compose command aliases the supported Compose YAML deployment validation planning pull and lifecycle workflows"
 	"Engine API DELETE force true delegates to native safe forced removal for running or restarting containers"
 	"native create command records a verified image-backed container without starting it",
 	"native start command launches a created image-backed container through the detached supervisor",
@@ -3577,7 +3581,7 @@ func runCompletion(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Usage: boxr completion bash|zsh|fish|powershell")
 		return 2
 	}
-	commands := "daemon pull push build images tag rmi container create start restart rename run exec ps inspect stop kill wait logs network volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
+	commands := "daemon pull push build images tag rmi container compose create start restart rename run exec ps inspect stop kill wait logs network volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
 	switch args[0] {
 	case "bash":
 		fmt.Fprintf(stdout, `_boxr_complete() { COMPREPLY=($(compgen -W "%s" -- "${COMP_WORDS[COMP_CWORD]}")); }
