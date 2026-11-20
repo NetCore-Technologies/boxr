@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 834 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 836 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -840,3 +840,5 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 832. Engine API gracefully stops containers with a bounded timeout and SIGKILL fallback
 833. Engine API sends validated Docker kill signals only to process-identity-verified running containers
 834. Engine API removes created and stopped containers through Docker DELETE with safe conflict handling
+835. Engine API inspects verified local OCI images using Docker-compatible image metadata and uncompressed layer DiffIDs
+836. Engine API removes unused local image tags and rejects removal while containers reference them

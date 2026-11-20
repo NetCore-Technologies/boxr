@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/manit6752025/boxr/internal/container"
+	imageStore "github.com/manit6752025/boxr/internal/image"
 	"github.com/manit6752025/boxr/internal/state"
 )
 
@@ -46,6 +47,26 @@ func createEngineAPITestContainer(t *testing.T, name string, options container.O
 		t.Fatal(err)
 	}
 	return record
+}
+
+func importEngineAPITestImage(t *testing.T, reference string) imageStore.Image {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bin", "app"), []byte("boxr test image\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	image, err := imageStore.ImportRootFSWithConfig(root, reference, "linux", "amd64", "", imageStore.ImageRuntimeConfig{
+		Env: []string{"APP_MODE=test"}, Entrypoint: []string{"/bin/app"},
+		Cmd: []string{"--serve"}, WorkingDir: "/srv/app",
+		Labels: map[string]string{"org.example.component": "api"},
+	})
+	if err != nil {
+		t.Fatalf("import test image: %v", err)
+	}
+	return image
 }
 
 func TestPingAndVersionSupportDockerAPIVersionPrefix(t *testing.T) {
@@ -193,6 +214,109 @@ func TestEventsStreamDockerContainerEventShape(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("events did not include container %s: %s", record.ID, response.Body.String())
+	}
+}
+
+func TestEngineAPIImageInspectReturnsVerifiedDockerMetadata(t *testing.T) {
+	server := setupEngineAPITest(t)
+	const reference = "registry.example/team/boxr-api:v1"
+	created := importEngineAPITestImage(t, reference)
+
+	response := engineAPIRequest(server, http.MethodGet, "/images/"+reference+"/json")
+	if response.Code != http.StatusOK {
+		t.Fatalf("image inspect status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["Id"] != dockerImageID(created.Digest) || body["Created"] == "" || body["Architecture"] != "amd64" || body["Os"] != "linux" {
+		t.Fatalf("image inspect metadata = %#v", body)
+	}
+	if tags, ok := body["RepoTags"].([]any); !ok || len(tags) != 1 || tags[0] != reference {
+		t.Fatalf("RepoTags = %#v", body["RepoTags"])
+	}
+	config, ok := body["Config"].(map[string]any)
+	if !ok || config["WorkingDir"] != "/srv/app" || config["User"] != "" {
+		t.Fatalf("Config = %#v", body["Config"])
+	}
+	if env, ok := config["Env"].([]any); !ok || len(env) != 1 || env[0] != "APP_MODE=test" {
+		t.Fatalf("Config.Env = %#v", config["Env"])
+	}
+	rootFS, ok := body["RootFS"].(map[string]any)
+	if !ok || rootFS["Type"] != "layers" {
+		t.Fatalf("RootFS = %#v", body["RootFS"])
+	}
+	layers, ok := rootFS["Layers"].([]any)
+	if !ok || len(layers) != 1 || layers[0] != created.DiffIDs[0] {
+		t.Fatalf("RootFS.Layers = %#v, want diff ID %v", rootFS["Layers"], created.DiffIDs)
+	}
+	if driver, ok := body["GraphDriver"].(map[string]any); !ok || driver["Name"] != "boxr-oci" {
+		t.Fatalf("GraphDriver = %#v", body["GraphDriver"])
+	}
+}
+
+func TestEngineAPIImageDeleteRejectsInUseImagesAndUntagsUnusedImages(t *testing.T) {
+	server := setupEngineAPITest(t)
+	const reference = "registry.example/team/boxr-delete:v1"
+	importEngineAPITestImage(t, reference)
+	record, err := state.Create("image-user", []string{"/bin/app"}, container.Options{}, map[string]string{"io.boxr.image": reference})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := engineAPIRequest(server, http.MethodDelete, "/images/"+reference)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("delete in-use image status=%d body=%s", response.Code, response.Body.String())
+	}
+	if _, err := imageStore.Inspect(reference); err != nil {
+		t.Fatalf("in-use image was removed: %v", err)
+	}
+	response = engineAPIRequest(server, http.MethodDelete, "/images/"+reference+"?force=true")
+	if response.Code != http.StatusConflict {
+		t.Fatalf("forced delete in-use image status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	if err := state.RemoveCreated(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	response = engineAPIRequest(server, http.MethodDelete, "/images/"+reference)
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete unused image status=%d body=%s", response.Code, response.Body.String())
+	}
+	var result []map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 1 || result[0]["Untagged"] != reference {
+		t.Fatalf("delete response = %#v", result)
+	}
+	if _, err := imageStore.Inspect(reference); err == nil {
+		t.Fatal("image tag remained after delete")
+	}
+}
+
+func TestEngineAPIImageRoutesValidateReferencesMethodsAndQuery(t *testing.T) {
+	server := setupEngineAPITest(t)
+	response := engineAPIRequest(server, http.MethodGet, "/images/not-a-tag/json")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid image inspect reference status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = engineAPIRequest(server, http.MethodPost, "/images/demo:latest/json")
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("image inspect wrong method status=%d", response.Code)
+	}
+	response = engineAPIRequest(server, http.MethodDelete, "/images/demo:latest?force=not-a-bool")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("image delete invalid force status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = engineAPIRequest(server, http.MethodGet, "/images/missing:latest/json")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("missing image inspect status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = engineAPIRequest(server, http.MethodDelete, "/images/missing:latest")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("missing image delete status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

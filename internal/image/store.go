@@ -86,6 +86,7 @@ type Image struct {
 	Variant       string             `json:"variant,omitempty"`
 	LayerBytes    int64              `json:"layerBytes"`
 	Layer         Descriptor         `json:"layer"`
+	DiffIDs       []string           `json:"-"`
 	RuntimeConfig ImageRuntimeConfig `json:"-"`
 }
 
@@ -518,7 +519,13 @@ func inspectDescriptor(dir, reference string, descriptor Descriptor) (Image, err
 	if config.OS == "" || config.Architecture == "" {
 		return Image{}, fmt.Errorf("image config is missing platform metadata")
 	}
-	return Image{Reference: reference, Digest: descriptor.Digest, Created: config.Created, OS: config.OS, Arch: config.Architecture, Variant: config.Variant, LayerBytes: layer.Size, Layer: layer, RuntimeConfig: config.Config}, nil
+	return Image{
+		Reference: reference, Digest: descriptor.Digest, Created: config.Created,
+		OS: config.OS, Arch: config.Architecture, Variant: config.Variant,
+		LayerBytes: layer.Size, Layer: layer,
+		DiffIDs: append([]string(nil), config.RootFS.DiffIDs...),
+		RuntimeConfig: config.Config,
+	}, nil
 }
 
 func loadManifest(dir string, descriptor Descriptor) (Manifest, error) {

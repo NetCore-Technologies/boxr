@@ -14,6 +14,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"sync"
 	"strings"
 	"time"
 
@@ -29,6 +30,7 @@ const (
 
 type Server struct {
 	version string
+	imageMu sync.Mutex
 }
 
 func New(version string) *Server {
@@ -124,6 +126,20 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		s.handleImages(writer)
+	case strings.HasPrefix(path, "/images/"):
+		remainder := strings.TrimPrefix(path, "/images/")
+		if strings.HasSuffix(remainder, "/json") {
+			if !requireMethod(writer, request, http.MethodGet) {
+				return
+			}
+			s.handleImageInspect(writer, strings.TrimSuffix(remainder, "/json"))
+			return
+		}
+		if request.Method == http.MethodDelete {
+			s.handleImageDelete(writer, request, remainder)
+			return
+		}
+		writeMethodErrorFor(writer, http.MethodDelete)
 	case path == "/events":
 		if !requireMethod(writer, request, http.MethodGet) {
 			return
@@ -867,6 +883,125 @@ func (s *Server) handleImages(writer http.ResponseWriter) {
 		})
 	}
 	writeJSON(writer, http.StatusOK, result)
+}
+
+func decodeDockerImageReference(raw string) (string, error) {
+	if raw == "" || strings.ContainsAny(raw, "\x00\r\n") {
+		return "", fmt.Errorf("image reference is required")
+	}
+	reference, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid image reference encoding")
+	}
+	if err := imageStore.ValidateReference(reference); err != nil {
+		return "", err
+	}
+	return reference, nil
+}
+
+func dockerImageConfig(config imageStore.ImageRuntimeConfig) map[string]any {
+	env := append([]string{}, config.Env...)
+	command := append([]string{}, config.Cmd...)
+	entrypoint := append([]string{}, config.Entrypoint...)
+	labels := make(map[string]string, len(config.Labels))
+	for key, value := range config.Labels {
+		labels[key] = value
+	}
+	return map[string]any{
+		"Env": env, "Cmd": command, "Entrypoint": entrypoint,
+		"WorkingDir": config.WorkingDir, "User": config.User, "Labels": labels,
+	}
+}
+
+func (s *Server) handleImageInspect(writer http.ResponseWriter, rawReference string) {
+	reference, err := decodeDockerImageReference(rawReference)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	image, err := imageStore.Inspect(reference)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(writer, http.StatusNotFound, err)
+		} else {
+			writeError(writer, http.StatusInternalServerError, err)
+		}
+		return
+	}
+	config := dockerImageConfig(image.RuntimeConfig)
+	created := image.Created.UTC().Format(time.RFC3339Nano)
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"Id": dockerImageID(image.Digest), "RepoTags": []string{image.Reference},
+		"RepoDigests": []string{}, "Parent": "", "Comment": "",
+		"Created": created, "Container": "", "DockerVersion": "", "Author": "",
+		"Architecture": image.Arch, "Os": image.OS, "Variant": image.Variant,
+		"Size": image.LayerBytes, "VirtualSize": image.LayerBytes,
+		"Config": config, "ContainerConfig": config,
+		"GraphDriver": map[string]any{"Name": "boxr-oci", "Data": map[string]string{}},
+		"RootFS": map[string]any{"Type": "layers", "Layers": append([]string{}, image.DiffIDs...)},
+		"Metadata": map[string]string{"LastTagTime": created},
+	})
+}
+
+func (s *Server) handleImageDelete(writer http.ResponseWriter, request *http.Request, rawReference string) {
+	reference, err := decodeDockerImageReference(rawReference)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	force, err := boolQuery(request, "force")
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if _, err := boolQuery(request, "noprune"); err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+
+	s.imageMu.Lock()
+	defer s.imageMu.Unlock()
+
+	images, err := imageStore.List()
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	found := false
+	for _, image := range images {
+		if image.Reference == reference {
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeError(writer, http.StatusNotFound, fmt.Errorf("image %q not found", reference))
+		return
+	}
+	records, err := state.List(true)
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	for _, record := range records {
+		if record.Labels["io.boxr.image"] == reference {
+			message := fmt.Sprintf("image %q is referenced by container %s", reference, record.ID)
+			if force {
+				message += "; forced removal cannot orphan a container that depends on this image reference"
+			}
+			writeError(writer, http.StatusConflict, fmt.Errorf("%s", message))
+			return
+		}
+	}
+	if err := imageStore.Remove(reference); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(writer, http.StatusNotFound, err)
+		} else {
+			writeError(writer, http.StatusInternalServerError, err)
+		}
+		return
+	}
+	writeJSON(writer, http.StatusOK, []map[string]string{{"Untagged": reference}})
 }
 
 func (s *Server) handleEvents(writer http.ResponseWriter, request *http.Request) {

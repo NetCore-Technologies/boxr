@@ -3122,6 +3122,8 @@ var implementedFeatures = []string{
 	"Engine API gracefully stops containers with a bounded timeout and SIGKILL fallback",
 	"Engine API sends validated Docker kill signals only to process-identity-verified running containers",
 	"Engine API removes created and stopped containers through Docker DELETE with safe conflict handling",
+	"Engine API inspects verified local OCI images using Docker-compatible image metadata and uncompressed layer DiffIDs",
+	"Engine API removes unused local image tags and rejects removal while containers reference them",
 }
 
 func printFeatures(stdout io.Writer) {

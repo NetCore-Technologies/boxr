@@ -80,6 +80,9 @@ type dockerRestartPolicyConfig struct {
 }
 
 func (s *Server) handleContainerCreate(writer http.ResponseWriter, request *http.Request) {
+	s.imageMu.Lock()
+	defer s.imageMu.Unlock()
+
 	data, err := io.ReadAll(io.LimitReader(request.Body, maxCreateBodyBytes+1))
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, fmt.Errorf("read create request: %w", err))
