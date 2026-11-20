@@ -12,6 +12,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/manit6752025/boxr/internal/container"
 )
 
 const (
@@ -28,6 +30,10 @@ type BuildSpec struct {
 	Base    string             `json:"base"`
 	Copy    []CopyInstruction  `json:"copy,omitempty"`
 	Config  ImageRuntimeConfig `json:"config,omitempty"`
+
+	dockerfileSteps      []dockerfileStep
+	dockerfileNetwork    string
+	dockerfileHasWorkdir bool
 }
 
 type CopyInstruction struct {
@@ -231,14 +237,81 @@ func buildWithSpec(contextDir string, spec BuildSpec, reference, platform, ignor
 	} else if err := os.Mkdir(root, 0755); err != nil {
 		return Image{}, err
 	}
-	for index, instruction := range spec.Copy {
-		if err := applyCopy(contextAbs, root, instruction, ignorePatterns); err != nil {
-			return Image{}, fmt.Errorf("COPY %d: %w", index+1, err)
-		}
-	}
 	runtimeConfig := spec.Config
+	var baseEnvironment []string
+	workingDir := "/"
 	if baseImage != nil {
 		runtimeConfig = inheritBuildRuntimeConfig(baseImage.RuntimeConfig, spec.Config)
+		baseEnvironment = baseImage.RuntimeConfig.Env
+		if baseImage.RuntimeConfig.WorkingDir != "" {
+			workingDir = baseImage.RuntimeConfig.WorkingDir
+		}
+	}
+
+	if len(spec.dockerfileSteps) == 0 {
+		for index, instruction := range spec.Copy {
+			if err := applyCopy(contextAbs, root, instruction, ignorePatterns); err != nil {
+				return Image{}, fmt.Errorf("COPY %d: %w", index+1, err)
+			}
+		}
+	} else {
+		runNumber := 0
+		copyNumber := 0
+		for _, step := range spec.dockerfileSteps {
+			switch step.kind {
+			case "copy":
+				destination := step.destination
+				if !path.IsAbs(destination) {
+					destination = path.Join(workingDir, destination)
+				}
+				copyNumber++
+				instruction := CopyInstruction{Source: step.source, Destination: path.Clean(destination)}
+				if err := applyCopy(contextAbs, root, instruction, ignorePatterns); err != nil {
+					return Image{}, fmt.Errorf("COPY %d: %w", copyNumber, err)
+				}
+			case "workdir":
+				if path.IsAbs(step.value) {
+					workingDir = path.Clean(step.value)
+				} else {
+					workingDir = path.Clean(path.Join(workingDir, step.value))
+				}
+				destination, err := rootfsDestination(root, workingDir)
+				if err != nil {
+					return Image{}, err
+				}
+				if _, err := ensureRootfsDirectory(root, destination); err != nil {
+					return Image{}, fmt.Errorf("create Dockerfile WORKDIR %q: %w", workingDir, err)
+				}
+			case "run":
+				runNumber++
+				buildUser := step.user
+				if buildUser == "" && baseImage != nil {
+					buildUser = baseImage.RuntimeConfig.User
+				}
+				if buildUser != "" && buildUser != "root" && buildUser != "0" && buildUser != "0:0" {
+					return Image{}, fmt.Errorf("RUN %d after USER %q is not supported yet; build commands currently execute as root inside a user namespace", runNumber, buildUser)
+				}
+				networkMode := spec.dockerfileNetwork
+				if networkMode == "" {
+					networkMode = "none"
+				}
+				runOptions := container.Options{
+					RootFS: root, Workdir: workingDir, Env: mergeBuildEnvironment(baseEnvironment, step.env), ClearEnv: true,
+					NetworkMode: networkMode, UserNamespace: true, MountProc: true,
+					NoNewPrivileges: true, SeccompProfile: "baseline",
+					DropCapabilities: []string{"ALL"},
+				}
+				if len(step.command) == 0 {
+					return Image{}, fmt.Errorf("RUN %d: command is empty", runNumber)
+				}
+				if err := runDockerfileCommand(step.command[0], step.command[1:], runOptions); err != nil {
+					return Image{}, fmt.Errorf("RUN %d: %w", runNumber, err)
+				}
+			}
+		}
+		if spec.dockerfileHasWorkdir {
+			runtimeConfig.WorkingDir = workingDir
+		}
 	}
 	if runtimeConfig.WorkingDir != "" {
 		destination, err := rootfsDestination(root, runtimeConfig.WorkingDir)
@@ -251,6 +324,10 @@ func buildWithSpec(contextDir string, spec BuildSpec, reference, platform, ignor
 	}
 	return ImportRootFSWithConfig(root, reference, osName, architecture, variant, runtimeConfig)
 }
+
+// runDockerfileCommand is replaceable by tests so build steps can be
+// verified without requiring privileged namespace creation in the test process.
+var runDockerfileCommand = container.Run
 
 // inheritBuildRuntimeConfig carries forward useful image defaults while
 // allowing a child recipe to override only the fields it explicitly supplies.

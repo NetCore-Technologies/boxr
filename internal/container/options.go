@@ -35,6 +35,7 @@ type Options struct {
 	MemoryOOMGroup     bool              `json:"memoryOOMGroup,omitempty"`
 	Workdir            string            `json:"workdir,omitempty"`
 	Env                []string          `json:"env,omitempty"`
+	ClearEnv           bool              `json:"-"`
 	RootFS             string            `json:"rootfs,omitempty"`
 	OverlayDir         string            `json:"overlayDir,omitempty"`
 	ReadOnlyRootFS     bool              `json:"readOnlyRootfs,omitempty"`

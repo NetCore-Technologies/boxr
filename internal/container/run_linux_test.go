@@ -62,3 +62,33 @@ func TestExitErrorHasUsefulMessage(t *testing.T) {
 		t.Fatalf("ExitError.Error() = %q", got)
 	}
 }
+
+
+func TestChildProcessEnvironmentDropsHostVariablesForBuilds(t *testing.T) {
+	values := childProcessEnvironment(Options{
+		ClearEnv: true,
+		Env:      []string{"BUILD_MODE=release", "PATH=/build/bin"},
+	}, []string{"HOST_SECRET=should-not-leak", "PATH=/host/bin", "HOME=/home/test"})
+	if got, ok := testEnvironmentValue(values, "HOST_SECRET"); ok {
+		t.Fatalf("host secret leaked into build environment: %q", got)
+	}
+	if got, ok := testEnvironmentValue(values, "PATH"); !ok || got != "/build/bin" {
+		t.Fatalf("PATH = %q, present=%v", got, ok)
+	}
+	if got, ok := testEnvironmentValue(values, "HOME"); !ok || got != "/root" {
+		t.Fatalf("HOME = %q, present=%v", got, ok)
+	}
+	if got, ok := testEnvironmentValue(values, "BUILD_MODE"); !ok || got != "release" {
+		t.Fatalf("BUILD_MODE = %q, present=%v", got, ok)
+	}
+}
+
+func testEnvironmentValue(values []string, key string) (string, bool) {
+	for _, value := range values {
+		name, content, ok := strings.Cut(value, "=")
+		if ok && name == key {
+			return content, true
+		}
+	}
+	return "", false
+}

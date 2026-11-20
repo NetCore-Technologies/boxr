@@ -25,6 +25,21 @@ func Run(command string, args []string, options Options) error {
 	return RunWithHooks(command, args, options, Hooks{})
 }
 
+func childProcessEnvironment(options Options, inherited []string) []string {
+	if options.ClearEnv {
+		defaults := []string{
+			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+			"HOME=/root",
+			"LANG=C.UTF-8",
+		}
+		return mergeEnvironment(defaults, options.Env)
+	}
+	if len(options.Env) > 0 {
+		return mergeEnvironment(inherited, options.Env)
+	}
+	return nil
+}
+
 // RunWithHooks is Run with host-side lifecycle callbacks for state tracking.
 func RunWithHooks(command string, args []string, options Options, hooks Hooks) error {
 	if command == "" {
@@ -80,9 +95,7 @@ func RunWithHooks(command string, args []string, options Options, hooks Hooks) e
 		cmd.Stderr = os.Stderr
 	}
 	cmd.ExtraFiles = []*os.File{readyReader}
-	if len(options.Env) > 0 {
-		cmd.Env = mergeEnvironment(os.Environ(), options.Env)
-	}
+	cmd.Env = childProcessEnvironment(options, os.Environ())
 	cloneFlags := uintptr(syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS | syscall.CLONE_NEWNS | syscall.CLONE_NEWIPC)
 	if options.NetworkMode == "none" || options.NetworkMode == "bridge" {
 		cloneFlags |= syscall.CLONE_NEWNET

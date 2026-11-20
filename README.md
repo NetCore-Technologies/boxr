@@ -208,7 +208,7 @@ Extraction rejects path traversal, escaping symlinks, duplicate paths, special d
 
 ## Build a local image safely
 
-Boxr accepts a non-executing Dockerfile subset and the versioned `Boxrfile.json` recipe. Dockerfile builds support a single `FROM` stage, local-context `COPY`, `WORKDIR`, `ENV`, `LABEL`, `USER`, and shell/exec `CMD` and `ENTRYPOINT` forms, plus bounded `.dockerignore` filtering. Base images must already be present locally; pull them explicitly with `boxr image pull REGISTRY/IMAGE:TAG`. Dockerfile `RUN`, `ADD`, multi-stage builds, build secrets, cache mounts, and other unsupported instructions fail explicitly rather than being silently skipped. Boxr does not execute package managers or arbitrary build commands during image creation yet. The JSON recipe remains available for strict, explicit `COPY` builds.
+Boxr accepts a single-stage Dockerfile subset and the versioned `Boxrfile.json` recipe. Dockerfile `RUN` steps execute inside Boxr's PID, UTS, mount, IPC and user namespaces against a staged rootfs, with a clean environment, no capabilities, `no_new_privileges`, baseline seccomp and networking disabled by default. Use `boxr image build --network host` only when a build step explicitly needs host network access. Supported instructions include `FROM`, `COPY`, `WORKDIR`, `ENV`, `LABEL`, `USER`, `RUN`, `CMD` and `ENTRYPOINT`; `ADD`, multi-stage builds, build secrets, cache mounts and advanced BuildKit features still fail explicitly. Base images must already be pulled into the local image store. The JSON recipe remains available for strict, explicit `COPY` builds.
 
 ```json
 {

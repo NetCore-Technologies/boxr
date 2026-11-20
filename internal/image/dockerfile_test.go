@@ -1,10 +1,13 @@
 package image
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	boxrcontainer "github.com/manit6752025/boxr/internal/container"
 )
 
 func TestParseDockerfileSupportedInstructions(t *testing.T) {
@@ -37,7 +40,6 @@ func TestParseDockerfileSupportedInstructions(t *testing.T) {
 
 func TestParseDockerfileRejectsRunAndMultiStage(t *testing.T) {
 	for _, input := range []string{
-		"FROM scratch\nRUN apk add curl\n",
 		"FROM scratch AS build\nFROM scratch AS final\n",
 		"FROM scratch\nADD app /app\n",
 		"FROM scratch\nCOPY --from=build /app /app\n",
@@ -108,4 +110,150 @@ func TestLoadDockerfileRejectsSymlink(t *testing.T) {
 	if _, err := LoadDockerfile(link); err == nil {
 		t.Fatal("symlinked Dockerfile was accepted")
 	}
+}
+
+
+func TestParseDockerfileCapturesRunCommandsAndEnvironment(t *testing.T) {
+	spec, err := ParseDockerfile([]byte("ARG BUILD_FLAVOR=debug\nFROM scratch\nWORKDIR /src\nENV APP_MODE=release\nRUN echo \"$APP_MODE:$BUILD_FLAVOR\"\nRUN [\"/bin/tool\", \"--compile\"]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.dockerfileSteps) != 3 {
+		t.Fatalf("captured %d Dockerfile steps, want WORKDIR and two RUNs", len(spec.dockerfileSteps))
+	}
+	var runs []dockerfileStep
+	for _, step := range spec.dockerfileSteps {
+		if step.kind == "run" {
+			runs = append(runs, step)
+		}
+	}
+	if len(runs) != 2 {
+		t.Fatalf("captured %d RUN steps, want 2", len(runs))
+	}
+	if len(runs[0].command) != 3 || runs[0].command[0] != "/bin/sh" || runs[0].command[1] != "-c" || !strings.Contains(runs[0].command[2], "release:debug") {
+		t.Errorf("shell RUN = %#v", runs[0].command)
+	}
+	if !containsBuildEnv(runs[0].env, "APP_MODE", "release") || !containsBuildEnv(runs[0].env, "BUILD_FLAVOR", "debug") {
+		t.Errorf("RUN environment did not capture ARG and ENV values: %#v", runs[0].env)
+	}
+	if strings.Join(runs[1].command, "|") != "/bin/tool|--compile" {
+		t.Errorf("exec-form RUN = %#v", runs[1].command)
+	}
+}
+
+func TestBuildDockerfileRunsInsideHardenedStagedRootfs(t *testing.T) {
+	useStore(t)
+	contextDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(contextDir, "source.txt"), []byte("copy me\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dockerfile := filepath.Join(contextDir, "Dockerfile")
+	content := "FROM scratch\nWORKDIR /build\nCOPY source.txt .\nENV BUILD_MODE=release\nARG TARGET=demo\nRUN echo \"$BUILD_MODE:$TARGET\"\n"
+	if err := os.WriteFile(dockerfile, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := runDockerfileCommand
+	defer func() { runDockerfileCommand = previous }()
+
+	var calls int
+	runDockerfileCommand = func(command string, args []string, options boxrcontainer.Options) error {
+		calls++
+		if command != "/bin/sh" || len(args) != 2 || args[0] != "-c" {
+			t.Errorf("RUN command = %q %#v", command, args)
+		}
+		if options.RootFS == "" || options.Workdir != "/build" {
+			t.Errorf("RUN rootfs/workdir = %q / %q", options.RootFS, options.Workdir)
+		}
+		if options.NetworkMode != "none" || !options.UserNamespace || !options.MountProc || !options.NoNewPrivileges || options.SeccompProfile != "baseline" || !options.ClearEnv {
+			t.Errorf("RUN isolation options = %+v", options)
+		}
+		if len(options.DropCapabilities) != 1 || options.DropCapabilities[0] != "ALL" {
+			t.Errorf("RUN capabilities = %#v", options.DropCapabilities)
+		}
+		if containsBuildEnv(options.Env, "PATH", "/host/private/bin") || containsBuildEnv(options.Env, "HOST_SECRET", "must-not-leak") {
+			t.Errorf("host environment leaked into RUN: %#v", options.Env)
+		}
+		if !containsBuildEnv(options.Env, "BUILD_MODE", "release") || !containsBuildEnv(options.Env, "TARGET", "demo") {
+			t.Errorf("Dockerfile build environment missing: %#v", options.Env)
+		}
+		if err := os.WriteFile(filepath.Join(options.RootFS, "build", "result.txt"), []byte("built in Boxr\n"), 0644); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	t.Setenv("PATH", "/host/private/bin")
+	t.Setenv("HOST_SECRET", "must-not-leak")
+	if _, err := BuildDockerfileForPlatform(contextDir, dockerfile, "demo:run", ""); err != nil {
+		t.Fatalf("BuildDockerfileForPlatform: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("RUN invoked %d times, want 1", calls)
+	}
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if _, err := Unpack("demo:run", root); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "build", "result.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "built in Boxr\n" {
+		t.Fatalf("build output = %q", got)
+	}
+}
+
+func TestBuildDockerfileNetworkRequiresExplicitHostOptIn(t *testing.T) {
+	useStore(t)
+	contextDir := t.TempDir()
+	dockerfile := filepath.Join(contextDir, "Dockerfile")
+	if err := os.WriteFile(dockerfile, []byte("FROM scratch\nRUN echo ready\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := runDockerfileCommand
+	defer func() { runDockerfileCommand = previous }()
+	var gotNetwork string
+	runDockerfileCommand = func(_ string, _ []string, options boxrcontainer.Options) error {
+		gotNetwork = options.NetworkMode
+		return nil
+	}
+	if _, err := BuildDockerfileForPlatformWithNetwork(contextDir, dockerfile, "demo:hostnet", "", "host"); err != nil {
+		t.Fatal(err)
+	}
+	if gotNetwork != "host" {
+		t.Fatalf("explicit build network = %q, want host", gotNetwork)
+	}
+	if _, err := BuildDockerfileForPlatformWithNetwork(contextDir, dockerfile, "demo:badnet", "", "bridge"); err == nil {
+		t.Fatal("unsupported build network mode was accepted")
+	}
+}
+
+func TestBuildDockerfileDoesNotPublishImageWhenRunFails(t *testing.T) {
+	useStore(t)
+	contextDir := t.TempDir()
+	dockerfile := filepath.Join(contextDir, "Dockerfile")
+	if err := os.WriteFile(dockerfile, []byte("FROM scratch\nRUN false\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := runDockerfileCommand
+	defer func() { runDockerfileCommand = previous }()
+	runDockerfileCommand = func(_ string, _ []string, _ boxrcontainer.Options) error {
+		return errors.New("simulated build command failure")
+	}
+	if _, err := BuildDockerfileForPlatform(contextDir, dockerfile, "demo:failed-run", ""); err == nil || !strings.Contains(err.Error(), "RUN 1") {
+		t.Fatalf("failed RUN error = %v", err)
+	}
+	if _, err := Verify("demo:failed-run"); err == nil {
+		t.Fatal("image was published even though RUN failed")
+	}
+}
+
+func containsBuildEnv(values []string, key, want string) bool {
+	for _, value := range values {
+		name, actual, ok := strings.Cut(value, "=")
+		if ok && name == key && actual == want {
+			return true
+		}
+	}
+	return false
 }

@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 771 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 779 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -777,3 +777,11 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 769. Dockerfile RUN ADD multi-stage builds and unsupported flags fail explicitly
 770. Dockerfile LABEL accepts dotted and namespaced metadata keys
 771. Dockerfile COPY supports multiple local sources with inferred destination directories
+772. Dockerfile RUN shell and exec instructions execute inside Boxr namespaces
+773. Dockerfile RUN commands operate on the staged image rootfs after preceding build steps
+774. Dockerfile RUN receives a clean host-independent environment with ARG and ENV values
+775. Dockerfile RUN defaults to an isolated network namespace
+776. Dockerfile RUN host networking requires an explicit --network host opt-in
+777. Dockerfile RUN enforces user namespaces no-new-privileges baseline seccomp and drops all capabilities
+778. Dockerfile RUN failures abort the build before the image tag is published
+779. Dockerfile RUN after a non-root USER is rejected rather than silently run as root

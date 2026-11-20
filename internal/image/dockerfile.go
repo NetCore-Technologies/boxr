@@ -13,6 +13,16 @@ import (
 	"unicode"
 )
 
+type dockerfileStep struct {
+	kind        string
+	source      string
+	destination string
+	value       string
+	command     []string
+	env         []string
+	user        string
+}
+
 const (
 	maxDockerfileBytes        = 1 << 20
 	maxDockerfileLineBytes    = 64 << 10
@@ -36,9 +46,9 @@ func LoadDockerfile(filename string) (BuildSpec, error) {
 	return ParseDockerfile(data)
 }
 
-// ParseDockerfile converts the supported non-executing Dockerfile subset into a
-// Boxr build spec. RUN, ADD, and multi-stage builds are rejected rather than
-// silently ignored or executed with host privileges.
+// ParseDockerfile converts the supported Dockerfile subset into a Boxr build
+// plan. RUN instructions are executed later inside Boxr's isolated runtime;
+// ADD and multi-stage builds are rejected rather than silently skipped.
 func ParseDockerfile(data []byte) (BuildSpec, error) {
 	var spec BuildSpec
 	if len(data) == 0 || len(data) > maxDockerfileBytes {
@@ -48,6 +58,7 @@ func ParseDockerfile(data []byte) (BuildSpec, error) {
 	args := make(map[string]string)
 	environment := make(map[string]string)
 	workingDir := "/"
+	currentUser := ""
 	fromSeen := false
 	instructionCount := 0
 	var logical strings.Builder
@@ -144,11 +155,16 @@ func ParseDockerfile(data []byte) (BuildSpec, error) {
 				if strings.ContainsAny(cleanSource, "*?[]") {
 					return fmt.Errorf("line %d: COPY wildcard sources are not supported yet", lineNumber)
 				}
+				target := destination
 				if len(sources) > 1 {
-					spec.Copy = append(spec.Copy, CopyInstruction{Source: cleanSource, Destination: path.Join(destination, path.Base(cleanSource))})
+					target = path.Join(destination, path.Base(cleanSource))
+					spec.Copy = append(spec.Copy, CopyInstruction{Source: cleanSource, Destination: target})
 				} else {
-					spec.Copy = append(spec.Copy, CopyInstruction{Source: cleanSource, Destination: destination})
+					spec.Copy = append(spec.Copy, CopyInstruction{Source: cleanSource, Destination: target})
 				}
+				spec.dockerfileSteps = append(spec.dockerfileSteps, dockerfileStep{
+					kind: "copy", source: cleanSource, destination: target,
+				})
 			}
 
 		case "WORKDIR":
@@ -165,6 +181,8 @@ func ParseDockerfile(data []byte) (BuildSpec, error) {
 				return fmt.Errorf("line %d: WORKDIR must resolve inside the image root", lineNumber)
 			}
 			spec.Config.WorkingDir = workingDir
+			spec.dockerfileHasWorkdir = true
+			spec.dockerfileSteps = append(spec.dockerfileSteps, dockerfileStep{kind: "workdir", value: words[0]})
 
 		case "ENV":
 			words, err := dockerfileWords(expanded)
@@ -219,6 +237,7 @@ func ParseDockerfile(data []byte) (BuildSpec, error) {
 				return fmt.Errorf("line %d: USER expects one user or UID[:GID]", lineNumber)
 			}
 			spec.Config.User = words[0]
+			currentUser = words[0]
 
 		case "CMD":
 			command, err := dockerfileCommand(rest)
@@ -235,7 +254,30 @@ func ParseDockerfile(data []byte) (BuildSpec, error) {
 			spec.Config.Entrypoint = command
 
 		case "RUN":
-			return fmt.Errorf("line %d: RUN is not supported yet; Boxr does not execute build commands", lineNumber)
+			if strings.HasPrefix(expanded, "--") {
+				return fmt.Errorf("line %d: RUN flags such as --mount and --network are not supported; configure networking with boxr image build --network", lineNumber)
+			}
+			if currentUser != "" && currentUser != "root" && currentUser != "0" && currentUser != "0:0" {
+				return fmt.Errorf("line %d: RUN after USER %q is not supported yet; build commands currently execute as root inside a user namespace", lineNumber, currentUser)
+			}
+			command, err := dockerfileCommand(expanded)
+			if err != nil {
+				return fmt.Errorf("line %d: RUN: %w", lineNumber, err)
+			}
+			argKeys := make([]string, 0, len(args))
+			for key := range args {
+				argKeys = append(argKeys, key)
+			}
+			sort.Strings(argKeys)
+			argEnv := make([]string, 0, len(argKeys))
+			for _, key := range argKeys {
+				argEnv = append(argEnv, key+"="+args[key])
+			}
+			spec.dockerfileSteps = append(spec.dockerfileSteps, dockerfileStep{
+				kind: "run", command: command,
+				env: mergeBuildEnvironment(argEnv, spec.Config.Env),
+				user: currentUser,
+			})
 		case "ADD":
 			return fmt.Errorf("line %d: ADD is not supported yet; use COPY for local context files", lineNumber)
 		case "ONBUILD", "HEALTHCHECK", "EXPOSE", "VOLUME", "STOPSIGNAL", "SHELL":
@@ -419,9 +461,20 @@ func dockerfileCommand(value string) ([]string, error) {
 	return []string{"/bin/sh", "-c", value}, nil
 }
 
-// BuildDockerfileForPlatform builds the supported non-executing Dockerfile
-// subset. The Dockerfile and .dockerignore must remain inside the build context.
+// BuildDockerfileForPlatform builds a Dockerfile with RUN network access
+// disabled by default. Use BuildDockerfileForPlatformWithNetwork for an
+// explicit opt-in to host networking during build commands.
 func BuildDockerfileForPlatform(contextDir, dockerfilePath, reference, platform string) (Image, error) {
+	return BuildDockerfileForPlatformWithNetwork(contextDir, dockerfilePath, reference, platform, "none")
+}
+
+// BuildDockerfileForPlatformWithNetwork builds the supported single-stage
+// Dockerfile subset. RUN commands execute inside Boxr's namespaces and staged
+// rootfs; host networking is available only through an explicit opt-in.
+func BuildDockerfileForPlatformWithNetwork(contextDir, dockerfilePath, reference, platform, networkMode string) (Image, error) {
+	if networkMode != "none" && networkMode != "host" {
+		return Image{}, fmt.Errorf("Dockerfile build network must be none or host")
+	}
 	contextAbs, err := filepath.Abs(contextDir)
 	if err != nil {
 		return Image{}, err
@@ -438,5 +491,6 @@ func BuildDockerfileForPlatform(contextDir, dockerfilePath, reference, platform 
 	if err != nil {
 		return Image{}, err
 	}
+	spec.dockerfileNetwork = networkMode
 	return buildWithSpec(contextAbs, spec, reference, platform, ".dockerignore", filepath.ToSlash(relative), ".dockerignore")
 }

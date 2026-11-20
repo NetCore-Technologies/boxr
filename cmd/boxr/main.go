@@ -1820,17 +1820,18 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 	case "build":
 		flags := flag.NewFlagSet("image build", flag.ContinueOnError)
 		flags.SetOutput(stderr)
-		file := flags.String("file", "", "Dockerfile or Boxrfile.json (default: CONTEXT/Dockerfile; non-executing subset)")
+		file := flags.String("file", "", "Dockerfile or Boxrfile.json (default: CONTEXT/Dockerfile)")
 		flags.StringVar(file, "f", "", "Dockerfile or JSON recipe path")
 		platform := flags.String("platform", "", "target image platform (default: linux/<host architecture>)")
+		buildNetwork := flags.String("network", "none", "network for Dockerfile RUN steps: none (default) or host")
 		tag := flags.String("tag", "", "image reference to create (required)")
 		jsonOutput := flags.Bool("json", false, "write image metadata as JSON")
 		quiet := flags.Bool("quiet", false, "print only the resulting image reference")
 		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}
-		if *tag == "" || flags.NArg() > 1 || (*quiet && *jsonOutput) {
-			fmt.Fprintln(stderr, "Usage: boxr image build --tag NAME:TAG [--platform linux/ARCH[/VARIANT]] [-f Dockerfile|Boxrfile.json] [--json|--quiet] [CONTEXT]")
+		if *tag == "" || flags.NArg() > 1 || (*quiet && *jsonOutput) || (*buildNetwork != "none" && *buildNetwork != "host") {
+			fmt.Fprintln(stderr, "Usage: boxr image build --tag NAME:TAG [--platform linux/ARCH[/VARIANT]] [--network none|host] [-f Dockerfile|Boxrfile.json] [--json|--quiet] [CONTEXT]")
 			return 2
 		}
 		contextDir := "."
@@ -2965,6 +2966,14 @@ var implementedFeatures = []string{
 	"Dockerfile RUN ADD multi-stage builds and unsupported flags fail explicitly",
 	"Dockerfile LABEL accepts dotted and namespaced metadata keys",
 	"Dockerfile COPY supports multiple local sources with inferred destination directories",
+	"Dockerfile RUN shell and exec instructions execute inside Boxr namespaces",
+	"Dockerfile RUN commands operate on the staged image rootfs after preceding build steps",
+	"Dockerfile RUN receives a clean host-independent environment with ARG and ENV values",
+	"Dockerfile RUN defaults to an isolated network namespace",
+	"Dockerfile RUN host networking requires an explicit --network host opt-in",
+	"Dockerfile RUN enforces user namespaces no-new-privileges baseline seccomp and drops all capabilities",
+	"Dockerfile RUN failures abort the build before the image tag is published",
+	"Dockerfile RUN after a non-root USER is rejected rather than silently run as root",
 }
 
 func printFeatures(stdout io.Writer) {
