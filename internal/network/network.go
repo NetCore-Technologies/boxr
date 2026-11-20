@@ -22,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/manit6752025/boxr/internal/container"
 )
 
 const (
@@ -51,34 +53,8 @@ type Network struct {
 }
 
 // PortMapping publishes one host IPv4 socket to a container IPv4 TCP or UDP port.
-type PortMapping struct {
-	HostIP        string `json:"hostIp,omitempty"`
-	HostPort      uint16 `json:"hostPort"`
-	ContainerPort uint16 `json:"containerPort"`
-	Protocol      string `json:"protocol,omitempty"`
-}
-
-// Normalize validates and fills defaults for a published port mapping.
-func (mapping PortMapping) Normalize() (PortMapping, error) {
-	if mapping.HostPort == 0 || mapping.ContainerPort == 0 {
-		return PortMapping{}, fmt.Errorf("published host and container ports must be between 1 and 65535")
-	}
-	if mapping.HostIP == "" {
-		mapping.HostIP = "0.0.0.0"
-	}
-	address, err := netip.ParseAddr(mapping.HostIP)
-	if err != nil || !address.Is4() || address.String() != mapping.HostIP {
-		return PortMapping{}, fmt.Errorf("published host IP must be a canonical IPv4 address")
-	}
-	mapping.Protocol = strings.ToLower(mapping.Protocol)
-	if mapping.Protocol == "" {
-		mapping.Protocol = "tcp"
-	}
-	if mapping.Protocol != "tcp" && mapping.Protocol != "udp" {
-		return PortMapping{}, fmt.Errorf("published port protocol must be tcp or udp")
-	}
-	return mapping, nil
-}
+// PortMapping is shared with container run configuration.
+type PortMapping = container.PortMapping
 
 // CreateOptions configures an IPv4 bridge and whether it receives outbound NAT.
 type CreateOptions struct {
@@ -605,11 +581,11 @@ func validatePortMappingReservations(networks []Network, requested []PortMapping
 }
 
 func portDNATArgs(mapping PortMapping, destination string) []string {
-	hostIP := mapping.HostIP
-	if hostIP == "0.0.0.0" {
-		hostIP = "0.0.0.0/0"
+	args := []string{"-p", mapping.Protocol}
+	if mapping.HostIP != "" && mapping.HostIP != "0.0.0.0" {
+		args = append(args, "-d", mapping.HostIP)
 	}
-	return []string{"-p", mapping.Protocol, "-d", hostIP, "--dport", fmt.Sprint(mapping.HostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", destination, mapping.ContainerPort)}
+	return append(args, "--dport", fmt.Sprint(mapping.HostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", destination, mapping.ContainerPort))
 }
 
 func addPortMappingRules(ctx context.Context, runner Runner, network Network, address string, mapping PortMapping) error {
