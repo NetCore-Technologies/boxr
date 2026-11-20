@@ -268,6 +268,109 @@ func TestLeaveReleasesAllocationWhenVethWasAlreadyRemoved(t *testing.T) {
 	}
 }
 
+func TestJoinPublishesPortsAndLeaveRemovesScopedRules(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	if _, err := CreateWithRunner(context.Background(), "frontend", CreateOptions{
+		Subnet: "172.30.70.0/24",
+	}, &fakeRunner{}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{}
+	ports := []PortMapping{
+		{HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 80},
+		{HostPort: 5353, ContainerPort: 53, Protocol: "udp"},
+	}
+	address, err := JoinWithRunner(context.Background(), "frontend", 3322, "container-ports", runner, ports...)
+	if err != nil {
+		t.Fatalf("JoinWithRunner(ports): %v", err)
+	}
+	joined := strings.Join(runner.calls, "\n")
+	for _, expected := range []string{
+		"iptables -t nat -A PREROUTING -p tcp -d 127.0.0.1 --dport 8080 -j DNAT --to-destination " + address + ":80",
+		"iptables -t nat -A OUTPUT -p tcp -d 127.0.0.1 --dport 8080 -j DNAT --to-destination " + address + ":80",
+		"iptables -I FORWARD 1 -o br",
+		"iptables -t nat -A PREROUTING -p udp --dport 5353 -j DNAT --to-destination " + address + ":53",
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Errorf("published port rules missing %q; calls: %s", expected, joined)
+		}
+	}
+	if err := LeaveWithRunner(context.Background(), "frontend", "container-ports", runner); err != nil {
+		t.Fatalf("LeaveWithRunner(): %v", err)
+	}
+	leaveCalls := strings.Join(runner.calls[len(runner.calls)-7:], "\n")
+	for _, expected := range []string{
+		"iptables -t nat -D PREROUTING -p tcp -d 127.0.0.1 --dport 8080",
+		"iptables -t nat -D OUTPUT -p tcp -d 127.0.0.1 --dport 8080",
+		"iptables -D FORWARD -o br",
+		"iptables -t nat -D PREROUTING -p udp --dport 5353",
+	} {
+		if !strings.Contains(leaveCalls, expected) {
+			t.Errorf("published port cleanup missing %q; calls: %s", expected, leaveCalls)
+		}
+	}
+	if _, err := JoinWithRunner(context.Background(), "frontend", 3322, "container-reuse", runner, PortMapping{HostPort: 8080, ContainerPort: 80}); err != nil {
+		t.Fatalf("released host port could not be reused: %v", err)
+	}
+}
+
+func TestJoinRejectsPublishedPortConflictsAcrossNetworks(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	for _, network := range []struct{name, subnet string}{
+		{name: "frontend", subnet: "172.30.71.0/24"},
+		{name: "backend", subnet: "172.30.72.0/24"},
+	} {
+		if _, err := CreateWithRunner(context.Background(), network.name, CreateOptions{Subnet: network.subnet}, &fakeRunner{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mapping := PortMapping{HostIP: "127.0.0.1", HostPort: 8443, ContainerPort: 443}
+	if _, err := JoinWithRunner(context.Background(), "frontend", 3323, "container-front", &fakeRunner{}, mapping); err != nil {
+		t.Fatal(err)
+	}
+	wildcardConflict := &fakeRunner{}
+	if _, err := JoinWithRunner(context.Background(), "backend", 3324, "container-back", wildcardConflict, PortMapping{HostPort: 8443, ContainerPort: 8443}); err == nil {
+		t.Fatal("wildcard bind conflict across networks unexpectedly succeeded")
+	}
+	if len(wildcardConflict.calls) != 0 {
+		t.Fatalf("host port conflict modified host networking before rejection: %v", wildcardConflict.calls)
+	}
+	summary, err := Inspect("backend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ContainerCount != 0 {
+		t.Fatalf("rejected port conflict retained an IPAM lease: %+v", summary)
+	}
+}
+
+func TestJoinRollsBackPublishedRulesWhenFirewallSetupFails(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	if _, err := CreateWithRunner(context.Background(), "frontend", CreateOptions{Subnet: "172.30.73.0/24"}, &fakeRunner{}); err != nil {
+		t.Fatal(err)
+	}
+	// Nine link/namespace operations succeed. Fail the PREROUTING rule after
+	// enabling forwarding and then verify every partial rule and lease is cleaned.
+	runner := &fakeRunner{failAt: 11}
+	_, err := JoinWithRunner(context.Background(), "frontend", 3325, "container-firewall-fail", runner, PortMapping{HostPort: 8081, ContainerPort: 80})
+	if err == nil {
+		t.Fatal("injected firewall failure unexpectedly succeeded")
+	}
+	if _, err := Inspect("frontend"); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := Inspect("frontend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ContainerCount != 0 {
+		t.Fatalf("failed published-port setup retained IPAM allocation: %+v", summary)
+	}
+	if !strings.Contains(strings.Join(runner.calls, "\n"), "iptables -t nat -D PREROUTING") {
+		t.Fatalf("partial DNAT rule was not rolled back: %v", runner.calls)
+	}
+}
+
 func TestJoinRollsBackIPAMWhenNamespaceSetupFails(t *testing.T) {
 	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
 	if _, err := CreateWithRunner(context.Background(), "backend", CreateOptions{
