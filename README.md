@@ -259,12 +259,13 @@ boxr deploy example > boxr.deploy.json
 boxr deploy validate boxr.deploy.json
 boxr deploy plan boxr.deploy.json
 boxr deploy plan --json boxr.deploy.json
+boxr deploy pull boxr.deploy.json
 boxr deploy up boxr.deploy.json
 boxr deploy ps sample-app
 boxr deploy down sample-app
 ```
 
-Deployment manifests define named services, optional local OCI images, commands, existing Boxr container options, and `dependsOn` services. Boxr rejects missing dependencies, duplicate edges, invalid run options and cycles, then produces a stable dependency-first order, starting independent services concurrently within each dependency wave. Use `boxr deploy up FILE.json` for attached, fail-fast startup; `boxr deploy ps STACK` for stack-scoped status; and `boxr deploy down STACK` for reverse-order graceful shutdown. `deploy down --remove` also removes stopped records and logs. Service dependencies gate startup order, not application readiness; health checks, service DNS, bridge networking and detached daemon operation remain future work.
+Deployment manifests define named services, optional local OCI images, commands, existing Boxr container options, and `dependsOn` services. Boxr rejects missing dependencies, duplicate edges, invalid run options and cycles, then produces a stable dependency-first order, starting independent services concurrently within each dependency wave. Run `boxr deploy pull FILE.json` first to prefetch and verify each unique service image (with optional `--platform` and `--authfile`); `deploy up` only starts when every image is available locally. Use `boxr deploy up FILE.json` for attached, fail-fast startup; `boxr deploy ps STACK` for stack-scoped status; and `boxr deploy down STACK` for reverse-order graceful shutdown. `deploy down --remove` also removes stopped records and logs. Service dependencies gate startup order, not application readiness; health checks, service DNS, bridge networking and detached daemon operation remain future work.
 
 ## Run configuration
 

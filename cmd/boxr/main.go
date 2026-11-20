@@ -1452,6 +1452,7 @@ Usage:
   boxr config example
   boxr deploy validate FILE.json
   boxr deploy plan [--json] FILE.json
+  boxr deploy pull [--platform linux/ARCH[/VARIANT]] [--authfile PATH] FILE.json
   boxr deploy up [--dry-run] FILE.json
   boxr deploy ps [--json] STACK
   boxr deploy down [--time 10s] [--remove] STACK
@@ -2554,6 +2555,10 @@ var implementedFeatures = []string{
 	"safe optional deployment record and log removal",
 	"deployment lifecycle dry-run planning",
 	"parallel startup of dependency-independent deployment services",
+	"deployment-wide unique registry image prefetch",
+	"deployment pull platform selection",
+	"deployment pull registry auth-file support",
+	"canonical local image reference resolution before service start",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -2783,6 +2788,23 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintln(stdout, "\nPlan only: no container was created and no process was started.")
 		return 0
+	case "pull":
+		flags := flag.NewFlagSet("deploy pull", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		platform := flags.String("platform", "", "target image platform (default: linux/<host architecture>)")
+		authFile := flags.String("authfile", "", "registry auth file (Docker config.json or Podman auth.json)")
+		if err := flags.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if flags.NArg() != 1 {
+			fmt.Fprintln(stderr, "Usage: boxr deploy pull [--platform linux/ARCH[/VARIANT]] [--authfile PATH] FILE.json")
+			return 2
+		}
+		file, plan, code := loadDeploymentPlan(flags.Arg(0), stderr)
+		if code != 0 {
+			return code
+		}
+		return runDeploymentPull(file, plan, *platform, *authFile, stdout, stderr)
 	case "up":
 		flags := flag.NewFlagSet("deploy up", flag.ContinueOnError)
 		flags.SetOutput(stderr)
@@ -2987,6 +3009,75 @@ func waitForDeploymentStart(ctx context.Context, name string, timeout time.Durat
 	}
 }
 
+func resolveDeploymentImageReference(reference string) (string, error) {
+	if _, err := imageStore.Verify(reference); err == nil {
+		return reference, nil
+	}
+	parsed, err := registry.ParseReference(reference)
+	if err != nil {
+		return "", fmt.Errorf("parse image reference: %w", err)
+	}
+	localReference := parsed.LocalReference()
+	if _, err := imageStore.Verify(localReference); err != nil {
+		return "", fmt.Errorf("image is not present in the local store: %w", err)
+	}
+	return localReference, nil
+}
+
+func runDeploymentPull(file deploy.File, plan deploy.Plan, platform, authFile string, stdout, stderr io.Writer) int {
+	seen := make(map[string]string, len(plan.Services))
+	pulled := 0
+	for _, service := range plan.Services {
+		if service.Image == "" {
+			continue
+		}
+		localReference, resolveErr := resolveDeploymentImageReference(service.Image)
+		deduplicationKey := ""
+		if resolveErr == nil {
+			deduplicationKey = "local:" + localReference
+		} else {
+			parsed, err := registry.ParseReference(service.Image)
+			if err != nil {
+				fmt.Fprintf(stderr, "boxr deploy pull: service %s has an invalid image reference: %v\n", service.Name, err)
+				return 1
+			}
+			deduplicationKey = "registry:" + parsed.LocalReference()
+		}
+		if previous, exists := seen[deduplicationKey]; exists {
+			fmt.Fprintf(stdout, "service %s reuses image %s (already handled for %s)\n", service.Name, service.Image, previous)
+			continue
+		}
+		seen[deduplicationKey] = service.Name
+		if resolveErr == nil {
+			fmt.Fprintf(stdout, "image %s already present locally as %s\n", service.Image, localReference)
+			continue
+		}
+
+		fmt.Fprintf(stdout, "pulling image %s for service %s\n", service.Image, service.Name)
+		pullArgs := []string{"pull"}
+		if platform != "" {
+			pullArgs = append(pullArgs, "--platform", platform)
+		}
+		if authFile != "" {
+			pullArgs = append(pullArgs, "--authfile", authFile)
+		}
+		pullArgs = append(pullArgs, service.Image)
+		if code := runImage(pullArgs, stdout, stderr); code != 0 {
+			fmt.Fprintf(stderr, "boxr deploy pull: image pull failed for service %s\n", service.Name)
+			return code
+		}
+		localReference, err := resolveDeploymentImageReference(service.Image)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr deploy pull: downloaded image for service %s could not be verified locally: %v\n", service.Name, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "verified image %s as %s\n", service.Image, localReference)
+		pulled++
+	}
+	fmt.Fprintf(stdout, "deployment %s: all %d image reference(s) are available locally (%d pulled)\n", file.Name, len(seen), pulled)
+	return 0
+}
+
 func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeout time.Duration, stdout, stderr io.Writer) int {
 	if runtime.GOOS != "linux" {
 		fmt.Fprintln(stderr, "boxr deploy up: service execution requires Linux")
@@ -3005,16 +3096,19 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 	for _, record := range existing {
 		existingNames[record.Name] = true
 	}
+	resolvedImages := make(map[string]string, len(plan.Services))
 	for _, service := range plan.Services {
 		if existingNames[service.ContainerName] {
 			fmt.Fprintf(stderr, "boxr deploy up: container %q already exists; use deploy down --remove %s before retrying\n", service.ContainerName, file.Name)
 			return 1
 		}
 		if service.Image != "" {
-			if _, err := imageStore.Verify(service.Image); err != nil {
-				fmt.Fprintf(stderr, "boxr deploy up: image %q for service %q is not ready: %v\n", service.Image, service.Name, err)
+			localReference, err := resolveDeploymentImageReference(service.Image)
+			if err != nil {
+				fmt.Fprintf(stderr, "boxr deploy up: image %q for service %q is not ready: %v (run boxr deploy pull first)\n", service.Image, service.Name, err)
 				return 1
 			}
+			resolvedImages[service.Name] = localReference
 		}
 	}
 	executable, err := os.Executable()
@@ -3051,7 +3145,11 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 				stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
 				return 1
 			}
-			process, err := startDeploymentProcess(executable, file.Name, orderIndex[serviceName], serviceName, file.Services[serviceName], stdout, stderr)
+			service := file.Services[serviceName]
+			if resolvedImage, exists := resolvedImages[serviceName]; exists {
+				service.Image = resolvedImage
+			}
+			process, err := startDeploymentProcess(executable, file.Name, orderIndex[serviceName], serviceName, service, stdout, stderr)
 			if err != nil {
 				fmt.Fprintf(stderr, "boxr deploy up: %v\n", err)
 				stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)

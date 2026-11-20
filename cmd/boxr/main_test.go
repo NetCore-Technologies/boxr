@@ -578,6 +578,74 @@ func TestDeployStatusDryRunDownAndRemoval(t *testing.T) {
 	}
 }
 
+
+func TestDeployPullSkipsCachedImagesAndDeduplicatesCanonicalReferences(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "version"), []byte("deployment image fixture"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	localReference := "registry-1.docker.io/library/alpine:local"
+	if _, err := imageStore.ImportRootFS(root, localReference); err != nil {
+		t.Fatalf("import test image: %v", err)
+	}
+	manifest := `{
+		"version": 1,
+		"name": "prefetch-test",
+		"services": {
+			"api": {
+				"image": "alpine:local",
+				"command": ["/bin/true"],
+				"options": {}
+			},
+			"worker": {
+				"image": "registry-1.docker.io/library/alpine:local",
+				"command": ["/bin/true"],
+				"options": {}
+			}
+		}
+	}`
+	path := filepath.Join(t.TempDir(), "deployment.json")
+	if err := os.WriteFile(path, []byte(manifest), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"deploy", "pull", path}, &out, &errOut); code != 0 {
+		t.Fatalf("deploy pull: code=%d stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	if strings.Count(out.String(), "image alpine:local already present locally") != 1 {
+		t.Fatalf("cached image was not reported exactly once: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "reuses image registry-1.docker.io/library/alpine:local") {
+		t.Fatalf("canonical alias was not deduplicated: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "all 1 image reference(s) are available locally (0 pulled)") {
+		t.Fatalf("final prefetch summary missing: %q", out.String())
+	}
+	if _, err := imageStore.Verify(localReference); err != nil {
+		t.Fatalf("cached image was damaged: %v", err)
+	}
+}
+
+func TestResolveDeploymentImageReferenceFindsCanonicalDockerHubAlias(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "marker"), []byte("canonical"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	want := "registry-1.docker.io/library/busybox:test"
+	if _, err := imageStore.ImportRootFS(root, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveDeploymentImageReference("busybox:test")
+	if err != nil {
+		t.Fatalf("resolve shorthand image: %v", err)
+	}
+	if got != want {
+		t.Fatalf("resolved reference = %q, want %q", got, want)
+	}
+}
+
 func TestVersionJSONOutput(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run([]string{"version", "--json"}, &out, &errOut); code != 0 {

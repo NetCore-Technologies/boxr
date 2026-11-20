@@ -43,8 +43,16 @@ Version 1 is strict JSON. Unknown fields, trailing JSON values, oversized files,
 }
 ```
 
-Each service uses the existing `container.Options` validation rules. Define either a local OCI image reference, a command, or both. The command is an argument array, not a shell string. Images must already exist in Boxr's local image store before `deploy up`; image pulling remains an explicit `boxr image pull` operation. A service can list up to 64 dependencies; a deployment can contain up to 64 services. The manifest and command data are bounded to avoid unbounded input.
+Each service uses the existing `container.Options` validation rules. Define either an OCI image reference, a command, or both. The command is an argument array, not a shell string. Run `boxr deploy pull FILE.json` to prefetch all unique image references before startup; `--platform linux/ARCH[/VARIANT]` selects the target and `--authfile PATH` supplies Docker/Podman registry credentials. Already available local images are verified and skipped, and equivalent Docker Hub shorthand/canonical references are deduplicated. Images are checked again immediately before `deploy up`. A service can list up to 64 dependencies; a deployment can contain up to 64 services. The manifest and command data are bounded to avoid unbounded input.
 
+## Deployment image prefetch
+
+```sh
+boxr deploy pull boxr.deploy.json
+boxr deploy pull --platform linux/arm64 --authfile ~/.docker/config.json boxr.deploy.json
+```
+
+The pull command walks services in deterministic order, skips services without image references, verifies images already in the local OCI store and downloads each unique missing registry reference once. It reuses the normal Boxr registry credential resolution and OCI/Docker layer verification path. A failed pull stops the prefetch operation before any service is started; successfully imported earlier images remain cached and can be reused on the next attempt. `deploy up` resolves each service image to the actual local tag and performs another integrity check before creating a service process.
 ## Runtime lifecycle
 
 ```sh
