@@ -1252,6 +1252,8 @@ func runRemove(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("rm", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	all := flags.Bool("all", false, "remove all completed container records")
+	force := flags.Bool("force", false, "stop running containers and cancel pending restarts before removal")
+	flags.BoolVar(force, "f", false, "alias for --force")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -1288,6 +1290,20 @@ func runRemove(args []string, stdout, stderr io.Writer) int {
 		if err != nil {
 			fmt.Fprintf(stderr, "boxr rm: %v\n", err)
 			return 1
+		}
+		if record.Status == "running" || record.Status == "restarting" {
+			if !*force {
+				fmt.Fprintf(stderr, "boxr rm: container %s is %s; use --force to stop it before removal\n", record.ID, record.Status)
+				return 1
+			}
+			if code := runStop([]string{"--time", "0s", record.ID}, stdout, stderr); code != 0 {
+				return code
+			}
+			record, err = state.Get(record.ID)
+			if err != nil {
+				fmt.Fprintf(stderr, "boxr rm: reload stopped container: %v\n", err)
+				return 1
+			}
 		}
 		if record.Status == "created" {
 			err = state.RemoveCreated(record.ID)
@@ -1979,7 +1995,7 @@ Usage:
   boxr volume rm NAME [...]
   boxr volume prune (--force|--dry-run) [--json] [--filter name=VALUE|label=KEY[=VALUE]]
   boxr stats [--watch] [--interval 1s] [--count N] [--format json|table] ID|NAME
-  boxr rm ID|NAME [...]
+  boxr rm [-f|--force] ID|NAME [...]
   boxr events [--follow] [--interval 500ms] [--count N] [--limit N] [--since 1h|RFC3339] [--action ACTION] [--container ID|NAME] [--format table|json]
   boxr prune [--older-than 168h] [--dry-run] [--json]
   boxr rootfs inspect PATH
@@ -3422,7 +3438,8 @@ var implementedFeatures = []string{
 	"top-level tag command creates local image aliases without copying content-addressed blobs",
 	"top-level rmi command removes unused local image tags while preserving shared content-addressed blobs",
 	"container namespace exposes Docker-style lifecycle subcommands through the native verified Boxr operations",,
-	"native rm safely removes created containers without weakening running-container protection"
+	"native rm safely removes created containers without weakening running-container protection",
+	"native rm --force stops running containers or cancels pending restarts before safe removal"
 	"native create command records a verified image-backed container without starting it",
 	"native start command launches a created image-backed container through the detached supervisor",
 	"native start command restarts stopped image-backed containers through the detached supervisor",
