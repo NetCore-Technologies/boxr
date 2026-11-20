@@ -933,6 +933,12 @@ func StaleAttachments(liveContainerIDs map[string]struct{}) ([]StaleAttachment, 
 	return result, nil
 }
 
+// PruneStale reclaims stale bridge attachments using the host iproute2 and
+// firewall tools.
+func PruneStale(liveContainerIDs map[string]struct{}) (PruneReport, error) {
+	return PruneStaleWithRunner(context.Background(), liveContainerIDs, commandRunner{})
+}
+
 // PruneStaleWithRunner disconnects stale leases only after proving that any
 // remaining host veth carries the Boxr ownership alias for that network/ID.
 // A foreign or unmarked interface is left untouched and its lease is retained.
