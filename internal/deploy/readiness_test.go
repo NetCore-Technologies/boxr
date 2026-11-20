@@ -97,6 +97,8 @@ func TestReadinessProbeRejectsUnsafeAndUnboundedTargets(t *testing.T) {
 		"missing target":                  {},
 		"both target types":               {TCPAddress: "127.0.0.1:80", HTTPURL: "http://127.0.0.1/"},
 		"external tcp host":                {TCPAddress: "example.com:80"},
+		"localhost hostname":               {TCPAddress: "localhost:80"},
+		"TCP probe with HTTP status":        {TCPAddress: "127.0.0.1:80", ExpectedStatus: http.StatusOK},
 		"invalid tcp port":                 {TCPAddress: "127.0.0.1:0"},
 		"external http host":               {HTTPURL: "http://example.com/health"},
 		"credentials in url":               {HTTPURL: "http://user:password@127.0.0.1/health"},
