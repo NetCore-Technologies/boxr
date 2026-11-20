@@ -31,27 +31,27 @@ type composeNetwork struct {
 }
 
 type composeService struct {
-	Image        string    `yaml:"image"`
-	Command      yaml.Node `yaml:"command"`
-	Entrypoint   yaml.Node `yaml:"entrypoint"`
-	Build        yaml.Node `yaml:"build"`
-	Volumes      yaml.Node `yaml:"volumes"`
-	Healthcheck  yaml.Node `yaml:"healthcheck"`
-	DependsOn    yaml.Node `yaml:"depends_on"`
-	Environment  yaml.Node `yaml:"environment"`
-	EnvFile      yaml.Node `yaml:"env_file"`
-	Ports        yaml.Node `yaml:"ports"`
-	Networks     yaml.Node `yaml:"networks"`
-	Labels       yaml.Node `yaml:"labels"`
-	Profiles     []string  `yaml:"profiles"`
-	WorkingDir   string    `yaml:"working_dir"`
-	Hostname     string    `yaml:"hostname"`
-	NetworkMode  string    `yaml:"network_mode"`
-	Restart      string    `yaml:"restart"`
-	ContainerName string   `yaml:"container_name"`
-	TTY          bool      `yaml:"tty"`
-	StdinOpen    bool      `yaml:"stdin_open"`
-	Privileged   bool      `yaml:"privileged"`
+	Image         string    `yaml:"image"`
+	Command       yaml.Node `yaml:"command"`
+	Entrypoint    yaml.Node `yaml:"entrypoint"`
+	Build         yaml.Node `yaml:"build"`
+	Volumes       yaml.Node `yaml:"volumes"`
+	Healthcheck   yaml.Node `yaml:"healthcheck"`
+	DependsOn     yaml.Node `yaml:"depends_on"`
+	Environment   yaml.Node `yaml:"environment"`
+	EnvFile       yaml.Node `yaml:"env_file"`
+	Ports         yaml.Node `yaml:"ports"`
+	Networks      yaml.Node `yaml:"networks"`
+	Labels        yaml.Node `yaml:"labels"`
+	Profiles      []string  `yaml:"profiles"`
+	WorkingDir    string    `yaml:"working_dir"`
+	Hostname      string    `yaml:"hostname"`
+	NetworkMode   string    `yaml:"network_mode"`
+	Restart       string    `yaml:"restart"`
+	ContainerName string    `yaml:"container_name"`
+	TTY           bool      `yaml:"tty"`
+	StdinOpen     bool      `yaml:"stdin_open"`
+	Privileged    bool      `yaml:"privileged"`
 }
 
 // decodeCompose reads the deliberately supported Compose subset into Boxr's
