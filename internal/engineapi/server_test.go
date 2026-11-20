@@ -1093,11 +1093,19 @@ func TestDockerContainerStartRestartsStoppedEngineContainer(t *testing.T) {
 	if launchedExecutable == "" {
 		t.Fatal("Engine API start did not invoke the Boxr executable")
 	}
-	wantArgs := []string{"run", "--config"}
-	if len(launchedArgs) < len(wantArgs)+5 || launchedArgs[0] != wantArgs[0] || launchedArgs[1] != wantArgs[1] {
-		t.Fatalf("Engine API start arguments = %#v", launchedArgs)
+	configPath, err := state.EngineConfigPath(record.ID)
+	if err != nil {
+		t.Fatalf("resolve Engine API start config: %v", err)
 	}
-	if !strings.Contains(strings.Join(launchedArgs, " "), "--internal-existing-id "+record.ID) {
-		t.Fatalf("Engine API start did not target the existing stopped record: %#v", launchedArgs)
+	if len(launchedArgs) != 8 ||
+		launchedArgs[0] != "run" ||
+		launchedArgs[1] != "--config" ||
+		launchedArgs[2] != configPath ||
+		launchedArgs[3] != "--image" ||
+		launchedArgs[4] != reference ||
+		launchedArgs[5] != "--detach" ||
+		launchedArgs[6] != "--internal-existing-id" ||
+		launchedArgs[7] != record.ID {
+		t.Fatalf("Engine API start arguments = %#v", launchedArgs)
 	}
 }
