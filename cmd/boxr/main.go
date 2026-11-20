@@ -3126,6 +3126,7 @@ var implementedFeatures = []string{
 	"Engine API removes unused local image tags and rejects removal while containers reference them",
 	"Engine API pulls and verifies OCI/Docker registry images using Docker X-Registry-Auth and Linux platform selection",
 	"Engine API pushes verified local single-layer OCI images using Docker X-Registry-Auth and registry upload verification",
+	"Engine API creates Docker image tag aliases from verified OCI content and protects tags referenced by containers",
 }
 
 func printFeatures(stdout io.Writer) {

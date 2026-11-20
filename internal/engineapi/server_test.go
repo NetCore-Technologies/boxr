@@ -378,6 +378,42 @@ func newEngineAPITestPushRegistry(t *testing.T) (*httptest.Server, string, func(
 	return server, host, check
 }
 
+func TestEngineAPIImageTagCreatesDockerCompatibleAliases(t *testing.T) {
+	server := setupEngineAPITest(t)
+	const source = "registry.example/team/boxr-tag:v1"
+	importEngineAPITestImage(t, source)
+	response := engineAPIRequest(server, http.MethodPost, "/images/"+source+"/tag?repo=registry.example/team/boxr-tag&tag=stable")
+	if response.Code != http.StatusCreated { t.Fatalf("tag status=%d body=%s", response.Code, response.Body.String()) }
+	alias, err := imageStore.Inspect("registry.example/team/boxr-tag:stable")
+	if err != nil { t.Fatalf("tagged image not found: %v", err) }
+	original, err := imageStore.Inspect(source)
+	if err != nil { t.Fatal(err) }
+	if alias.Digest != original.Digest || alias.DiffIDs[0] != original.DiffIDs[0] {
+		t.Fatalf("tagged image does not refer to source content: alias=%+v original=%+v", alias, original)
+	}
+	response = engineAPIRequest(server, http.MethodPost, "/images/"+source+"/tag")
+	if response.Code != http.StatusCreated { t.Fatalf("default tag status=%d body=%s", response.Code, response.Body.String()) }
+	if _, err := imageStore.Inspect("registry.example/team/boxr-tag:latest"); err != nil { t.Fatalf("default latest alias not found: %v", err) }
+}
+
+func TestEngineAPIImageTagRejectsInvalidReferencesAndInUseTargets(t *testing.T) {
+	server := setupEngineAPITest(t)
+	response := engineAPIRequest(server, http.MethodPost, "/images/registry.example/team/missing:v1/tag?repo=registry.example/team/missing&tag=alias")
+	if response.Code != http.StatusNotFound { t.Fatalf("missing source status=%d body=%s", response.Code, response.Body.String()) }
+	response = engineAPIRequest(server, http.MethodPost, "/images/registry.example/team/boxr%20invalid:v1/tag")
+	if response.Code != http.StatusBadRequest { t.Fatalf("invalid source reference status=%d body=%s", response.Code, response.Body.String()) }
+
+	const source = "registry.example/team/boxr-in-use:v1"
+	importEngineAPITestImage(t, source)
+	const target = "registry.example/team/boxr-in-use:stable"
+	record, err := state.Create("tag-target-user", []string{"/bin/app"}, container.Options{}, map[string]string{"io.boxr.image": target})
+	if err != nil { t.Fatal(err) }
+	defer state.RemoveCreated(record.ID)
+	response = engineAPIRequest(server, http.MethodPost, "/images/"+source+"/tag?repo=registry.example/team/boxr-in-use&tag=stable")
+	if response.Code != http.StatusConflict { t.Fatalf("retag in-use target status=%d body=%s", response.Code, response.Body.String()) }
+	if _, err := imageStore.Inspect(target); err == nil { t.Fatal("in-use target tag should not have been created or overwritten") }
+}
+
 func TestEngineAPIImagePushPublishesVerifiedOCIImageWithDockerAuth(t *testing.T) {
 	server := setupEngineAPITest(t)
 	registryServer, registryHost, check := newEngineAPITestPushRegistry(t)
