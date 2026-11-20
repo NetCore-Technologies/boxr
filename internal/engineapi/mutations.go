@@ -14,8 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
-	"time"
+		"time"
 
 	"github.com/manit6752025/boxr/internal/config"
 	"github.com/manit6752025/boxr/internal/container"
@@ -184,7 +183,7 @@ func createContainerRecord(name string, input dockerCreateRequest) (state.Record
 		options.Workdir = image.RuntimeConfig.WorkingDir
 	}
 	options.Hostname = input.Hostname
-	options.Env = container.MergeEnvironment(input.Env, image.RuntimeConfig.Env)
+	options.Env = container.MergeEnvironment(image.RuntimeConfig.Env, input.Env)
 	options.Labels = mergeDockerLabels(image.RuntimeConfig.Labels, input.Labels)
 	if _, exists := options.Labels["io.boxr.image"]; exists {
 		return empty, fmt.Errorf("label io.boxr.image is reserved by Boxr")
@@ -555,14 +554,3 @@ func (s *Server) handleContainerStop(writer http.ResponseWriter, request *http.R
 	}
 }
 
-func engineCreateStatus(errorValue error) int {
-	if errorValue == nil {
-		return http.StatusCreated
-	}
-	if errors.Is(errorValue, os.ErrNotExist) {
-		return http.StatusNotFound
-	}
-	return http.StatusBadRequest
-}
-
-var _ = syscall.SIGTERM
