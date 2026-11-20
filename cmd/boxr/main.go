@@ -3044,6 +3044,8 @@ var implementedFeatures = []string{
 	"Compose bind and external volume mounts support explicit read-only and read-write modes",
 	"image-backed deployments defer bind mounts until after image rootfs extraction",
 	"Compose-created volumes drivers options labels long-form mounts and propagation flags are rejected",
+	"Compose read_only maps image-backed services to a read-only root filesystem",
+	"Compose cap_drop validates and applies supported Linux capability drops",
 }
 
 func printFeatures(stdout io.Writer) {
