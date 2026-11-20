@@ -825,3 +825,13 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 817. Compose-created volumes drivers options labels long-form mounts and propagation flags are rejected
 818. Compose read_only maps image-backed services to a read-only root filesystem
 819. Compose cap_drop validates and applies supported Linux capability drops
+820. daemon serves the initial Docker Engine API through a local Unix domain socket only
+821. daemon refuses TCP exposure symlinked ancestors shared writable socket directories and non-socket path replacement
+822. daemon detects active and stale sockets uses owner-only 0600 permissions and removes only its own socket
+823. Engine API implements Docker ping and negotiated version information within API v1.24 to v1.45
+824. Engine API exposes runtime-backed info and filtered container list metadata
+825. Engine API exposes container inspect state mounts network port bindings and restart metadata
+826. Engine API streams bounded tail and follow container logs in Docker multiplexed stdout frames
+827. Engine API exposes cgroup v2 CPU memory and PID stats with snapshot and streaming responses
+828. Engine API streams persisted container lifecycle events and lists OCI image tags
+829. unsupported Docker Engine mutations and TCP listeners are explicitly outside the API contract
