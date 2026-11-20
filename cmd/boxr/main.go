@@ -1032,7 +1032,6 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-
 func runSupportBundle(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("support-bundle", flag.ContinueOnError)
 	flags.SetOutput(stderr)

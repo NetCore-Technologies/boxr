@@ -38,7 +38,7 @@ jobs:
           if [ -n "$files" ]; then
             printf 'Go files need gofmt:\n%s\n' "$files"
             while IFS= read -r file; do
-              gofmt -d "$file"
+              gofmt -d "$file" || true
             done <<< "$files"
             exit 1
           fi
