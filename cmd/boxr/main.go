@@ -1284,7 +1284,17 @@ func runRemove(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	for _, query := range flags.Args() {
-		if err := state.Remove(query); err != nil {
+		record, err := state.Get(query)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr rm: %v\n", err)
+			return 1
+		}
+		if record.Status == "created" {
+			err = state.RemoveCreated(record.ID)
+		} else {
+			err = state.Remove(record.ID)
+		}
+		if err != nil {
 			fmt.Fprintf(stderr, "boxr rm: %v\n", err)
 			return 1
 		}
