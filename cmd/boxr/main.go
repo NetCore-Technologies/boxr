@@ -52,6 +52,11 @@ var (
 var (
 	detachedReadyWriter *os.File
 	detachedReadySent   bool
+	launchCreatedContainer = func(executable string, args []string, stdout, stderr io.Writer) error {
+		command := exec.Command(executable, args...)
+		command.Stdout, command.Stderr = stdout, stderr
+		return command.Run()
+	}
 )
 
 func main() {
@@ -131,6 +136,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runRootFS(args[1:], stdout, stderr)
 	case "image":
 		return runImage(args[1:], stdout, stderr)
+	case "pull":
+		return runImage(append([]string{"pull"}, args[1:]...), stdout, stderr)
+	case "push":
+		return runImage(append([]string{"push"}, args[1:]...), stdout, stderr)
 	case "features":
 		return runFeatures(args[1:], stdout, stderr)
 	case "completion":
@@ -169,6 +178,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runPrune(args[1:], stdout, stderr)
 	case "run":
 		return runContainer(args[1:], stdout, stderr)
+	case "create":
+		return runCreate(args[1:], stdout, stderr)
+	case "start":
+		return runStart(args[1:], stdout, stderr)
 	case "exec":
 		return runExec(args[1:], stdout, stderr)
 	default:
@@ -179,6 +192,79 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func runContainer(args []string, stdout, stderr io.Writer) int {
+	return runContainerMode(args, stdout, stderr, false)
+}
+
+func runCreate(args []string, stdout, stderr io.Writer) int {
+	normalized, err := normalizeCreateArguments(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr create: %v\n", err)
+		return 2
+	}
+	return runContainerMode(normalized, stdout, stderr, true)
+}
+
+func normalizeCreateArguments(args []string) []string {
+	imageFlagProvided := false
+	position := -1
+	endOfOptions := false
+	for index := 0; index < len(args); index++ {
+		value := args[index]
+		if value == "--" {
+			endOfOptions = true
+			if index+1 < len(args) {
+				position = index + 1
+			}
+			break
+		}
+		if strings.HasPrefix(value, "--") {
+			name, _, hasInlineValue := strings.Cut(value, "=")
+			if name == "--image" {
+				imageFlagProvided = true
+			}
+			if !hasInlineValue && createFlagTakesValue(name) {
+				index++
+			}
+			continue
+		}
+		if strings.HasPrefix(value, "-") {
+			if value == "-p" {
+				index++
+			}
+			continue
+		}
+		position = index
+		break
+	}
+	if imageFlagProvided || position < 0 || position >= len(args) {
+		return args
+	}
+	image := args[position]
+	if endOfOptions {
+		result := append([]string(nil), args[:position-1]...)
+		result = append(result, "--image", image, "--")
+		return append(result, args[position+1:]...)
+	}
+	result := append([]string(nil), args[:position]...)
+	result = append(result, "--image", image)
+	return append(result, args[position+1:]...)
+}
+
+func createFlagTakesValue(name string) bool {
+	switch name {
+	case "--config", "--image", "--name", "--restart", "--restart-max-retries", "--restart-delay",
+		"--hostname", "--memory", "--memory-high", "--memory-low", "--memory-min", "--memory-swap",
+		"--cpus", "--cpu-weight", "--io-weight", "--pids-limit", "--workdir", "--rootfs",
+		"--overlay-dir", "--mount", "--volume", "--tmpfs", "--network", "--network-name",
+		"--publish", "--seccomp-profile", "--security-profile", "--resource-profile", "--cap-drop",
+		"--env", "--env-file", "--label":
+		return true
+	default:
+		return false
+	}
+}
+
+func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) int {
 	var detached bool
 	var opts container.Options
 	var memory, memoryHigh, memoryLow, memoryMin, memorySwap string
@@ -234,12 +320,20 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 	}
 	capDrop = append(capDrop, opts.DropCapabilities...)
 
-	flags := flag.NewFlagSet("run", flag.ContinueOnError)
+	flagName := "run"
+	if createOnly {
+		flagName = "create"
+	}
+	flags := flag.NewFlagSet(flagName, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var existingID string
 	flags.StringVar(&existingID, "internal-existing-id", "", "internal Engine API existing container identity")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: boxr run [options] [--] COMMAND [ARG...]")
+		if createOnly {
+			fmt.Fprintln(stderr, "Usage: boxr create [options] IMAGE [COMMAND [ARG...]]")
+		} else {
+			fmt.Fprintln(stderr, "Usage: boxr run [options] [--] COMMAND [ARG...]")
+		}
 		fmt.Fprintln(stderr, "\nOptions:")
 		flags.PrintDefaults()
 	}
@@ -294,6 +388,19 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 	}
 	if detached && dryRun {
 		fmt.Fprintln(stderr, "boxr run: --detach cannot be combined with --dry-run")
+		return 2
+	}
+	if createOnly && (detached || dryRun) {
+		fmt.Fprintln(stderr, "boxr create: creation cannot be combined with --detach or --dry-run")
+		return 2
+	}
+	if createOnly && existingID != "" {
+		fmt.Fprintln(stderr, "boxr create: internal existing-container mode is not available")
+		return 2
+	}
+	if createOnly && imageReference == "" {
+		fmt.Fprintln(stderr, "boxr create: an image is required (use boxr pull first, then pass IMAGE)")
+		flags.Usage()
 		return 2
 	}
 	if existingID != "" {
@@ -388,6 +495,10 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 			// A stable absolute placeholder is sufficient for option validation;
 			// dry-run never creates or extracts a rootfs.
 			opts.RootFS = filepath.Join(os.TempDir(), "boxr-image-dry-run")
+		} else if createOnly {
+			// The created record stores the verified image reference. Its
+			// rootfs is unpacked only when start launches the container.
+			opts.RootFS = filepath.Join(os.TempDir(), "boxr-image-create-validation")
 		} else {
 			var err error
 			imageStage, err = os.MkdirTemp("", "boxr-run-image-*")
@@ -531,13 +642,19 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if opts.RestartPolicy != "" && opts.RestartPolicy != "no" &&
-		!detached && detachedReadyWriter == nil && !dryRun {
+		!detached && detachedReadyWriter == nil && !dryRun && !createOnly {
 		fmt.Fprintln(stderr, "boxr run: restart policies require --detach")
 		return 2
 	}
 	if opts.RestartPolicy != "" && opts.RestartPolicy != "no" && opts.AutoRemove {
 		fmt.Fprintln(stderr, "boxr run: restart policies cannot be combined with --rm")
 		return 2
+	}
+	if createOnly {
+		// The record keeps runtime-only mount settings, while the private
+		// sidecar is a safe bootstrap config that can be loaded before the
+		// image rootfs has been unpacked.
+		opts.RootFS = ""
 	}
 	if dryRun {
 		plan := buildRunPlan(commandArgs, opts)
@@ -564,6 +681,30 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "boxr run: state: %v\n", err)
 		return 1
+	}
+	if createOnly {
+		savedOptions := opts
+		savedOptions.Env = append([]string(nil), opts.Env...)
+		savedOptions.BindMounts = nil
+		savedOptions.ReadOnlyRootFS = false
+		savedOptions.MountProc = false
+		savedOptions.TmpfsMounts = nil
+		savedOptions.OverlayDir = ""
+		runFile := config.RunFile{
+			Version: 1, Name: record.Name, Command: providedCommand,
+			Options: savedOptions, Metadata: record.Labels,
+		}
+		configData, saveErr := json.Marshal(runFile)
+		if saveErr == nil {
+			saveErr = state.SaveEngineConfig(record.ID, configData)
+		}
+		if saveErr != nil {
+			_ = state.RemoveCreated(record.ID)
+			fmt.Fprintf(stderr, "boxr create: persist private start configuration: %v\n", saveErr)
+			return 1
+		}
+		fmt.Fprintf(stdout, "created %s\n", record.ID)
+		return 0
 	}
 	logFile, err := state.OpenLog(record.ID)
 	if err != nil {
@@ -806,6 +947,60 @@ func buildRunPlan(command []string, opts container.Options) runPlan {
 		SeccompProfile: opts.SeccompProfile, SecurityProfile: opts.SecurityProfile, ResourceProfile: opts.ResourceProfile, NoContainerStateMade: true,
 	}
 	return plan
+}
+
+func runStart(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("start", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 1 {
+		fmt.Fprintln(stderr, "Usage: boxr start ID|NAME")
+		return 2
+	}
+	record, err := state.Get(flags.Arg(0))
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr start: %v\n", err)
+		return 1
+	}
+	if record.Status == "running" || record.Status == "restarting" {
+		fmt.Fprintf(stdout, "container %s is already running\n", record.ID)
+		return 0
+	}
+	if record.Status != "created" {
+		fmt.Fprintf(stderr, "boxr start: container %s must be in created state (current state: %s)\n", record.ID, record.Status)
+		return 1
+	}
+	image := record.Labels["io.boxr.image"]
+	if image == "" {
+		fmt.Fprintf(stderr, "boxr start: container %s has no saved image reference\n", record.ID)
+		return 1
+	}
+	if _, err := state.ReadEngineConfig(record.ID); err != nil {
+		fmt.Fprintf(stderr, "boxr start: read private start configuration: %v\n", err)
+		return 1
+	}
+	configPath, err := state.EngineConfigPath(record.ID)
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr start: resolve private start configuration: %v\n", err)
+		return 1
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr start: locate executable: %v\n", err)
+		return 1
+	}
+	startArgs := []string{
+		"run", "--config", configPath, "--image", image,
+		"--detach", "--internal-existing-id", record.ID,
+	}
+	if err := launchCreatedContainer(executable, startArgs, stdout, stderr); err != nil {
+		fmt.Fprintf(stderr, "boxr start: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "started %s\n", record.ID)
+	return 0
 }
 
 func runPS(args []string, stdout, stderr io.Writer) int {
@@ -1660,6 +1855,10 @@ func printUsage(w io.Writer) {
 
 Usage:
   boxr daemon [--host unix:///absolute/path/engine.sock]
+  boxr pull [--platform linux/ARCH[/VARIANT]] [--authfile PATH] IMAGE
+  boxr push [--authfile PATH] LOCAL:TAG [REGISTRY/IMAGE:TAG]
+  boxr create [options] IMAGE [COMMAND [ARG...]]
+  boxr start ID|NAME
   boxr run [options] [--detach|-d] [--dry-run] COMMAND [ARG...]
   boxr exec [options] CONTAINER COMMAND [ARG...]
   boxr version [--json]
@@ -3126,7 +3325,10 @@ var implementedFeatures = []string{
 	"Engine API removes unused local image tags and rejects removal while containers reference them",
 	"Engine API pulls and verifies OCI/Docker registry images using Docker X-Registry-Auth and Linux platform selection",
 	"Engine API pushes verified local single-layer OCI images using Docker X-Registry-Auth and registry upload verification",
-	"Engine API creates Docker image tag aliases from verified OCI content and protects tags referenced by containers",
+	"Engine API creates Docker image tag aliases from verified OCI content and protects tags referenced by containers",,
+	"top-level pull command reuses verified OCI and Docker registry image downloads",
+	"native create command records a verified image-backed container without starting it",
+	"native start command launches a created image-backed container through the detached supervisor"
 }
 
 func printFeatures(stdout io.Writer) {
