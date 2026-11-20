@@ -3087,10 +3087,11 @@ func loadDeploymentPlan(path string, profiles []string, stderr io.Writer) (deplo
 }
 
 type deploymentProcess struct {
-	service   string
-	name      string
-	configDir string
-	command   *exec.Cmd
+	service     string
+	name        string
+	configDir   string
+	stopTimeout time.Duration
+	command     *exec.Cmd
 }
 
 type deploymentProcessExit struct {
@@ -3156,11 +3157,15 @@ func startDeploymentProcess(executable, stack string, order int, serviceName str
 	}
 	options.Name = deploy.ContainerName(stack, serviceName)
 	options.AutoRemove = false
-	options.Labels = mergeLabels(options.Labels, map[string]string{
+	internalLabels := map[string]string{
 		deploy.StackLabel:   stack,
 		deploy.ServiceLabel: serviceName,
 		deploy.OrderLabel:   strconv.Itoa(order),
-	})
+	}
+	if service.StopTimeoutMS > 0 {
+		internalLabels[deploy.StopTimeoutLabel] = strconv.Itoa(service.StopTimeoutMS)
+	}
+	options.Labels = mergeLabels(options.Labels, internalLabels)
 	runFile := config.RunFile{
 		Version: 1,
 		Name:    options.Name,
@@ -3192,10 +3197,11 @@ func startDeploymentProcess(executable, stack string, order int, serviceName str
 		return nil, fmt.Errorf("start service %q: %w", serviceName, err)
 	}
 	return &deploymentProcess{
-		service:   serviceName,
-		name:      options.Name,
-		configDir: configDir,
-		command:   command,
+		service:     serviceName,
+		name:        options.Name,
+		configDir:   configDir,
+		stopTimeout: time.Duration(service.StopTimeoutMS) * time.Millisecond,
+		command:     command,
 	}, nil
 }
 
@@ -3522,54 +3528,99 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 }
 
 func stopDeploymentProcesses(processes []*deploymentProcess, exited map[string]deploymentProcessExit, exits <-chan deploymentProcessExit, timeout time.Duration, stdout, stderr io.Writer) {
+	type stopState struct {
+		graceDeadline time.Time
+		killDeadline  time.Time
+		killed        bool
+	}
+	pending := make(map[string]stopState, len(processes))
+	now := time.Now()
 	for index := len(processes) - 1; index >= 0; index-- {
 		process := processes[index]
 		if _, finished := exited[process.service]; finished || process.command.Process == nil {
 			continue
 		}
+		grace := timeout
+		if process.stopTimeout > 0 {
+			grace = process.stopTimeout
+		}
+		pending[process.service] = stopState{graceDeadline: now.Add(grace)}
 		if err := process.command.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			fmt.Fprintf(stderr, "boxr deploy: signal service %s: %v\n", process.service, err)
+			fmt.Fprintf(stderr, "boxr deploy: signal service %s: %v\\n", process.service, err)
 		}
 	}
-	remaining := len(processes) - len(exited)
-	if remaining <= 0 {
-		return
-	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	for remaining > 0 {
-		select {
-		case exitedService := <-exits:
-			if _, seen := exited[exitedService.service]; !seen {
-				exited[exitedService.service] = exitedService
-				remaining--
-				fmt.Fprintf(stdout, "stopped service %s\n", exitedService.service)
+
+	for len(pending) > 0 {
+		now = time.Now()
+		for index := len(processes) - 1; index >= 0; index-- {
+			process := processes[index]
+			state, exists := pending[process.service]
+			if !exists {
+				continue
 			}
-		case <-timer.C:
-			for index := len(processes) - 1; index >= 0; index-- {
-				process := processes[index]
-				if _, finished := exited[process.service]; finished || process.command.Process == nil {
-					continue
-				}
-				if err := process.command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-					fmt.Fprintf(stderr, "boxr deploy: kill service %s: %v\n", process.service, err)
-				}
-			}
-			for remaining > 0 {
-				select {
-				case exitedService := <-exits:
-					if _, seen := exited[exitedService.service]; !seen {
-						exited[exitedService.service] = exitedService
-						remaining--
+			if !state.killed && !now.Before(state.graceDeadline) {
+				if process.command.Process != nil {
+					if err := process.command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+						fmt.Fprintf(stderr, "boxr deploy: kill service %s: %v\\n", process.service, err)
 					}
-				case <-time.After(2 * time.Second):
-					fmt.Fprintln(stderr, "boxr deploy: one or more service supervisors did not exit after SIGKILL")
-					return
 				}
+				state.killed = true
+				state.killDeadline = now.Add(2 * time.Second)
+				pending[process.service] = state
+				continue
 			}
+			if state.killed && !now.Before(state.killDeadline) {
+				fmt.Fprintf(stderr, "boxr deploy: service %s did not exit after SIGKILL\\n", process.service)
+				return
+			}
+		}
+		if len(pending) == 0 {
 			return
 		}
+
+		var nextDeadline time.Time
+		for _, state := range pending {
+			deadline := state.graceDeadline
+			if state.killed {
+				deadline = state.killDeadline
+			}
+			if nextDeadline.IsZero() || deadline.Before(nextDeadline) {
+				nextDeadline = deadline
+			}
+		}
+		delay := time.Until(nextDeadline)
+		if delay < 0 {
+			delay = 0
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case exitedService := <-exits:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			if _, seen := exited[exitedService.service]; !seen {
+				exited[exitedService.service] = exitedService
+				delete(pending, exitedService.service)
+				fmt.Fprintf(stdout, "stopped service %s\\n", exitedService.service)
+			}
+		case <-timer.C:
+		}
 	}
+}
+
+func deploymentStopTimeout(labels map[string]string, fallback time.Duration) (time.Duration, error) {
+	value := labels[deploy.StopTimeoutLabel]
+	if value == "" {
+		return fallback, nil
+	}
+	milliseconds, err := strconv.Atoi(value)
+	if err != nil || milliseconds < 10 || milliseconds > 600000 {
+		return 0, fmt.Errorf("invalid persisted service stop timeout")
+	}
+	return time.Duration(milliseconds) * time.Millisecond, nil
 }
 
 func deploymentExitCode(err error) int {
@@ -3883,6 +3934,11 @@ func runDeploymentDown(stack string, timeout time.Duration, remove, dryRun bool,
 	for index := len(records) - 1; index >= 0; index-- {
 		record := records[index]
 		service := record.Labels[deploy.ServiceLabel]
+		serviceTimeout, err := deploymentStopTimeout(record.Labels, timeout)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr deploy down: service %s: %v\\n", service, err)
+			return 1
+		}
 		if dryRun {
 			action := "stop"
 			if remove {
@@ -3900,7 +3956,7 @@ func runDeploymentDown(stack string, timeout time.Duration, remove, dryRun bool,
 				fmt.Fprintf(stderr, "boxr deploy down: stop service %s: %v\n", service, err)
 				return 1
 			}
-			if !waitForStopped(record.ID, record.PID, time.Now().Add(timeout)) {
+			if !waitForStopped(record.ID, record.PID, time.Now().Add(serviceTimeout)) {
 				if err := state.Signal(record.ID, "KILL"); err != nil {
 					fmt.Fprintf(stderr, "boxr deploy down: force-stop service %s: %v\n", service, err)
 					return 1
