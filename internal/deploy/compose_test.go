@@ -122,6 +122,7 @@ func TestLoadComposeDerivesProjectNameAndAcceptsIsolatedServices(t *testing.T) {
 
 func TestLoadComposeRejectsSemanticsBoxrCannotRepresent(t *testing.T) {
 	tests := map[string]string{
+		"image build":                      "services:\n  api:\n    build: .\n",
 		"named volumes":                    "services:\n  api:\n    image: alpine\n    network_mode: none\n    volumes: [data:/data]\n",
 		"top-level volumes":                "services:\n  api:\n    image: alpine\n    network_mode: none\nvolumes:\n  data: {}\n",
 		"entrypoint override":              "services:\n  api:\n    image: alpine\n    network_mode: none\n    entrypoint: [/bin/sh]\n",
