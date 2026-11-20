@@ -141,7 +141,8 @@ func composeProjectName(path string) string {
 	if name == "" {
 		name = "boxr"
 	}
-	if name[0] < 'a' || name[0] > 'z' && (name[0] < '0' || name[0] > '9') {
+	first := name[0]
+	if !((first >= 'a' && first <= 'z') || (first >= '0' && first <= '9')) {
 		name = "boxr-" + name
 	}
 	if len(name) > 32 {
