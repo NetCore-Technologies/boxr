@@ -59,6 +59,7 @@ type Service struct {
 	DependsOn []string          `json:"dependsOn,omitempty"`
 	Volumes   []VolumeMount     `json:"volumes,omitempty"`
 	Profiles  []string          `json:"profiles,omitempty"`
+	EnvFiles  []string          `json:"envFiles,omitempty"`
 	Readiness *ReadinessProbe   `json:"readiness,omitempty"`
 }
 
@@ -82,6 +83,7 @@ type ServicePlan struct {
 	PidsLimit             int64         `json:"pidsLimit,omitempty"`
 	CommandArgumentCount  int           `json:"commandArgumentCount"`
 	EnvironmentEntryCount int           `json:"environmentEntryCount"`
+	EnvironmentFileCount  int           `json:"environmentFileCount"`
 	LabelCount            int           `json:"labelCount"`
 }
 
@@ -298,6 +300,24 @@ func buildPlan(file File) (Plan, error) {
 				return plan, fmt.Errorf("service %q cannot combine an image with an explicit rootfs", name)
 			}
 		}
+		if len(service.EnvFiles) > 16 {
+			return plan, fmt.Errorf("service %q has more than 16 environment files", name)
+		}
+		seenEnvFiles := make(map[string]struct{}, len(service.EnvFiles))
+		for index, path := range service.EnvFiles {
+			if path == "" || strings.TrimSpace(path) != path || len(path) > 4096 || strings.IndexByte(path, 0) >= 0 || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+				return plan, fmt.Errorf("service %q environment file %d must be a clean absolute path", name, index+1)
+			}
+			for _, segment := range strings.Split(filepath.ToSlash(path), "/") {
+				if segment == ".." {
+					return plan, fmt.Errorf("service %q environment file %d cannot contain '..'", name, index+1)
+				}
+			}
+			if _, exists := seenEnvFiles[path]; exists {
+				return plan, fmt.Errorf("service %q repeats environment file %q", name, path)
+			}
+			seenEnvFiles[path] = struct{}{}
+		}
 		if len(service.Command) > MaxCommandArgs {
 			return plan, fmt.Errorf("service %q command has more than %d arguments", name, MaxCommandArgs)
 		}
@@ -417,6 +437,7 @@ func buildPlan(file File) (Plan, error) {
 			PidsLimit:             service.Options.PidsLimit,
 			CommandArgumentCount:  len(service.Command),
 			EnvironmentEntryCount: len(service.Options.Env),
+			EnvironmentFileCount:  len(service.EnvFiles),
 			LabelCount:            len(service.Options.Labels),
 		}
 	}
