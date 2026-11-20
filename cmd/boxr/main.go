@@ -1835,6 +1835,14 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 		flags.StringVar(file, "f", "", "Dockerfile or JSON recipe path")
 		platform := flags.String("platform", "", "target image platform (default: linux/<host architecture>)")
 		buildNetwork := flags.String("network", "none", "network for Dockerfile RUN steps: none (default) or host")
+		var buildArgValues []string
+		flags.Func("build-arg", "set a Dockerfile ARG value as NAME=VALUE (repeatable)", func(value string) error {
+			if len(buildArgValues) >= 64 || len(value) > 65536 {
+				return fmt.Errorf("too many or oversized build arguments")
+			}
+			buildArgValues = append(buildArgValues, value)
+			return nil
+		})
 		tag := flags.String("tag", "", "image reference to create (required)")
 		jsonOutput := flags.Bool("json", false, "write image metadata as JSON")
 		quiet := flags.Bool("quiet", false, "print only the resulting image reference")
@@ -1842,7 +1850,7 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		if *tag == "" || flags.NArg() > 1 || (*quiet && *jsonOutput) || (*buildNetwork != "none" && *buildNetwork != "host") {
-			fmt.Fprintln(stderr, "Usage: boxr image build --tag NAME:TAG [--platform linux/ARCH[/VARIANT]] [--network none|host] [-f Dockerfile|Boxrfile.json] [--json|--quiet] [CONTEXT]")
+			fmt.Fprintln(stderr, "Usage: boxr image build --tag NAME:TAG [--platform linux/ARCH[/VARIANT]] [--network none|host] [--build-arg NAME=VALUE] [-f Dockerfile|Boxrfile.json] [--json|--quiet] [CONTEXT]")
 			return 2
 		}
 		contextDir := "."
@@ -1861,12 +1869,25 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 				buildFile = filepath.Join(contextDir, "Boxrfile.json")
 			}
 		}
+		buildArgs := make(map[string]string, len(buildArgValues))
+		for _, raw := range buildArgValues {
+			key, value, ok := strings.Cut(raw, "=")
+			if !ok || key == "" {
+				fmt.Fprintf(stderr, "boxr image build: invalid --build-arg %q; expected NAME=VALUE\n", raw)
+				return 2
+			}
+			buildArgs[key] = value
+		}
 		var created imageStore.Image
 		var err error
 		if strings.EqualFold(filepath.Ext(buildFile), ".json") {
+			if *buildNetwork != "none" || len(buildArgs) > 0 {
+				fmt.Fprintln(stderr, "boxr image build: --network and --build-arg apply only to Dockerfile builds")
+				return 2
+			}
 			created, err = imageStore.BuildForPlatform(contextDir, buildFile, *tag, *platform)
 		} else {
-			created, err = imageStore.BuildDockerfileForPlatform(contextDir, buildFile, *tag, *platform)
+			created, err = imageStore.BuildDockerfileForPlatformWithOptions(contextDir, buildFile, *tag, *platform, *buildNetwork, buildArgs)
 		}
 		if err != nil {
 			fmt.Fprintf(stderr, "boxr image build: %v\n", err)
@@ -2992,6 +3013,13 @@ var implementedFeatures = []string{
 	"exec reapplies configured capability no-new-privileges and seccomp restrictions",
 	"exec forwards standard input output and error and propagates command exit status",
 	"container records capture Linux process start-time ticks to detect PID reuse",
+	"Dockerfile build accepts repeatable --build-arg KEY=VALUE overrides",
+	"Dockerfile ARG defaults can be overridden by explicit build arguments",
+	"pre-FROM ARG values parameterize FROM and require redeclaration inside the stage",
+	"build argument values are available to RUN but are not persisted as image ENV",
+	"invalid and unused Dockerfile build arguments are rejected",
+	"Dockerfile COPY relative destinations resolve against the base image WORKDIR",
+	"Dockerfile build API accepts explicit network and build-argument options",
 }
 
 func printFeatures(stdout io.Writer) {

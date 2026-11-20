@@ -35,6 +35,16 @@ boxr image build --tag example/api:dev -f Dockerfile .
 
 This is a compatibility subset, not a complete Dockerfile frontend or BuildKit replacement.
 
+## Build arguments
+
+Use repeatable `--build-arg NAME=VALUE` flags to override declared `ARG` defaults:
+
+```sh
+boxr image build --tag example/api:dev --build-arg APP_VERSION=1.4.2 --build-arg TARGET=linux/amd64 -f Dockerfile .
+```
+
+Arguments become available only when declared with `ARG`. An argument declared before `FROM` can parameterize the base reference; declare it again after `FROM` to make it available to later `RUN` steps. Build arguments are not written into the resulting image's `ENV` metadata. Unknown or unused command-line arguments are rejected to catch spelling mistakes.
+
 ## RUN isolation and networking
 
 Each `RUN` executes against the staged image rootfs, after preceding `COPY` and `WORKDIR` steps. Build commands run in Boxr's PID, UTS, mount, IPC and user namespaces, with a private network namespace by default, a clean environment, all Linux capabilities dropped, `no_new_privileges`, and the built-in baseline seccomp profile. Dockerfile `ARG` and `ENV` values are passed to that instruction; host environment variables are not inherited.

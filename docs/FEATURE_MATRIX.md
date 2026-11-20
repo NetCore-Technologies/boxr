@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 779 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 793 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -792,3 +792,10 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 784. exec reapplies configured capability no-new-privileges and seccomp restrictions
 785. exec forwards standard input output and error and propagates command exit status
 786. lifecycle records store Linux process start-time ticks to detect PID reuse
+787. Dockerfile build accepts repeatable --build-arg KEY=VALUE overrides
+788. Dockerfile ARG defaults can be overridden by explicit build arguments
+789. pre-FROM ARG values parameterize FROM and require redeclaration inside the stage
+790. build argument values are available to RUN but are not persisted as image ENV
+791. invalid and unused Dockerfile build arguments are rejected
+792. Dockerfile COPY relative destinations resolve against the base image WORKDIR
+793. Dockerfile build API accepts explicit network and build-argument options

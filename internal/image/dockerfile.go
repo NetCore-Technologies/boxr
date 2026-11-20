@@ -31,6 +31,11 @@ const (
 
 // LoadDockerfile loads a bounded, regular Dockerfile without following symlinks.
 func LoadDockerfile(filename string) (BuildSpec, error) {
+	return LoadDockerfileWithArgs(filename, nil)
+}
+
+// LoadDockerfileWithArgs loads a Dockerfile with explicit --build-arg values.
+func LoadDockerfileWithArgs(filename string, buildArgs map[string]string) (BuildSpec, error) {
 	var empty BuildSpec
 	info, err := os.Lstat(filename)
 	if err != nil {
@@ -43,19 +48,35 @@ func LoadDockerfile(filename string) (BuildSpec, error) {
 	if err != nil {
 		return empty, fmt.Errorf("read Dockerfile: %w", err)
 	}
-	return ParseDockerfile(data)
+	return ParseDockerfileWithArgs(data, buildArgs)
 }
 
 // ParseDockerfile converts the supported Dockerfile subset into a Boxr build
 // plan. RUN instructions are executed later inside Boxr's isolated runtime;
 // ADD and multi-stage builds are rejected rather than silently skipped.
 func ParseDockerfile(data []byte) (BuildSpec, error) {
+	return ParseDockerfileWithArgs(data, nil)
+}
+
+// ParseDockerfileWithArgs parses a Dockerfile using explicitly supplied build
+// arguments. Arguments are visible only after an ARG declaration; pre-FROM
+// arguments are scoped to FROM unless they are declared again in the stage.
+func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpec, error) {
 	var spec BuildSpec
 	if len(data) == 0 || len(data) > maxDockerfileBytes {
 		return spec, fmt.Errorf("Dockerfile is empty or exceeds %d bytes", maxDockerfileBytes)
 	}
 	spec.Version = 1
+	providedArgs := make(map[string]string, len(buildArgs))
+	for key, value := range buildArgs {
+		if !dockerfileIdentifier(key) || strings.ContainsRune(value, '\x00') {
+			return spec, fmt.Errorf("invalid build argument %q", key)
+		}
+		providedArgs[key] = value
+	}
 	args := make(map[string]string)
+	globalArgs := make(map[string]string)
+	usedBuildArgs := make(map[string]bool)
 	environment := make(map[string]string)
 	workingDir := "/"
 	currentUser := ""
@@ -91,10 +112,23 @@ func ParseDockerfile(data []byte) (BuildSpec, error) {
 			if !dockerfileIdentifier(name) {
 				return fmt.Errorf("line %d: invalid ARG name %q", lineNumber, name)
 			}
-			if hasDefault {
+			provided, hasProvided := providedArgs[name]
+			if hasProvided {
+				args[name] = provided
+				usedBuildArgs[name] = true
+			} else if hasDefault {
 				args[name] = expandDockerVariables(value, args, environment)
+			} else if fromSeen {
+				if inherited, ok := globalArgs[name]; ok {
+					args[name] = inherited
+				} else if _, exists := args[name]; !exists {
+					args[name] = ""
+				}
 			} else if _, exists := args[name]; !exists {
 				args[name] = ""
+			}
+			if !fromSeen {
+				globalArgs[name] = args[name]
 			}
 			return nil
 		}
@@ -119,6 +153,8 @@ func ParseDockerfile(data []byte) (BuildSpec, error) {
 			}
 			spec.Base = words[0]
 			fromSeen = true
+			// Global ARG declarations are used for FROM expansion only.
+			args = make(map[string]string)
 
 		case "COPY":
 			var words []string
@@ -141,7 +177,8 @@ func ParseDockerfile(data []byte) (BuildSpec, error) {
 					return fmt.Errorf("line %d: COPY flags such as --from, --chown and --chmod are not supported yet", lineNumber)
 				}
 			}
-			destination := words[len(words)-1]
+			rawDestination := path.Clean(words[len(words)-1])
+			destination := rawDestination
 			if !path.IsAbs(destination) {
 				destination = path.Join(workingDir, destination)
 			}
@@ -155,15 +192,15 @@ func ParseDockerfile(data []byte) (BuildSpec, error) {
 				if strings.ContainsAny(cleanSource, "*?[]") {
 					return fmt.Errorf("line %d: COPY wildcard sources are not supported yet", lineNumber)
 				}
-				target := destination
+				validatedDestination := destination
+				stepDestination := rawDestination
 				if len(sources) > 1 {
-					target = path.Join(destination, path.Base(cleanSource))
-					spec.Copy = append(spec.Copy, CopyInstruction{Source: cleanSource, Destination: target})
-				} else {
-					spec.Copy = append(spec.Copy, CopyInstruction{Source: cleanSource, Destination: target})
+					validatedDestination = path.Join(destination, path.Base(cleanSource))
+					stepDestination = path.Join(rawDestination, path.Base(cleanSource))
 				}
+				spec.Copy = append(spec.Copy, CopyInstruction{Source: cleanSource, Destination: validatedDestination})
 				spec.dockerfileSteps = append(spec.dockerfileSteps, dockerfileStep{
-					kind: "copy", source: cleanSource, destination: target,
+					kind: "copy", source: cleanSource, destination: stepDestination,
 				})
 			}
 
@@ -321,6 +358,16 @@ func ParseDockerfile(data []byte) (BuildSpec, error) {
 	if !fromSeen {
 		return spec, fmt.Errorf("Dockerfile must contain exactly one FROM instruction")
 	}
+	unusedArgs := make([]string, 0)
+	for key := range providedArgs {
+		if !usedBuildArgs[key] {
+			unusedArgs = append(unusedArgs, key)
+		}
+	}
+	if len(unusedArgs) > 0 {
+		sort.Strings(unusedArgs)
+		return spec, fmt.Errorf("build argument(s) not declared with ARG: %s", strings.Join(unusedArgs, ", "))
+	}
 	if err := ValidateBuildSpec(spec); err != nil {
 		return spec, fmt.Errorf("invalid Dockerfile build configuration: %w", err)
 	}
@@ -465,13 +512,17 @@ func dockerfileCommand(value string) ([]string, error) {
 // disabled by default. Use BuildDockerfileForPlatformWithNetwork for an
 // explicit opt-in to host networking during build commands.
 func BuildDockerfileForPlatform(contextDir, dockerfilePath, reference, platform string) (Image, error) {
-	return BuildDockerfileForPlatformWithNetwork(contextDir, dockerfilePath, reference, platform, "none")
+	return BuildDockerfileForPlatformWithOptions(contextDir, dockerfilePath, reference, platform, "none", nil)
 }
 
-// BuildDockerfileForPlatformWithNetwork builds the supported single-stage
-// Dockerfile subset. RUN commands execute inside Boxr's namespaces and staged
-// rootfs; host networking is available only through an explicit opt-in.
+// BuildDockerfileForPlatformWithNetwork builds with an explicit build network mode.
 func BuildDockerfileForPlatformWithNetwork(contextDir, dockerfilePath, reference, platform, networkMode string) (Image, error) {
+	return BuildDockerfileForPlatformWithOptions(contextDir, dockerfilePath, reference, platform, networkMode, nil)
+}
+
+// BuildDockerfileForPlatformWithOptions builds a Dockerfile with explicit build
+// networking and build-argument values.
+func BuildDockerfileForPlatformWithOptions(contextDir, dockerfilePath, reference, platform, networkMode string, buildArgs map[string]string) (Image, error) {
 	if networkMode != "none" && networkMode != "host" {
 		return Image{}, fmt.Errorf("Dockerfile build network must be none or host")
 	}
@@ -487,7 +538,7 @@ func BuildDockerfileForPlatformWithNetwork(contextDir, dockerfilePath, reference
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
 		return Image{}, fmt.Errorf("Dockerfile must be located inside the build context")
 	}
-	spec, err := LoadDockerfile(dockerfileAbs)
+	spec, err := LoadDockerfileWithArgs(dockerfileAbs, buildArgs)
 	if err != nil {
 		return Image{}, err
 	}

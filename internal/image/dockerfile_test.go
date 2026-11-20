@@ -257,3 +257,31 @@ func containsBuildEnv(values []string, key, want string) bool {
 	}
 	return false
 }
+
+
+func TestBuildDockerfileWithBuildArgsPassesOverridesOnlyToRun(t *testing.T) {
+	useStore(t)
+	contextDir := t.TempDir()
+	dockerfile := filepath.Join(contextDir, "Dockerfile")
+	if err := os.WriteFile(dockerfile, []byte("FROM scratch\nARG BUILD_VERSION=default\nRUN echo \"$BUILD_VERSION\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := runDockerfileCommand
+	defer func() { runDockerfileCommand = previous }()
+	runDockerfileCommand = func(_ string, _ []string, options boxrcontainer.Options) error {
+		if !containsBuildEnv(options.Env, "BUILD_VERSION", "1.4.2") {
+			t.Errorf("RUN did not receive --build-arg override: %#v", options.Env)
+		}
+		return nil
+	}
+	if _, err := BuildDockerfileForPlatformWithOptions(contextDir, dockerfile, "demo:build-arg", "", "none", map[string]string{"BUILD_VERSION": "1.4.2"}); err != nil {
+		t.Fatalf("Dockerfile build with build args: %v", err)
+	}
+	image, err := Verify("demo:build-arg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsBuildEnv(image.RuntimeConfig.Env, "BUILD_VERSION", "1.4.2") {
+		t.Fatalf("build argument persisted in image environment: %#v", image.RuntimeConfig.Env)
+	}
+}
