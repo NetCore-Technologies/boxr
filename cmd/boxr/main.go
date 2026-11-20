@@ -3034,11 +3034,7 @@ func resolveDeploymentImageReference(reference, platform string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	verify := func(localReference string) error {
-		image, err := imageStore.Verify(localReference)
-		if err != nil {
-			return err
-		}
+	verifyPlatform := func(image imageStore.Image) error {
 		if image.OS != targetOS || image.Arch != targetArch {
 			return fmt.Errorf("local image platform is %s/%s; requested %s/%s", image.OS, image.Arch, targetOS, targetArch)
 		}
@@ -3047,7 +3043,10 @@ func resolveDeploymentImageReference(reference, platform string) (string, error)
 		}
 		return nil
 	}
-	if err := verify(reference); err == nil {
+	if image, err := imageStore.Verify(reference); err == nil {
+		if err := verifyPlatform(image); err != nil {
+			return "", err
+		}
 		return reference, nil
 	}
 	parsed, err := registry.ParseReference(reference)
@@ -3055,8 +3054,12 @@ func resolveDeploymentImageReference(reference, platform string) (string, error)
 		return "", fmt.Errorf("parse image reference: %w", err)
 	}
 	localReference := parsed.LocalReference()
-	if err := verify(localReference); err != nil {
-		return "", fmt.Errorf("no verified local image matching %s/%s: %w", targetOS, targetArch, err)
+	image, err := imageStore.Verify(localReference)
+	if err != nil {
+		return "", fmt.Errorf("image is not present in the local store: %w", err)
+	}
+	if err := verifyPlatform(image); err != nil {
+		return "", err
 	}
 	return localReference, nil
 }
