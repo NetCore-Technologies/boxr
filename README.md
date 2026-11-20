@@ -25,7 +25,7 @@ It is an early-stage runtime and **not a hardened security boundary or Docker re
 - **Filesystem:** optional chroot rootfs, private mount propagation, read-only rootfs, proc, recursive bind mounts, read-only bind mounts, bounded tmpfs mounts and optional persistent OverlayFS writable layers (`--overlay-dir`).
 - **Security controls:** capability drops, `no_new_privileges`, and an opt-in architecture-guarded seccomp baseline denylist. These are defense-in-depth controls, not a sandbox guarantee.
 - **cgroup v2:** memory max/high/low/min/swap, CPU quota/weight, I/O weight, PID limits and group OOM policy. The blocked helper is attached before workload execution.
-- **Configuration and deployment:** versioned JSON run files, strict multi-service manifests, dependency-aware parallel startup, bounded TCP/HTTP loopback readiness gates and secret-redacted plans.
+- **Configuration and deployment:** versioned JSON run files, strict multi-service manifests, dependency-aware parallel startup, bounded TCP/HTTP loopback readiness gates, service-specific resource and lifecycle budgets, published TCP/UDP ports, and secret-redacted plans.
 - **Local lifecycle:** persistent records, `ps`, `inspect`, `stats`, `events`, `logs` (tail/follow), `stop` (graceful TERM then KILL), `kill`, `wait`, `rm`, automatic record removal and age-based pruning.
 - **Persistent storage:** named, owner-private volumes with labels, name/label filtering, inspection, listing, safe removal, usage protection, filtered pruning, SHA-256-described gzip-tar export/import, and `--volume NAME:/PATH[:ro|rw]` mounts (requires `--rootfs`). Export archives are atomically published and never overwrite an existing backup. OverlayFS upper/work data can also persist between runs.
 - **Rootfs workflows:** pack/unpack gzip-tar archives, inspect and verify rootfs, deterministic SHA-256 tree digest and directory diff.
@@ -323,7 +323,7 @@ Create a non-overlapping IPv4 bridge network, then attach a container to it:
 sudo boxr network create --subnet 172.30.10.0/24 app-net
 sudo boxr network ls
 sudo boxr network inspect app-net
-sudo boxr run --name app --network bridge --network-name app-net -- /bin/sh
+sudo boxr run --name app --network bridge --network-name app-net --publish 127.0.0.1:8080:80/tcp -- /bin/sh
 # The bridge veth and IPAM lease are released when the container exits.
 sudo boxr network rm app-net
 ```
