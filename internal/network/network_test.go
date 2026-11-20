@@ -639,3 +639,111 @@ func TestLeaveAllDetachesDynamicContainerAndReleasesPortLease(t *testing.T) {
 	}
 }
 
+func TestStaleAttachmentPruneRemovesOnlyVerifiedBoxrLinks(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	if _, err := CreateWithRunner(context.Background(), "frontend", CreateOptions{
+		Subnet: "172.30.84.0/24",
+	}, &fakeRunner{}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{}
+	if _, err := JoinWithRunner(context.Background(), "frontend", 4301, "container-stale", runner,
+		PortMapping{HostPort: 18444, ContainerPort: 443}); err != nil {
+		t.Fatal(err)
+	}
+	live := map[string]struct{}{"container-live": {}}
+	stale, err := StaleAttachments(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale) != 1 || stale[0].ContainerID != "container-stale" ||
+		stale[0].Network != "frontend" || stale[0].Address != "172.30.84.2" ||
+		len(stale[0].PublishedPorts) != 1 {
+		t.Fatalf("stale attachments = %+v", stale)
+	}
+	report, err := PruneStaleWithRunner(context.Background(), live, runner)
+	if err != nil {
+		t.Fatalf("PruneStaleWithRunner(): %v", err)
+	}
+	if report.AttachmentsRemoved != 1 || report.AddressesReleased != 1 || report.PublishedPortsRemoved != 1 {
+		t.Fatalf("prune report = %+v", report)
+	}
+	joined := strings.Join(runner.calls, "\n")
+	for _, expected := range []string{
+		"ip -link -delete", // placeholder checked below using the actual ip command spelling
+		"OUTPUT ip -details -o link show dev vbx",
+		"ip link del dev vbx",
+	} {
+		if expected == "ip -link -delete" {
+			continue
+		}
+		if !strings.Contains(joined, expected) {
+			t.Errorf("stale prune did not perform %q: %s", expected, joined)
+		}
+	}
+	summary, err := Inspect("frontend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ContainerCount != 0 {
+		t.Fatalf("stale lease remained after prune: %+v", summary)
+	}
+}
+
+func TestStaleAttachmentPruneRefusesUnownedVethAndRetainsReservation(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	network, err := CreateWithRunner(context.Background(), "frontend", CreateOptions{
+		Subnet: "172.30.85.0/24",
+	}, &fakeRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{}
+	if _, err := JoinWithRunner(context.Background(), "frontend", 4302, "container-foreign", runner); err != nil {
+		t.Fatal(err)
+	}
+	hostVeth, _ := vethNames("container-foreign")
+	runner.aliases[hostVeth] = "host:someone-else"
+	report, err := PruneStaleWithRunner(context.Background(), map[string]struct{}{}, runner)
+	if err == nil || report.AttachmentsRemoved != 0 {
+		t.Fatalf("prune report=%+v error=%v; expected refusal to delete foreign interface", report, err)
+	}
+	summary, err := Inspect(network.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ContainerCount != 1 {
+		t.Fatalf("foreign veth refusal released the IPAM reservation: %+v", summary)
+	}
+	for _, call := range runner.calls {
+		if strings.Contains(call, "ip link del dev "+hostVeth) {
+			t.Fatalf("prune attempted to delete an interface without a Boxr ownership alias: %v", runner.calls)
+		}
+	}
+}
+
+func TestLeaveRefusesVethWithMismatchedOwnershipAlias(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	if _, err := CreateWithRunner(context.Background(), "frontend", CreateOptions{
+		Subnet: "172.30.86.0/24",
+	}, &fakeRunner{}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{}
+	if _, err := JoinWithRunner(context.Background(), "frontend", 4303, "container-mismatch", runner); err != nil {
+		t.Fatal(err)
+	}
+	hostVeth, _ := vethNames("container-mismatch")
+	runner.aliases[hostVeth] = "boxr:another-network:container-mismatch"
+	if err := LeaveWithRunner(context.Background(), "frontend", "container-mismatch", runner); err == nil {
+		t.Fatal("LeaveWithRunner deleted a veth with a mismatched ownership alias")
+	}
+	summary, err := Inspect("frontend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ContainerCount != 1 {
+		t.Fatalf("ownership mismatch released allocation: %+v", summary)
+	}
+}
+
