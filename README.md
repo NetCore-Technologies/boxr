@@ -308,12 +308,14 @@ sudo boxr create --name alpine-shell alpine:latest /bin/sh
 sudo boxr ps --all
 sudo boxr start alpine-shell
 sudo boxr restart --time 10s alpine-shell
+sudo boxr container ls --all
+sudo boxr container inspect alpine-shell
 sudo boxr logs --follow alpine-shell
 sudo boxr stop alpine-shell
 sudo boxr rm alpine-shell
 ```
 
-`boxr pull` and `boxr push` use the same registry verification and authentication flows as `boxr image pull` and `boxr image push`. `boxr create` accepts the runtime configuration flags used by `boxr run` (excluding `--detach` and `--dry-run`) and the Docker-style positional form `IMAGE [COMMAND...]` (or the explicit `--image IMAGE` form). It verifies the image, resolves its default command and records a container in the `created` state without launching a workload. `boxr start ID|NAME` reuses that record and launches it through Boxr's detached supervisor; it can also restart an exited or failed image-backed container created by Boxr, clearing a previous manual-stop marker. `boxr restart [--time 10s] ID|NAME` gracefully stops a running container (escalating to SIGKILL at the bounded deadline) before starting the same container again. Containers created with `--rm` are removed on exit and cannot be restarted. Pull and create are separate operations: create does not silently download a missing image. This is an initial native lifecycle workflow, not full Docker CLI or Engine API compatibility; unsupported runtime features remain explicitly rejected, and Linux container execution still requires the appropriate kernel and privileges.
+`boxr pull` and `boxr push` use the same registry verification and authentication flows as `boxr image pull` and `boxr image push`. `boxr create` accepts the runtime configuration flags used by `boxr run` (excluding `--detach` and `--dry-run`) and the Docker-style positional form `IMAGE [COMMAND...]` (or the explicit `--image IMAGE` form). It verifies the image, resolves its default command and records a container in the `created` state without launching a workload. `boxr start ID|NAME` reuses that record and launches it through Boxr's detached supervisor; it can also restart an exited or failed image-backed container created by Boxr, clearing a previous manual-stop marker. `boxr restart [--time 10s] ID|NAME` gracefully stops a running container (escalating to SIGKILL at the bounded deadline) before starting the same container again. Containers created with `--rm` are removed on exit and cannot be restarted. Pull and create are separate operations: create does not silently download a missing image. The `boxr container` namespace also exposes `create`, `run`, `start`, `restart`, `stop`, `kill`, `wait`, `logs`, `exec`, `ls`, `ps`, `inspect`, `rm`, and `stats`, all routed through the same native lifecycle implementation. This is an initial native lifecycle workflow, not full Docker CLI or Engine API compatibility; unsupported runtime features remain explicitly rejected, and Linux container execution still requires the appropriate kernel and privileges.
 
 ## Multi-service deployment planning
 
