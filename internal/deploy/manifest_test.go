@@ -213,6 +213,65 @@ func TestBuildPlanSupportsLocalImageServicesAndRejectsReservedLabels(t *testing.
 	}
 }
 
+func TestBuildPlanValidatesNamedVolumeMounts(t *testing.T) {
+	valid := File{
+		Version: 1,
+		Name:    "volume-stack",
+		Services: map[string]Service{
+			"database": {
+				Command: []string{"/bin/database"},
+				Options: container.Options{RootFS: "/srv/boxr/database"},
+				Volumes: []VolumeMount{
+					{Name: "db-data", Target: "/var/lib/database"},
+					{Name: "db-backup", Target: "/var/backups", ReadOnly: true},
+				},
+			},
+		},
+	}
+	plan, err := BuildPlan(valid)
+	if err != nil {
+		t.Fatalf("valid named volumes rejected: %v", err)
+	}
+	if len(plan.Services[0].Volumes) != 2 || plan.Services[0].Volumes[1].Name != "db-backup" || !plan.Services[0].Volumes[1].ReadOnly {
+		t.Fatalf("named volumes missing from plan: %+v", plan.Services[0].Volumes)
+	}
+	cases := map[string]File{
+		"missing rootfs": {Version: 1, Services: map[string]Service{
+			"database": {Command: []string{"/bin/database"}, Volumes: []VolumeMount{{Name: "db-data", Target: "/var/lib/database"}}},
+		}},
+		"invalid name": {Version: 1, Services: map[string]Service{
+			"database": {Command: []string{"/bin/database"}, Options: container.Options{RootFS: "/srv/root"}, Volumes: []VolumeMount{{Name: "../escape", Target: "/data"}}},
+		}},
+		"relative target": {Version: 1, Services: map[string]Service{
+			"database": {Command: []string{"/bin/database"}, Options: container.Options{RootFS: "/srv/root"}, Volumes: []VolumeMount{{Name: "db-data", Target: "data"}}},
+		}},
+		"root target": {Version: 1, Services: map[string]Service{
+			"database": {Command: []string{"/bin/database"}, Options: container.Options{RootFS: "/srv/root"}, Volumes: []VolumeMount{{Name: "db-data", Target: "/"}}},
+		}},
+		"path traversal": {Version: 1, Services: map[string]Service{
+			"database": {Command: []string{"/bin/database"}, Options: container.Options{RootFS: "/srv/root"}, Volumes: []VolumeMount{{Name: "db-data", Target: "/data/../root"}}},
+		}},
+		"duplicate targets": {Version: 1, Services: map[string]Service{
+			"database": {Command: []string{"/bin/database"}, Options: container.Options{RootFS: "/srv/root"}, Volumes: []VolumeMount{{Name: "db-data", Target: "/data"}, {Name: "db-backup", Target: "/data"}}},
+		}},
+		"bind target conflict": {Version: 1, Services: map[string]Service{
+			"database": {
+				Command: []string{"/bin/database"},
+				Options: container.Options{RootFS: "/srv/root", BindMounts: []container.BindMount{{Source: "/host/config", Target: "/data"}}},
+				Volumes: []VolumeMount{{Name: "db-data", Target: "/data"}},
+			},
+		}},
+	}
+	for name, file := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := BuildPlan(file); err == nil {
+				t.Fatal("invalid named-volume manifest unexpectedly validated")
+			}
+		})
+	}
+}
+
+
 func TestContainerNameIsStableAndBounded(t *testing.T) {
 	stack := "deployment-stack-with-a-long-name"
 	service := "service-name-that-is-also-very-long-and-near-the-limit"

@@ -78,6 +78,19 @@ boxr deploy wait --condition running --timeout 45s --interval 250ms --json sampl
 ```
 
 The default condition is `running` with a 30-second deadline. A running wait succeeds only when every recorded service is running; it fails immediately if a service exits or fails before the entire stack is ready. A stopped wait succeeds when no recorded service is running. A timeout of `0` waits without a deadline. JSON output contains service names, container names, IDs, statuses and timing, but no commands, environment values, labels or host paths.
+## Persistent named volumes
+
+Create volumes before deploying services:
+
+```sh
+boxr volume create database-data
+boxr volume create uploads
+boxr deploy validate boxr.deploy.json
+boxr deploy up boxr.deploy.json
+```
+
+A service declares named mounts as `volumes: [{"name":"database-data","target":"/var/lib/database"}]`; set `readOnly: true` for read-only mounts. A service must configure a rootfs to receive named volumes. The manifest validator checks volume names, absolute targets, traversal, duplicate targets and conflicts with bind/tmpfs mounts. Before starting any service, `deploy up` verifies that every referenced volume exists in Boxr's owner-private volume store, then resolves it to the host path and passes it through the existing safe bind-mount runtime. Missing volumes fail the deployment before the first container record is created. Volume data persists across `deploy down` and service recreation; removing a deployment does not remove named volumes.
+
 ## Runtime lifecycle
 
 ```sh

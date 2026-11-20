@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/manit6752025/boxr/internal/container"
+	volumeStore "github.com/manit6752025/boxr/internal/volume"
 )
 
 const (
@@ -43,11 +45,18 @@ type File struct {
 }
 
 // Service describes one process-isolated workload.
+type VolumeMount struct {
+	Name     string `json:"name"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"readOnly,omitempty"`
+}
+
 type Service struct {
 	Image     string            `json:"image,omitempty"`
 	Command   []string          `json:"command,omitempty"`
 	Options   container.Options `json:"options"`
 	DependsOn []string          `json:"dependsOn,omitempty"`
+	Volumes   []VolumeMount     `json:"volumes,omitempty"`
 	Readiness *ReadinessProbe   `json:"readiness,omitempty"`
 }
 
@@ -58,8 +67,9 @@ type ServicePlan struct {
 	ContainerName         string   `json:"containerName,omitempty"`
 	Image                 string   `json:"image,omitempty"`
 	DependsOn             []string `json:"dependsOn,omitempty"`
-	ReadinessType         string   `json:"readinessType,omitempty"`
-	NetworkMode           string   `json:"networkMode"`
+	ReadinessType         string        `json:"readinessType,omitempty"`
+	Volumes               []VolumeMount `json:"volumes,omitempty"`
+	NetworkMode           string        `json:"networkMode"`
 	SecurityProfile       string   `json:"securityProfile,omitempty"`
 	ResourceProfile       string   `json:"resourceProfile,omitempty"`
 	RootFSConfigured      bool     `json:"rootfsConfigured"`
@@ -174,6 +184,41 @@ func BuildPlan(file File) (Plan, error) {
 				return plan, fmt.Errorf("service %q uses reserved Boxr deployment label %q", name, key)
 			}
 		}
+		if len(service.Volumes) > 32 {
+			return plan, fmt.Errorf("service %q has more than 32 named volume mounts", name)
+		}
+		if len(service.Volumes) > 0 && service.Options.RootFS == "" {
+			return plan, fmt.Errorf("service %q must configure a rootfs to mount named volumes", name)
+		}
+		volumeTargets := make(map[string]string, len(service.Options.BindMounts)+len(service.Options.TmpfsMounts)+len(service.Volumes))
+		for _, mount := range service.Options.BindMounts {
+			volumeTargets[filepath.Clean(mount.Target)] = "bind mount"
+		}
+		for _, mount := range service.Options.TmpfsMounts {
+			target := filepath.Clean(mount.Target)
+			if previous, exists := volumeTargets[target]; exists {
+				return plan, fmt.Errorf("service %q has conflicting %s and tmpfs mount targets at %s", name, previous, target)
+			}
+			volumeTargets[target] = "tmpfs mount"
+		}
+		for index, mount := range service.Volumes {
+			if err := volumeStore.ValidateName(mount.Name); err != nil {
+				return plan, fmt.Errorf("service %q volume mount %d has an invalid volume name: %w", name, index+1, err)
+			}
+			if !filepath.IsAbs(mount.Target) || filepath.Clean(mount.Target) == "/" || strings.ContainsRune(mount.Target, '\\') {
+				return plan, fmt.Errorf("service %q volume mount %d target must be an absolute container path other than /", name, index+1)
+			}
+			for _, segment := range strings.Split(filepath.ToSlash(mount.Target), "/") {
+				if segment == ".." {
+					return plan, fmt.Errorf("service %q volume mount %d target cannot contain '..'", name, index+1)
+				}
+			}
+			target := filepath.Clean(mount.Target)
+			if previous, exists := volumeTargets[target]; exists {
+				return plan, fmt.Errorf("service %q has conflicting %s and named volume targets at %s", name, previous, target)
+			}
+			volumeTargets[target] = "named volume"
+		}
 		if err := service.Options.Validate(); err != nil {
 			return plan, fmt.Errorf("service %q has invalid container options: %w", name, err)
 		}
@@ -228,6 +273,7 @@ func BuildPlan(file File) (Plan, error) {
 			Image:                 service.Image,
 			DependsOn:             deps,
 			ReadinessType:         readinessType,
+			Volumes:               append([]VolumeMount(nil), service.Volumes...),
 			NetworkMode:           networkMode,
 			SecurityProfile:       service.Options.SecurityProfile,
 			ResourceProfile:       service.Options.ResourceProfile,

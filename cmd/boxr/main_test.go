@@ -976,6 +976,74 @@ func TestDeployLogsFollowWaitsForCreatedServiceToStart(t *testing.T) {
 	}
 }
 
+func TestDeploymentContainerOptionsResolveNamedVolumes(t *testing.T) {
+	t.Setenv("BOXR_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+	created, err := volume.Create("api-data", map[string]string{"purpose": "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := deploy.Service{
+		Command: []string{"/bin/service"},
+		Options: container.Options{RootFS: "/srv/boxr/api"},
+		Volumes: []deploy.VolumeMount{{Name: "api-data", Target: "/var/lib/api", ReadOnly: true}},
+	}
+	options, err := deploymentContainerOptions(service)
+	if err != nil {
+		t.Fatalf("prepare named volume options: %v", err)
+	}
+	if len(options.BindMounts) != 1 {
+		t.Fatalf("bind mounts = %d, want 1", len(options.BindMounts))
+	}
+	mount := options.BindMounts[0]
+	if mount.Source != created.Path || mount.Target != "/var/lib/api" || !mount.ReadOnly {
+		t.Fatalf("resolved named volume mount = %+v", mount)
+	}
+}
+
+func TestDeploymentContainerOptionsRejectMissingNamedVolume(t *testing.T) {
+	t.Setenv("BOXR_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+	_, err := deploymentContainerOptions(deploy.Service{
+		Command: []string{"/bin/service"},
+		Options: container.Options{RootFS: "/srv/boxr/api"},
+		Volumes: []deploy.VolumeMount{{Name: "missing-data", Target: "/var/lib/api"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "named volume") {
+		t.Fatalf("expected missing volume to fail closed, got %v", err)
+	}
+}
+
+func TestDeployUpFailsVolumePreflightBeforeCreatingAnyContainer(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	t.Setenv("BOXR_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+	file := deploy.File{
+		Version: 1,
+		Name: "volume-preflight",
+		Services: map[string]deploy.Service{
+			"database": {
+				Command: []string{"/bin/true"},
+				Options: container.Options{RootFS: "/srv/boxr/database"},
+				Volumes: []deploy.VolumeMount{{Name: "missing-db", Target: "/var/lib/db"}},
+			},
+		},
+	}
+	plan, err := deploy.BuildPlan(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := runDeploymentUp(file, plan, time.Second, 0, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "volume preflight failed") {
+		t.Fatalf("deploy up missing volume: code=%d stderr=%q", code, errOut.String())
+	}
+	records, err := state.List(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("service records were created before volume preflight completed: %+v", records)
+	}
+}
+
+
 func TestVersionJSONOutput(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run([]string{"version", "--json"}, &out, &errOut); code != 0 {

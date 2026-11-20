@@ -2588,6 +2588,10 @@ var implementedFeatures = []string{
 	"follow mode streams and drains all service logs",
 	"image build writes resolve in-root symlinks and reject host-root escapes",
 	"container-absolute COPY symlinks are normalized inside the staged rootfs",
+	"versioned deployment named persistent volume mounts",
+	"named volume names and mount targets validated before startup",
+	"deployment preflights every named volume before creating services",
+	"named volumes reuse Boxr's secure persistent volume store",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -2799,18 +2803,27 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 			return 0
 		}
 		fmt.Fprintf(stdout, "Deployment: %s\nServices: %d\nExecution order: %s\n\n", plan.Name, len(plan.Services), strings.Join(plan.ExecutionOrder, " -> "))
-		fmt.Fprintln(stdout, "SERVICE\tCONTAINER\tIMAGE\tDEPENDS ON\tREADINESS\tNETWORK\tSECURITY\tROOTFS")
+		fmt.Fprintln(stdout, "SERVICE\tCONTAINER\tIMAGE\tDEPENDS ON\tREADINESS\tVOLUMES\tNETWORK\tSECURITY\tROOTFS")
 		for _, service := range plan.Services {
 			rootfsConfigured := "no"
 			if service.RootFSConfigured {
 				rootfsConfigured = "yes"
 			}
-			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			volumeSummary := make([]string, 0, len(service.Volumes))
+			for _, mount := range service.Volumes {
+				mode := "rw"
+				if mount.ReadOnly {
+					mode = "ro"
+				}
+				volumeSummary = append(volumeSummary, mount.Name+":"+mount.Target+":"+mode)
+			}
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				service.Name,
 				service.ContainerName,
 				service.Image,
 				strings.Join(service.DependsOn, ","),
 				service.ReadinessType,
+				strings.Join(volumeSummary, ","),
 				service.NetworkMode,
 				service.SecurityProfile,
 				rootfsConfigured,
@@ -3006,8 +3019,30 @@ type deploymentStatus struct {
 	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
 }
 
-func startDeploymentProcess(executable, stack string, order int, serviceName string, service deploy.Service, stdout, stderr io.Writer) (*deploymentProcess, error) {
+func deploymentContainerOptions(service deploy.Service) (container.Options, error) {
 	options := service.Options
+	for index, mount := range service.Volumes {
+		managed, err := volume.Get(mount.Name)
+		if err != nil {
+			return container.Options{}, fmt.Errorf("named volume %q for mount %d: %w", mount.Name, index+1, err)
+		}
+		options.BindMounts = append(options.BindMounts, container.BindMount{
+			Source:   managed.Path,
+			Target:   mount.Target,
+			ReadOnly: mount.ReadOnly,
+		})
+	}
+	if err := options.Validate(); err != nil {
+		return container.Options{}, fmt.Errorf("invalid prepared container options: %w", err)
+	}
+	return options, nil
+}
+
+func startDeploymentProcess(executable, stack string, order int, serviceName string, service deploy.Service, stdout, stderr io.Writer) (*deploymentProcess, error) {
+	options, err := deploymentContainerOptions(service)
+	if err != nil {
+		return nil, fmt.Errorf("prepare service %q volumes: %w", serviceName, err)
+	}
 	options.Name = deploy.ContainerName(stack, serviceName)
 	options.AutoRemove = false
 	options.Labels = mergeLabels(options.Labels, map[string]string{
@@ -3267,6 +3302,10 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 				return 1
 			}
 			resolvedImages[service.Name] = localReference
+		}
+		if _, err := deploymentContainerOptions(file.Services[service.Name]); err != nil {
+			fmt.Fprintf(stderr, "boxr deploy up: service %s volume preflight failed: %v\n", service.Name, err)
+			return 1
 		}
 	}
 	executable, err := os.Executable()

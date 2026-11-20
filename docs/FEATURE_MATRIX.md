@@ -617,3 +617,7 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 609. follow mode streams and drains all service logs
 610. image build writes resolve in-root symlinks and reject host-root escapes
 611. container-absolute COPY symlinks are normalized inside the staged rootfs
+612. versioned deployment named persistent volume mounts
+613. named volume names and mount targets validated before startup
+614. deployment preflights every named volume before creating services
+615. named volumes reuse Boxr's secure persistent volume store
