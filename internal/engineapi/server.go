@@ -634,7 +634,7 @@ func (s *Server) handleContainerStats(writer http.ResponseWriter, request *http.
 		},
 		"blkio_stats": map[string]any{"io_service_bytes_recursive": []any{}},
 		"networks": map[string]any{},
-		"name": displayName(record), "id": record.ID, "preread": "",
+		"name": displayName(record), "id": record.ID,
 	})
 }
 
