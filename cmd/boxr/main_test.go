@@ -3862,3 +3862,52 @@ func TestRunAcceptsDockerStylePositionalLocalImages(t *testing.T) {
 		t.Fatalf("ordinary command was rewritten as an image: %+v", plan)
 	}
 }
+
+
+func TestRenameAndContainerRenamePreserveContainerIdentity(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+	first, err := state.Create("before-rename", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := state.Create("taken-name", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"rename", first.ID, "after-rename"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("rename returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	record, err := state.Get("after-rename")
+	if err != nil {
+		t.Fatalf("new name does not resolve: %v", err)
+	}
+	if record.ID != first.ID || record.Name != "after-rename" {
+		t.Fatalf("rename changed container identity or name incorrectly: %+v", record)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"container", "rename", record.ID, "final-name"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("container rename returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	renamed, err := state.Get("final-name")
+	if err != nil || renamed.ID != first.ID {
+		t.Fatalf("container rename lookup = %+v, err=%v", renamed, err)
+	}
+
+	for _, args := range [][]string{
+		{"rename", first.ID, "taken-name"},
+		{"rename", first.ID, "../escape"},
+		{"rename", first.ID},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		if code := run(args, &stdout, &stderr); code == 0 {
+			t.Errorf("%v unexpectedly succeeded", args)
+		}
+	}
+	if _, err := state.Get(second.ID); err != nil {
+		t.Fatalf("unrelated container disappeared after rename: %v", err)
+	}
+}
