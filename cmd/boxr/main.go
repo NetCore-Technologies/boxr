@@ -1897,17 +1897,17 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 		}
 		report := imageUsageSummary{
 			ImageCount: len(images),
-			Images: make([]imageUsageEntry, 0, len(images)),
-			Store: storeUsage,
+			Images:     make([]imageUsageEntry, 0, len(images)),
+			Store:      storeUsage,
 		}
 		for _, item := range images {
 			entry := imageUsageEntry{
-				Reference: item.Reference,
-				Digest: item.Digest,
-				OS: item.OS,
+				Reference:    item.Reference,
+				Digest:       item.Digest,
+				OS:           item.OS,
 				Architecture: item.Arch,
-				Variant: item.Variant,
-				LayerBytes: item.LayerBytes,
+				Variant:      item.Variant,
+				LayerBytes:   item.LayerBytes,
 			}
 			report.Images = append(report.Images, entry)
 			report.ReferencedLayerBytes += item.LayerBytes
@@ -1917,7 +1917,7 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintln(stdout, "REFERENCE                         PLATFORM          ROOTFS_LAYER_BYTES")
 		for _, item := range report.Images {
-			platform := item.OS + "/" + item.Arch
+			platform := item.OS + "/" + item.Architecture
 			if item.Variant != "" {
 				platform += "/" + item.Variant
 			}
@@ -2082,10 +2082,10 @@ type imageUsageEntry struct {
 }
 
 type imageUsageSummary struct {
-	ImageCount            int                     `json:"imageCount"`
-	Images                []imageUsageEntry       `json:"images"`
-	ReferencedLayerBytes  int64                   `json:"referencedLayerBytes"`
-	Store                 imageStore.StoreUsage   `json:"store"`
+	ImageCount           int                   `json:"imageCount"`
+	Images               []imageUsageEntry     `json:"images"`
+	ReferencedLayerBytes int64                 `json:"referencedLayerBytes"`
+	Store                imageStore.StoreUsage `json:"store"`
 }
 
 func filterImageList(items []imageStore.Image, filters []string) ([]imageStore.Image, error) {
