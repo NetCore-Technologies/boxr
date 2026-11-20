@@ -576,3 +576,41 @@ func TestContainerCannotJoinTwoManagedBridgeNetworksAtOnce(t *testing.T) {
 	}
 }
 
+func TestLeaveAllDetachesDynamicContainerAndReleasesPortLease(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	if _, err := CreateWithRunner(context.Background(), "frontend", CreateOptions{
+		Subnet: "172.30.83.0/24",
+	}, &fakeRunner{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := JoinWithRunner(context.Background(), "frontend", 4201, "container-dynamic", &fakeRunner{},
+		PortMapping{HostPort: 18443, ContainerPort: 443}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{}
+	if err := LeaveAllWithRunner(context.Background(), "container-dynamic", runner); err != nil {
+		t.Fatalf("LeaveAllWithRunner(): %v", err)
+	}
+	summary, err := Inspect("frontend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ContainerCount != 0 {
+		t.Fatalf("dynamic container lease survived LeaveAll: %+v", summary)
+	}
+	joined := strings.Join(runner.calls, "\n")
+	for _, expected := range []string{
+		"iptables -t nat -D PREROUTING",
+		"iptables -t nat -D OUTPUT",
+		"iptables -D FORWARD",
+		"ip link del dev vbx",
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Errorf("LeaveAll omitted cleanup %q: %s", expected, joined)
+		}
+	}
+	if err := LeaveAllWithRunner(context.Background(), "container-dynamic", &fakeRunner{}); err != nil {
+		t.Fatalf("LeaveAll should be idempotent for a container with no network lease: %v", err)
+	}
+}
+
