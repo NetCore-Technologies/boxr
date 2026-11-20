@@ -347,12 +347,16 @@ func TestEngineAPIImageCreatePullsAuthenticatedOCIImage(t *testing.T) {
 	if data, err := os.ReadFile(filepath.Join(root, "bin", "app")); err != nil || string(data) != "pulled OCI image\n" {
 		t.Fatalf("pulled image file = %q, error=%v", data, err)
 	}
-	created, err := createContainerRecord("pulled-container", dockerCreateRequest{Image: localReference})
+	defaultTag := remoteImage + ":latest"
+	if err := imageStore.Tag(localReference, defaultTag); err != nil {
+		t.Fatalf("tag pulled image as latest: %v", err)
+	}
+	created, err := createContainerRecord("pulled-container", dockerCreateRequest{Image: remoteImage})
 	if err != nil {
 		t.Fatalf("create container from pulled image reference: %v", err)
 	}
-	if created.Labels["io.boxr.image"] != localReference || strings.Join(created.Command, " ") != "/bin/app --serve" {
-		t.Fatalf("container created from pull = %+v", created)
+	if created.Labels["io.boxr.image"] != defaultTag || strings.Join(created.Command, " ") != "/bin/app --serve" {
+		t.Fatalf("container created from untagged pulled image = %+v", created)
 	}
 	if err := state.RemoveCreated(created.ID); err != nil {
 		t.Fatal(err)
