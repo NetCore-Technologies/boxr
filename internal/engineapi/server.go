@@ -98,6 +98,13 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			s.handleContainerKill(writer, request, strings.TrimSuffix(remainder, "/kill"))
 			return
 		}
+		if strings.HasSuffix(remainder, "/restart") {
+			if !requireMethod(writer, request, http.MethodPost) {
+				return
+			}
+			s.handleContainerRestart(writer, request, strings.TrimSuffix(remainder, "/restart"))
+			return
+		}
 		if strings.HasSuffix(remainder, "/start") {
 			if !requireMethod(writer, request, http.MethodPost) {
 				return
