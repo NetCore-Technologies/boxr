@@ -693,7 +693,6 @@ func TestDeploymentTargetPlatformValidation(t *testing.T) {
 	}
 }
 
-
 func TestDeploymentReadinessProbeIsSelectedByProcessService(t *testing.T) {
 	databaseProbe := &deploy.ReadinessProbe{TCPAddress: "127.0.0.1:5432", Attempts: 1}
 	apiProbe := &deploy.ReadinessProbe{HTTPURL: "http://127.0.0.1:8080/healthz", Attempts: 2}
