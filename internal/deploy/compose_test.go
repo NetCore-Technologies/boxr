@@ -175,7 +175,7 @@ func TestSplitComposeCommandHonoursQuotesWithoutShellExpansion(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("command tokens = %#v, want %#v", got, want)
 	}
-	for _, invalid := range []string{`/bin/tool "unfinished`, `/bin/tool trailing\\`, `/bin/tool ""`} {
+	for _, invalid := range []string{`/bin/tool "unfinished`, "/bin/tool trailing\\", `/bin/tool ""`} {
 		if _, err := splitComposeCommand(invalid); err == nil {
 			t.Errorf("invalid command %q was accepted", invalid)
 		}
