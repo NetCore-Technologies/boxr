@@ -3920,6 +3920,7 @@ services:
   app:
     image: alpine:3.20
     command: ["echo", "hello"]
+    network_mode: none
 `
 	if err := os.WriteFile(manifest, []byte(contents), 0600); err != nil {
 		t.Fatal(err)
