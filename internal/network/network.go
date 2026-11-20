@@ -152,6 +152,25 @@ func storePath(dir string) string {
 	return filepath.Join(dir, "networks.json")
 }
 
+func lockStore() (func(), error) {
+	storeMu.Lock()
+	dir, err := ensureStoreDir()
+	if err != nil {
+		storeMu.Unlock()
+		return nil, err
+	}
+	releaseFileLock, err := acquireNetworkStoreFileLock(dir)
+	if err != nil {
+		storeMu.Unlock()
+		return nil, err
+	}
+	return func() {
+		releaseFileLock()
+		storeMu.Unlock()
+	}, nil
+}
+
+
 func loadStore() (store, string, error) {
 	var result store
 	dir, err := ensureStoreDir()
@@ -343,8 +362,11 @@ func CreateWithRunner(ctx context.Context, name string, options CreateOptions, r
 	if err != nil {
 		return empty, err
 	}
-	storeMu.Lock()
-	defer storeMu.Unlock()
+	unlock, err := lockStore()
+	if err != nil {
+		return empty, err
+	}
+	defer unlock()
 	current, dir, err := loadStore()
 	if err != nil {
 		return empty, err
@@ -511,8 +533,11 @@ func JoinWithRunner(ctx context.Context, networkName string, pid int, containerI
 	if pid <= 1 || strings.TrimSpace(containerID) == "" || strings.ContainsAny(containerID, "/\\\x00") {
 		return "", fmt.Errorf("valid host PID and container ID are required")
 	}
-	storeMu.Lock()
-	defer storeMu.Unlock()
+	unlock, err := lockStore()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	current, dir, err := loadStore()
 	if err != nil {
 		return "", err
@@ -703,8 +728,11 @@ func LeaveWithRunner(ctx context.Context, networkName, containerID string, runne
 	if runner == nil {
 		return fmt.Errorf("network command runner is required")
 	}
-	storeMu.Lock()
-	defer storeMu.Unlock()
+	unlock, err := lockStore()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	current, dir, err := loadStore()
 	if err != nil {
 		return err
@@ -735,8 +763,11 @@ func LeaveWithRunner(ctx context.Context, networkName, containerID string, runne
 
 // List returns networks sorted by name without exposing allocation identities.
 func List() ([]Summary, error) {
-	storeMu.Lock()
-	defer storeMu.Unlock()
+	unlock, err := lockStore()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	current, _, err := loadStore()
 	if err != nil {
 		return nil, err
@@ -751,8 +782,11 @@ func List() ([]Summary, error) {
 
 // Inspect returns the public metadata of one network.
 func Inspect(name string) (Summary, error) {
-	storeMu.Lock()
-	defer storeMu.Unlock()
+	unlock, err := lockStore()
+	if err != nil {
+		return Summary{}, err
+	}
+	defer unlock()
 	current, _, err := loadStore()
 	if err != nil {
 		return Summary{}, err
@@ -774,8 +808,11 @@ func RemoveWithRunner(ctx context.Context, name string, runner Runner) error {
 	if runner == nil {
 		return fmt.Errorf("network command runner is required")
 	}
-	storeMu.Lock()
-	defer storeMu.Unlock()
+	unlock, err := lockStore()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	current, dir, err := loadStore()
 	if err != nil {
 		return err
