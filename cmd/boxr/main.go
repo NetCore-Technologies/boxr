@@ -1050,14 +1050,14 @@ func runSupportBundle(args []string, stdout, stderr io.Writer) int {
 	safeDiagnostics := make([]support.Diagnostic, 0, len(diagnostics))
 	for _, check := range diagnostics {
 		safeDiagnostics = append(safeDiagnostics, support.Diagnostic{
-			Name: check.Name,
+			Name:   check.Name,
 			Status: string(check.Status),
 		})
 	}
 	result, err := support.Create(*output, *force, support.Metadata{
-		Version: version,
-		Commit: commit,
-		BuildDate: buildDate,
+		Version:     version,
+		Commit:      commit,
+		BuildDate:   buildDate,
 		Diagnostics: safeDiagnostics,
 	})
 	if err != nil {

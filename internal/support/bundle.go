@@ -127,14 +127,14 @@ func Create(path string, force bool, metadata Metadata) (Result, error) {
 	report := Report{
 		SchemaVersion: 1,
 		GeneratedAt:   generated,
-		Boxr: buildInfo{
+		Boxr:          buildInfo{
 			Version:   cleanMetadata(metadata.Version),
 			Commit:    cleanMetadata(metadata.Commit),
 			BuildDate: cleanMetadata(metadata.BuildDate),
 		},
-		Runtime: runtimeInfo{OS: runtime.GOOS, Arch: runtime.GOARCH, GoVersion: runtime.Version()},
-		Diagnostics: diagSummary{Checks: checks},
-		Privacy: privacyInfo{},
+		Runtime:       runtimeInfo{OS: runtime.GOOS, Arch: runtime.GOARCH, GoVersion: runtime.Version()},
+		Diagnostics:   diagSummary{Checks: checks},
+		Privacy:       privacyInfo{},
 	}
 	for _, check := range checks {
 		switch check.Status {
