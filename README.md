@@ -363,3 +363,16 @@ boxr wait --condition running --json api worker
 ```
 
 The default condition remains `stopped`, preserving the existing exit-code output. `--condition running` waits for startup, but fails if the container exits before becoming ready. Polling defaults to 100 ms (minimum 10 ms), and `--json` returns the container ID, resulting status, exit code and elapsed milliseconds. See [container orchestration](docs/orchestration.md).
+
+
+## Preview container cleanup
+
+Preview eligible records before deleting them:
+
+```bash
+boxr prune --dry-run
+boxr prune --older-than 24h --dry-run --json
+boxr prune --older-than 7d
+```
+
+Dry-run mode reports candidate IDs, names, states and the selected age threshold without changing container records or logs. Running and never-started containers are excluded. The existing mutating prune behaviour remains the default. See [safe cleanup](docs/pruning.md).

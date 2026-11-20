@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 486 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 492 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -492,3 +492,9 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 484. lifecycle wait reports containers that exit before becoming ready
 485. lifecycle wait supports multiple container IDs
 486. lifecycle wait preserves the default exit-code output
+487. container prune supports non-mutating dry runs
+488. prune dry run lists candidate container IDs and states
+489. prune dry run respects age thresholds
+490. prune dry run excludes running and never-started containers
+491. prune supports machine-readable JSON planning output
+492. prune dry run leaves container records and logs untouched

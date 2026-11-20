@@ -1123,21 +1123,66 @@ func measureDirectory(root string) (directoryUsage, error) {
 	return usage, err
 }
 
+type pruneCandidate struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name,omitempty"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type pruneReport struct {
+	DryRun    bool             `json:"dryRun"`
+	OlderThan time.Duration    `json:"olderThan"`
+	Before    time.Time        `json:"before"`
+	Count     int              `json:"count"`
+	Candidates []pruneCandidate `json:"candidates"`
+	Removed   int              `json:"removed,omitempty"`
+}
+
 func runPrune(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("prune", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	older := flags.Duration("older-than", 7*24*time.Hour, "remove completed records older than this duration")
+	dryRun := flags.Bool("dry-run", false, "show which records would be removed without deleting them")
+	jsonOutput := flags.Bool("json", false, "write prune results as JSON")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 	if flags.NArg() != 0 || *older < 0 {
-		fmt.Fprintln(stderr, "Usage: boxr prune [--older-than 168h]")
+		fmt.Fprintln(stderr, "Usage: boxr prune [--older-than 168h] [--dry-run] [--json]")
 		return 2
 	}
-	count, err := state.Prune(time.Now().Add(-*older))
+	before := time.Now().Add(-*older)
+	if *dryRun {
+		records, err := state.List(true)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr prune: %v\n", err)
+			return 1
+		}
+		candidates := make([]pruneCandidate, 0)
+		for _, record := range records {
+			if record.Status == "running" || record.Status == "created" || record.CreatedAt.After(before) {
+				continue
+			}
+			candidates = append(candidates, pruneCandidate{ID: record.ID, Name: record.Name, Status: record.Status, CreatedAt: record.CreatedAt})
+		}
+		report := pruneReport{DryRun: true, OlderThan: *older, Before: before, Count: len(candidates), Candidates: candidates}
+		if *jsonOutput {
+			return writeJSON(stdout, report, stderr, "boxr prune")
+		}
+		fmt.Fprintf(stdout, "would prune %d completed container record(s) older than %s\n", len(candidates), older.String())
+		for _, candidate := range candidates {
+			fmt.Fprintf(stdout, "%-12s %-20s %s\n", candidate.ID, candidate.Name, candidate.Status)
+		}
+		return 0
+	}
+	count, err := state.Prune(before)
 	if err != nil {
 		fmt.Fprintf(stderr, "boxr prune: %v\n", err)
 		return 1
+	}
+	if *jsonOutput {
+		return writeJSON(stdout, pruneReport{DryRun: false, OlderThan: *older, Before: before, Count: count, Removed: count, Candidates: []pruneCandidate{}}, stderr, "boxr prune")
 	}
 	fmt.Fprintf(stdout, "pruned %d completed container record(s)\n", count)
 	return 0
@@ -1278,7 +1323,7 @@ Usage:
   boxr stats [--watch] [--interval 1s] [--count N] ID|NAME
   boxr rm ID|NAME [...]
   boxr events [--follow] [--interval 500ms] [--count N] [--limit N] [--since 1h|RFC3339] [--action ACTION] [--container ID|NAME] [--format table|json]
-  boxr prune [--older-than 168h]
+  boxr prune [--older-than 168h] [--dry-run] [--json]
   boxr rootfs inspect PATH
   boxr rootfs verify PATH
   boxr rootfs audit [--json] [--strict] PATH
@@ -2198,6 +2243,12 @@ var implementedFeatures = []string{
 	"lifecycle wait reports containers that exit before becoming ready",
 	"lifecycle wait supports multiple container IDs",
 	"lifecycle wait preserves the default exit-code output",
+	"container prune supports non-mutating dry runs",
+	"prune dry run lists candidate container IDs and states",
+	"prune dry run respects age thresholds",
+	"prune dry run excludes running and never-started containers",
+	"prune supports machine-readable JSON planning output",
+	"prune dry run leaves container records and logs untouched",
 }
 
 func printFeatures(stdout io.Writer) {
