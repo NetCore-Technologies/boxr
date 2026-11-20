@@ -1456,6 +1456,7 @@ Usage:
   boxr deploy pull [--profile NAME] [--platform linux/ARCH[/VARIANT]] [--authfile PATH] FILE.json
   boxr deploy up [--profile NAME] [--dry-run] FILE.json
   boxr deploy profiles [--json] FILE.json
+  boxr deploy profiles [--json] FILE.json
   boxr deploy ps [--json] STACK
   boxr deploy logs [--tail 100] [--follow] STACK [SERVICE]
   boxr deploy wait [--condition running|stopped] [--timeout 30s] [--interval 100ms] [--json] STACK
@@ -3402,7 +3403,7 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 			resolvedImages[service.Name] = localReference
 		}
 		if _, err := deploymentContainerOptions(file.Services[service.Name]); err != nil {
-			fmt.Fprintf(stderr, "boxr deploy up: service %s volume preflight failed: %v\n", service.Name, err)
+			fmt.Fprintf(stderr, "boxr deploy up: service %s configuration preflight failed: %v\n", service.Name, err)
 			return 1
 		}
 	}
