@@ -490,6 +490,13 @@ func JoinWithRunner(ctx context.Context, networkName string, pid int, containerI
 	if _, exists := network.Allocations[containerID]; exists {
 		return "", fmt.Errorf("container %q is already connected to network %q", containerID, networkName)
 	}
+	normalizedPorts, err := normalizePortMappings(ports)
+	if err != nil {
+		return "", err
+	}
+	if err := validatePortMappingReservations(current.Networks, normalizedPorts); err != nil {
+		return "", err
+	}
 	address, err := allocateAddress(*network)
 	if err != nil {
 		return "", err
@@ -498,18 +505,39 @@ func JoinWithRunner(ctx context.Context, networkName string, pid int, containerI
 		network.Allocations = make(map[string]string)
 	}
 	network.Allocations[containerID] = address
+	if len(normalizedPorts) > 0 {
+		if network.Published == nil {
+			network.Published = make(map[string][]PortMapping)
+		}
+		network.Published[containerID] = normalizedPorts
+	}
 	if err := saveStore(dir, current); err != nil {
 		delete(network.Allocations, containerID)
+		delete(network.Published, containerID)
 		return "", err
 	}
 	hostVeth, peerVeth := vethNames(containerID)
-	releaseAllocation := func() {
+	releaseAllocation := func() error {
 		delete(network.Allocations, containerID)
-		_ = saveStore(dir, current)
+		delete(network.Published, containerID)
+		return saveStore(dir, current)
 	}
 	rollbackCreatedVeth := func(cause error) (string, error) {
-		_ = runner.Run(ctx, "ip", "link", "del", "dev", hostVeth)
-		releaseAllocation()
+		var cleanupErrors []string
+		for _, mapping := range normalizedPorts {
+			if err := removePortMappingRules(ctx, runner, *network, address, mapping); err != nil {
+				cleanupErrors = append(cleanupErrors, err.Error())
+			}
+		}
+		if err := runner.Run(ctx, "ip", "link", "del", "dev", hostVeth); err != nil && !missingNetworkInterface(err) {
+			cleanupErrors = append(cleanupErrors, err.Error())
+		}
+		if err := releaseAllocation(); err != nil {
+			cleanupErrors = append(cleanupErrors, err.Error())
+		}
+		if len(cleanupErrors) > 0 {
+			return "", fmt.Errorf("%v; bridge rollback incomplete: %s", cause, strings.Join(cleanupErrors, "; "))
+		}
 		return "", cause
 	}
 	steps := []struct {
@@ -532,10 +560,17 @@ func JoinWithRunner(ctx context.Context, networkName string, pid int, containerI
 			if index == 0 {
 				// A colliding veth name may refer to an unrelated host interface.
 				// The failed create did not give Boxr ownership of that link.
-				releaseAllocation()
+				if cleanupErr := releaseAllocation(); cleanupErr != nil {
+					return "", fmt.Errorf("%v; release IPAM reservation: %w", wrapped, cleanupErr)
+				}
 				return "", wrapped
 			}
 			return rollbackCreatedVeth(wrapped)
+		}
+	}
+	for _, mapping := range normalizedPorts {
+		if err := addPortMappingRules(ctx, runner, *network, address, mapping); err != nil {
+			return rollbackCreatedVeth(fmt.Errorf("publish host port %s:%d/%s: %w", mapping.HostIP, mapping.HostPort, mapping.Protocol, err))
 		}
 	}
 	return address, nil
@@ -644,14 +679,22 @@ func LeaveWithRunner(ctx context.Context, networkName, containerID string, runne
 		return fmt.Errorf("network %q does not exist", networkName)
 	}
 	network := &current.Networks[index]
-	if _, exists := network.Allocations[containerID]; !exists {
+	address, exists := network.Allocations[containerID]
+	if !exists {
 		return fmt.Errorf("container %q has no allocation on network %q", containerID, networkName)
+	}
+	mappings := append([]PortMapping(nil), network.Published[containerID]...)
+	for _, mapping := range mappings {
+		if err := removePortMappingRules(ctx, runner, *network, address, mapping); err != nil {
+			return fmt.Errorf("disconnect published port %s:%d/%s: %w", mapping.HostIP, mapping.HostPort, mapping.Protocol, err)
+		}
 	}
 	hostVeth, _ := vethNames(containerID)
 	if err := runner.Run(ctx, "ip", "link", "del", "dev", hostVeth); err != nil && !missingNetworkInterface(err) {
 		return fmt.Errorf("disconnect container from network %q: %w", networkName, err)
 	}
 	delete(network.Allocations, containerID)
+	delete(network.Published, containerID)
 	return saveStore(dir, current)
 }
 
