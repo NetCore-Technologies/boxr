@@ -95,6 +95,8 @@ func TestReadinessProbeHonorsCancellation(t *testing.T) {
 func TestReadinessProbeRejectsUnsafeAndUnboundedTargets(t *testing.T) {
 	tests := map[string]ReadinessProbe{
 		"missing target":                  {},
+		"whitespace TCP with HTTP target": {TCPAddress: " ", HTTPURL: "http://127.0.0.1/"},
+		"whitespace HTTP with TCP target": {TCPAddress: "127.0.0.1:80", HTTPURL: " "},
 		"both target types":               {TCPAddress: "127.0.0.1:80", HTTPURL: "http://127.0.0.1/"},
 		"external tcp host":                {TCPAddress: "example.com:80"},
 		"localhost hostname":               {TCPAddress: "localhost:80"},
