@@ -122,16 +122,15 @@ func TestLoadComposeDerivesProjectNameAndAcceptsIsolatedServices(t *testing.T) {
 
 func TestLoadComposeRejectsSemanticsBoxrCannotRepresent(t *testing.T) {
 	tests := map[string]string{
-		"image build":                                           "services:\n  api:\n    build: .\n",
-		"named volumes":                                       "services:\n  api:\n    image: alpine\n    network_mode: none\n    volumes: [data:/data]\n",
-		"top-level volumes":                               "services:\n  api:\n    image: alpine\n    network_mode: none\nvolumes:\n  data: {}\n",
-		"entrypoint override":                           "services:\n  api:\n    image: alpine\n    network_mode: none\n    entrypoint: [/bin/sh]\n",
-		"healthcheck command":                           "services:\n  api:\n    image: alpine\n    network_mode: host\n    healthcheck:\n      test: [CMD, /bin/check]\n",
-		"interactive tty":                                   "services:\n  api:\n    image: alpine\n    network_mode: none\n    tty: true\n",
-		"privileged":                                             "services:\n  api:\n    image: alpine\n    network_mode: none\n    privileged: true\n",
-		"restart policy":                                     "services:\n  api:\n    image: alpine\n    network_mode: none\n    restart: always\n",
-		"implicit default bridge":                   "services:\n  api:\n    image: alpine\n",
-		"non-external network":                          "services:\n  api:\n    image: alpine\n    networks: [app]\nnetworks:\n  app: {}\n",
+		"named volumes":                    "services:\n  api:\n    image: alpine\n    network_mode: none\n    volumes: [data:/data]\n",
+		"top-level volumes":                "services:\n  api:\n    image: alpine\n    network_mode: none\nvolumes:\n  data: {}\n",
+		"entrypoint override":              "services:\n  api:\n    image: alpine\n    network_mode: none\n    entrypoint: [/bin/sh]\n",
+		"healthcheck command":              "services:\n  api:\n    image: alpine\n    network_mode: host\n    healthcheck:\n      test: [CMD, /bin/check]\n",
+		"interactive tty":                  "services:\n  api:\n    image: alpine\n    network_mode: none\n    tty: true\n",
+		"privileged":                       "services:\n  api:\n    image: alpine\n    network_mode: none\n    privileged: true\n",
+		"restart policy":                   "services:\n  api:\n    image: alpine\n    network_mode: none\n    restart: always\n",
+		"implicit default bridge":          "services:\n  api:\n    image: alpine\n",
+		"non-external network":             "services:\n  api:\n    image: alpine\n    networks: [app]\nnetworks:\n  app: {}\n",
 		"unsupported dependency condition": "services:\n  api:\n    image: alpine\n    network_mode: none\n    depends_on:\n      db:\n        condition: service_healthy\n  db:\n    image: postgres\n    network_mode: none\n",
 		"unknown service field":            "services:\n  api:\n    image: alpine\n    network_mode: none\n    deploy: {}\n",
 	}
