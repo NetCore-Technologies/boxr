@@ -3810,3 +3810,55 @@ func TestRemoveForceCancelsPendingRestartAndDeletesRecord(t *testing.T) {
 		t.Fatal("container remains after forced removal")
 	}
 }
+
+
+func TestRunAcceptsDockerStylePositionalLocalImages(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	const reference = "local/positional-run:latest"
+	if _, err := imageStore.ImportRootFSWithConfig(root, reference, "linux", runtime.GOARCH, "", imageStore.ImageRuntimeConfig{
+		Cmd: []string{"/bin/sh"},
+	}); err != nil {
+		t.Fatalf("import test image: %v", err)
+	}
+
+	for _, command := range [][]string{
+		{"run", "--dry-run", reference, "/bin/true"},
+		{"container", "run", "--dry-run", reference, "/bin/true"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := run(command, &stdout, &stderr); code != 0 {
+			t.Fatalf("%v returned %d: stdout=%q stderr=%q", command, code, stdout.String(), stderr.String())
+		}
+		var plan struct {
+			ImageReference string `json:"imageReference"`
+			Command        string `json:"command"`
+		}
+		if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
+			t.Fatalf("decode %v dry-run plan: %v (%s)", command, err, stdout.String())
+		}
+		if plan.ImageReference != reference || plan.Command != "/bin/true" {
+			t.Fatalf("%v produced wrong image execution plan: %+v", command, plan)
+		}
+	}
+
+	// A command that merely resembles a path must not be rewritten as an
+	// image unless that reference exists in Boxr's local image store.
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"run", "--dry-run", "/bin/true"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("ordinary command dry-run returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var plan struct {
+		ImageReference string `json:"imageReference"`
+		Command        string `json:"command"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &plan); err != nil {
+		t.Fatalf("decode ordinary command dry-run: %v (%s)", err, stdout.String())
+	}
+	if plan.ImageReference != "" || plan.Command != "/bin/true" {
+		t.Fatalf("ordinary command was rewritten as an image: %+v", plan)
+	}
+}
