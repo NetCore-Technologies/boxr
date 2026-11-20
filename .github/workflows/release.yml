@@ -1,0 +1,189 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  attestations: write
+  id-token: write
+
+jobs:
+  build:
+    name: Build and publish release assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.4"
+          cache: true
+
+      - name: Verify source before packaging
+        run: |
+          test -z "$(gofmt -l $(git ls-files '*.go'))"
+          go vet ./...
+          go test -race ./...
+
+      - name: Resolve build metadata
+        id: version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build_date=$BUILD_DATE" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$BUILD_DATE" >> "$GITHUB_ENV"
+
+      - name: Build release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          LDFLAGS="-s -w -X main.version=${VERSION} -X main.commit=${GITHUB_SHA} -X main.buildDate=${BUILD_DATE}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o boxr-linux-amd64 ./cmd/boxr
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o boxr-linux-arm64 ./cmd/boxr
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o boxr-windows-amd64.exe ./cmd/boxr
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o boxr-darwin-amd64 ./cmd/boxr
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o boxr-darwin-arm64 ./cmd/boxr
+
+      - name: Package portable archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf "boxr-${VERSION}-linux-amd64.tar.gz" boxr-linux-amd64
+          tar -czf "boxr-${VERSION}-linux-arm64.tar.gz" boxr-linux-arm64
+          zip -q "boxr-${VERSION}-windows-amd64.zip" boxr-windows-amd64.exe
+          tar -czf "boxr-${VERSION}-darwin-amd64.tar.gz" boxr-darwin-amd64
+          tar -czf "boxr-${VERSION}-darwin-arm64.tar.gz" boxr-darwin-arm64
+
+      - name: Build Windows MSI
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wixl
+          MSI_VERSION="${VERSION#v}"
+          MSI_VERSION="${MSI_VERSION%%-*}"
+          MSI_VERSION="${MSI_VERSION%%+*}"
+          IFS=. read -r MAJOR MINOR PATCH <<< "$MSI_VERSION"
+          MSI_VERSION="${MAJOR:-0}.${MINOR:-0}.${PATCH:-0}"
+          mkdir -p msi
+          cp boxr-windows-amd64.exe msi/boxr.exe
+          cat > msi/boxr.wxs << WXS
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+            <Product Id="*" Name="boxr" Language="1033" Version="${MSI_VERSION}" Manufacturer="NetCore-Technologies" UpgradeCode="12345678-1234-1234-1234-123456789012">
+              <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine"/>
+              <MediaTemplate EmbedCab="yes"/>
+              <Directory Id="TARGETDIR" Name="SourceDir">
+                <Directory Id="ProgramFilesFolder">
+                  <Directory Id="INSTALLFOLDER" Name="boxr">
+                    <Component Id="boxr.exe" Guid="*">
+                      <File Id="boxr.exe" Source="msi/boxr.exe" KeyPath="yes"/>
+                    </Component>
+                  </Directory>
+                </Directory>
+              </Directory>
+              <Feature Id="ProductFeature" Title="boxr" Level="1">
+                <ComponentRef Id="boxr.exe"/>
+              </Feature>
+            </Product>
+          </Wix>
+          WXS
+          wixl -o "boxr-${VERSION}-windows-amd64.msi" msi/boxr.wxs
+
+      - name: Build Debian packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEB_VERSION="${VERSION#v}"
+          for ARCH in amd64 arm64; do
+            PACKAGE_DIR="deb/boxr_${DEB_VERSION}_${ARCH}"
+            mkdir -p "$PACKAGE_DIR/DEBIAN" "$PACKAGE_DIR/usr/local/bin"
+            install -m 0755 "boxr-linux-${ARCH}" "$PACKAGE_DIR/usr/local/bin/boxr"
+            cat > "$PACKAGE_DIR/DEBIAN/control" << CONTROL
+          Package: boxr
+          Version: ${DEB_VERSION}
+          Architecture: ${ARCH}
+          Maintainer: NetCore-Technologies
+          Description: Lightweight Linux process isolation runtime using namespaces and cgroups
+          CONTROL
+            dpkg-deb --build "$PACKAGE_DIR"
+            mv "${PACKAGE_DIR}.deb" "boxr-${VERSION}-${ARCH}.deb"
+          done
+
+      - name: Generate SHA-256 manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum \
+            "boxr-${VERSION}-linux-amd64.tar.gz" \
+            "boxr-${VERSION}-linux-arm64.tar.gz" \
+            "boxr-${VERSION}-windows-amd64.zip" \
+            "boxr-${VERSION}-windows-amd64.msi" \
+            "boxr-${VERSION}-darwin-amd64.tar.gz" \
+            "boxr-${VERSION}-darwin-arm64.tar.gz" \
+            "boxr-${VERSION}-amd64.deb" \
+            "boxr-${VERSION}-arm64.deb" \
+            > "boxr-${VERSION}-checksums.txt"
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          cat > release-notes.md << NOTES
+          ## boxr ${VERSION}
+
+          A small Linux process-isolation runtime built with Go, Linux namespaces, and cgroup v2.
+
+          ### Included
+          - PID, UTS, mount, and IPC namespaces; optional user and loopback-only network namespaces
+          - Optional chroot rootfs, read-only rootfs, proc, recursive bind mounts, and bounded tmpfs mounts
+          - Capability drops and no-new-privileges controls
+          - cgroup v2 memory max/high/low/min/swap, CPU quota/weight, I/O weight, PID limits, and group OOM policy
+          - Working directory, hostname, environment files, labels, and versioned JSON run configurations
+          - PID-1 helper with startup barrier, signal forwarding, child reaping, and exit-code propagation
+          - Local container history, inspect, stats, events, cleanup, and pruning commands
+          - Rootfs pack/unpack/inspect/verify, deterministic digest, and filesystem diff
+          - Persistent OverlayFS writable rootfs layers with a guarded upper/work directory
+          - Named persistent volumes, labels, filtered inventory, safe export, and read-only mounts
+          - Container logs, stop/kill/wait, and secret-redacted local state
+          - Linux amd64/arm64 runtime builds plus Windows/macOS CLI-only builds
+          - SHA-256 checksums for release archives and packages
+
+          ### Install
+          Linux: download and verify the matching `boxr-${VERSION}-linux-ARCH.tar.gz` archive using `boxr-${VERSION}-checksums.txt`.
+          Debian/Ubuntu: install `boxr-${VERSION}-amd64.deb` or `boxr-${VERSION}-arm64.deb` for the matching architecture.
+          Windows: use `install.ps1` from the repository.
+
+          ### Important limitations
+          Container execution requires Linux. Without --rootfs, commands retain access to the host filesystem tree. --network none provides a private loopback-only network namespace, not outbound connectivity. OverlayFS is a writable rootfs layer only, not an OCI image-layer store. There is no seccomp profile, device filter, LSM policy manager, veth/bridge/NAT networking, OCI registry client, or detached daemon. These primitives are not a hardened multi-tenant security boundary; do not run untrusted workloads.
+          NOTES
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: "boxr ${{ steps.version.outputs.version }}"
+          body_path: release-notes.md
+          files: |
+            boxr-${{ steps.version.outputs.version }}-linux-amd64.tar.gz
+            boxr-${{ steps.version.outputs.version }}-linux-arm64.tar.gz
+            boxr-${{ steps.version.outputs.version }}-windows-amd64.zip
+            boxr-${{ steps.version.outputs.version }}-windows-amd64.msi
+            boxr-${{ steps.version.outputs.version }}-darwin-amd64.tar.gz
+            boxr-${{ steps.version.outputs.version }}-darwin-arm64.tar.gz
+            boxr-${{ steps.version.outputs.version }}-amd64.deb
+            boxr-${{ steps.version.outputs.version }}-arm64.deb
+            boxr-${{ steps.version.outputs.version }}-checksums.txt
+            install.sh
+            install.ps1
+
+      - name: Attest release artifacts
+        uses: actions/attest@v4
+        with:
+          subject-path: "boxr-${{ steps.version.outputs.version }}-*"
