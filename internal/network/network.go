@@ -88,6 +88,12 @@ type Runner interface {
 	Run(ctx context.Context, executable string, args ...string) error
 }
 
+// OutputRunner executes a host command and returns its combined output. Network
+// cleanup uses it to verify Boxr-owned link aliases before deleting interfaces.
+type OutputRunner interface {
+	Output(ctx context.Context, executable string, args ...string) ([]byte, error)
+}
+
 type RunnerFunc func(ctx context.Context, executable string, args ...string) error
 
 func (f RunnerFunc) Run(ctx context.Context, executable string, args ...string) error {
@@ -107,6 +113,19 @@ func (commandRunner) Run(ctx context.Context, executable string, args ...string)
 		return err
 	}
 	return nil
+}
+
+func (commandRunner) Output(ctx context.Context, executable string, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, executable, args...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		detail := strings.TrimSpace(string(output))
+		if detail != "" {
+			return output, fmt.Errorf("%s: %w", detail, err)
+		}
+		return output, err
+	}
+	return output, nil
 }
 
 // StoreDir resolves the private directory used for network/IPAM state.
@@ -614,6 +633,7 @@ func JoinWithRunner(ctx context.Context, networkName string, pid int, containerI
 		args   []string
 	}{
 		{"ip", []string{"link", "add", hostVeth, "type", "veth", "peer", "name", peerVeth}},
+		{"ip", []string{"link", "set", "dev", hostVeth, "alias", vethAlias(network.ID, containerID)}},
 		{"ip", []string{"link", "set", hostVeth, "master", network.Bridge}},
 		{"ip", []string{"link", "set", "dev", hostVeth, "up"}},
 		{"ip", []string{"link", "set", peerVeth, "netns", fmt.Sprint(pid)}},
@@ -848,6 +868,9 @@ func leaveFromStore(ctx context.Context, runner Runner, current *store, dir stri
 		}
 	}
 	hostVeth, _ := vethNames(containerID)
+	if err := verifyVethOwnership(ctx, runner, network.ID, containerID); err != nil {
+		return fmt.Errorf("refusing to remove veth %s: %w", hostVeth, err)
+	}
 	if err := runner.Run(ctx, "ip", "link", "del", "dev", hostVeth); err != nil && !missingNetworkInterface(err) {
 		return fmt.Errorf("disconnect container from network %q: %w", network.Name, err)
 	}
@@ -1011,6 +1034,32 @@ func prefixLength(value string) string {
 func firewallChains(id string) (string, string) {
 	suffix := strings.ToUpper(id[:8])
 	return "BXF" + suffix, "BXN" + suffix
+}
+
+func vethAlias(networkID, containerID string) string {
+	return "boxr:" + networkID + ":" + containerID
+}
+
+func verifyVethOwnership(ctx context.Context, runner Runner, networkID, containerID string) error {
+	inspector, ok := runner.(OutputRunner)
+	if !ok {
+		return fmt.Errorf("network command runner cannot inspect link ownership")
+	}
+	hostVeth, _ := vethNames(containerID)
+	output, err := inspector.Output(ctx, "ip", "-details", "-o", "link", "show", "dev", hostVeth)
+	if err != nil {
+		if missingNetworkInterface(err) {
+			return nil
+		}
+		return fmt.Errorf("inspect host veth: %w", err)
+	}
+	fields := strings.Fields(string(output))
+	for index, field := range fields {
+		if field == "alias" && index+1 < len(fields) && fields[index+1] == vethAlias(networkID, containerID) {
+			return nil
+		}
+	}
+	return fmt.Errorf("interface alias does not match the recorded Boxr network and container identity")
 }
 
 func vethNames(containerID string) (string, string) {
