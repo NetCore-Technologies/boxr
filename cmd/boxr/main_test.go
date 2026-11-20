@@ -3347,3 +3347,14 @@ func TestDeferImageServiceBindMountsRejectsUnrepresentablePaths(t *testing.T) {
 		}
 	}
 }
+
+
+func TestCompletionIncludesDockerEngineDaemon(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := runCompletion([]string{"bash"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("bash completion returned %d: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "daemon") {
+		t.Fatalf("completion does not include daemon command: %s", stdout.String())
+	}
+}
