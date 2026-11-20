@@ -1488,7 +1488,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `boxr — lightweight Linux process isolation
 
 Usage:
-  boxr run [options] [--dry-run] COMMAND [ARG...]
+  boxr run [options] [--detach|-d] [--dry-run] COMMAND [ARG...]
   boxr version [--json]
   boxr info [--json]
   boxr system df [--json]
@@ -4758,31 +4758,6 @@ func runNetwork(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "boxr network: unknown action %q\n", args[0])
 		return 2
 	}
-}
-
-func extractDetachedFlag(args []string) ([]string, bool, error) {
-	result := make([]string, 0, len(args))
-	detached := false
-	for index, argument := range args {
-		if argument == "--" {
-			result = append(result, args[index:]...)
-			break
-		}
-		if argument == "--detach" || argument == "-d" {
-			detached = true
-			continue
-		}
-		if strings.HasPrefix(argument, "--detach=") {
-			value, err := strconv.ParseBool(strings.TrimPrefix(argument, "--detach="))
-			if err != nil {
-				return nil, false, fmt.Errorf("--detach expects true or false")
-			}
-			detached = value
-			continue
-		}
-		result = append(result, argument)
-	}
-	return result, detached, nil
 }
 
 func runDetachedContainer(args []string, stdout, stderr io.Writer) int {
