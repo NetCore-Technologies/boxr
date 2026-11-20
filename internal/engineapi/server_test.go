@@ -1,15 +1,15 @@
 package engineapi
 
 import (
+	"bufio"
 	"encoding/base64"
 	"encoding/binary"
-	"bufio"
 	"encoding/json"
-	"strconv"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
