@@ -27,8 +27,8 @@ import (
 )
 
 const (
-	storeVersion   = 1
-	maxStoreBytes  = 4 << 20
+	storeVersion    = 1
+	maxStoreBytes   = 4 << 20
 	maxNetworkCount = 128
 )
 
@@ -40,15 +40,15 @@ var (
 // Network is the persistent identity and IPAM state of one bridge network.
 // Allocations are keyed by Boxr container ID, never by user-controlled names.
 type Network struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Driver      string            `json:"driver"`
-	Bridge      string            `json:"bridge"`
-	Subnet      string            `json:"subnet"`
-	Gateway     string            `json:"gateway"`
-	NAT         bool                    `json:"nat"`
-	CreatedAt   time.Time               `json:"createdAt"`
-	Allocations map[string]string       `json:"allocations,omitempty"`
+	ID          string                   `json:"id"`
+	Name        string                   `json:"name"`
+	Driver      string                   `json:"driver"`
+	Bridge      string                   `json:"bridge"`
+	Subnet      string                   `json:"subnet"`
+	Gateway     string                   `json:"gateway"`
+	NAT         bool                     `json:"nat"`
+	CreatedAt   time.Time                `json:"createdAt"`
+	Allocations map[string]string        `json:"allocations,omitempty"`
 	Published   map[string][]PortMapping `json:"published,omitempty"`
 }
 
@@ -169,7 +169,6 @@ func lockStore() (func(), error) {
 		storeMu.Unlock()
 	}, nil
 }
-
 
 func loadStore() (store, string, error) {
 	var result store
