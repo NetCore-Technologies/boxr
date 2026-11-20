@@ -529,9 +529,11 @@ func findExecPath(command string, environment []string) (string, error) {
 	return "", fmt.Errorf("executable %q was not found in the container PATH", command)
 }
 
+const linuxOPath = 0x200000 // Linux O_PATH: open a directory handle without requiring read access.
+
 func openProcDirectory(pid int, entry string) (*os.File, error) {
 	path := filepath.Join("/proc", strconv.Itoa(pid), entry)
-	fd, err := syscall.Open(path, syscall.O_PATH|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	fd, err := syscall.Open(path, linuxOPath|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
