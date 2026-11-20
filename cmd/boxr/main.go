@@ -518,50 +518,87 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 	}
 	defer logFile.Close()
 	combinedLog := io.MultiWriter(logFile)
-	started := false
-	runErr := container.RunWithHooks(commandArgs[0], commandArgs[1:], opts, container.Hooks{
-		Stdout: io.MultiWriter(stdout, combinedLog),
-		Stderr: io.MultiWriter(stderr, combinedLog),
-		OnStart: func(pid int) error {
-			if opts.NetworkMode == "bridge" {
-				if _, err := boxrnetwork.Join(opts.NetworkName, pid, record.ID, opts.PublishedPorts...); err != nil {
-					return fmt.Errorf("attach bridge network %q: %w", opts.NetworkName, err)
+	startedAny := false
+	var runErr error
+	for {
+		attemptStarted := false
+		runErr = container.RunWithHooks(commandArgs[0], commandArgs[1:], opts, container.Hooks{
+			Stdout: io.MultiWriter(stdout, combinedLog),
+			Stderr: io.MultiWriter(stderr, combinedLog),
+			OnStart: func(pid int) error {
+				if opts.NetworkMode == "bridge" {
+					if _, err := boxrnetwork.Join(opts.NetworkName, pid, record.ID, opts.PublishedPorts...); err != nil {
+						return fmt.Errorf("attach bridge network %q: %w", opts.NetworkName, err)
+					}
 				}
+				if err := state.Start(record.ID, pid); err != nil {
+					_ = boxrnetwork.LeaveAll(record.ID)
+					return err
+				}
+				attemptStarted = true
+				startedAny = true
+				return nil
+			},
+			OnReady: func(pid int) {
+				if detachedReadyWriter != nil && !detachedReadySent {
+					_, _ = fmt.Fprintf(detachedReadyWriter, "READY %s %d\n", record.ID, pid)
+					detachedReadySent = true
+					_ = detachedReadyWriter.Close()
+					detachedReadyWriter = nil
+				}
+			},
+			OnExit: func(_ int, executionErr error) error {
+				var networkErr error
+				if opts.NetworkMode == "bridge" || opts.NetworkMode == "none" {
+					networkErr = boxrnetwork.LeaveAll(record.ID)
+				}
+				stateErr := state.Finish(record.ID, executionErr)
+				if networkErr != nil && stateErr != nil {
+					return fmt.Errorf("disconnect bridge network: %v; finish container record: %w", networkErr, stateErr)
+				}
+				if networkErr != nil {
+					return fmt.Errorf("disconnect bridge network: %w", networkErr)
+				}
+				return stateErr
+			},
+		})
+
+		// RunWithHooks can fail before its exit callback is installed (for
+		// example, when clone or user-namespace setup fails). Persist that
+		// attempt too, so on-failure policies can reason about the exit.
+		current, stateErr := state.Get(record.ID)
+		if stateErr != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("read container restart state: %w", stateErr))
+			break
+		}
+		if current.Status == "created" || current.Status == "restarting" || current.Status == "running" {
+			if finishErr := state.Finish(record.ID, runErr); finishErr != nil {
+				runErr = errors.Join(runErr, fmt.Errorf("record container attempt exit: %w", finishErr))
+				break
 			}
-			if err := state.Start(record.ID, pid); err != nil {
-				_ = boxrnetwork.LeaveAll(record.ID)
-				return err
-			}
-			started = true
-			return nil
-		},
-		OnReady: func(pid int) {
-			if detachedReadyWriter != nil && !detachedReadySent {
-				_, _ = fmt.Fprintf(detachedReadyWriter, "READY %s %d\n", record.ID, pid)
-				detachedReadySent = true
-				_ = detachedReadyWriter.Close()
-				detachedReadyWriter = nil
-			}
-		},
-		OnExit: func(_ int, executionErr error) error {
-			var networkErr error
-			if opts.NetworkMode == "bridge" || opts.NetworkMode == "none" {
-				networkErr = boxrnetwork.LeaveAll(record.ID)
-			}
-			stateErr := state.Finish(record.ID, executionErr)
-			if networkErr != nil && stateErr != nil {
-				return fmt.Errorf("disconnect bridge network: %v; finish container record: %w", networkErr, stateErr)
-			}
-			if networkErr != nil {
-				return fmt.Errorf("disconnect bridge network: %w", networkErr)
-			}
-			return stateErr
-		},
-	})
-	if !started {
+			current, _ = state.Get(record.ID)
+		}
+
+		if !restartPolicyApplies(opts, current) {
+			break
+		}
+		if err := state.PrepareRestart(record.ID); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("prepare container restart: %w", err))
+			break
+		}
+		delay := time.Duration(opts.RestartDelayMS) * time.Millisecond
+		if delay == 0 {
+			delay = time.Second
+		}
+		if !waitForContainerRestart(record.ID, delay) {
+			break
+		}
+	}
+
+	if !startedAny && (opts.RestartPolicy == "" || opts.RestartPolicy == "no") {
 		_ = state.RemoveCreated(record.ID)
 	}
-	if opts.AutoRemove && started {
+	if opts.AutoRemove && startedAny {
 		if removeErr := state.Remove(record.ID); removeErr != nil {
 			fmt.Fprintf(stderr, "boxr run: auto-remove: %v\n", removeErr)
 		}
@@ -586,6 +623,42 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, " exited successfully")
 	}
 	return 0
+}
+
+func restartPolicyApplies(options container.Options, record state.Record) bool {
+	if record.StopRequested {
+		return false
+	}
+	switch restartPolicyName(options.RestartPolicy) {
+	case "always", "unless-stopped":
+		return true
+	case "on-failure":
+		if record.ExitCode == nil || *record.ExitCode == 0 {
+			return false
+		}
+		return options.RestartMaxRetries == 0 || record.RestartCount < options.RestartMaxRetries
+	default:
+		return false
+	}
+}
+
+func waitForContainerRestart(id string, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		record, err := state.Get(id)
+		if err != nil || record.StopRequested || record.Status != "restarting" {
+			return false
+		}
+		select {
+		case <-timer.C:
+			record, err := state.Get(id)
+			return err == nil && !record.StopRequested && record.Status == "restarting"
+		case <-ticker.C:
+		}
+	}
 }
 
 type runPlan struct {
