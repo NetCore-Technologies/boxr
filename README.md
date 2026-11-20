@@ -265,6 +265,10 @@ Boxr can import a prepared rootfs directory into a local OCI image-layout store 
 
 ```bash
 boxr image import ./rootfs alpine:local
+boxr build -t my-app:latest .                 # Dockerfile build with Docker-style -t
+boxr images                                  # list local images
+boxr tag my-app:latest my-app:stable          # alias without copying image data
+boxr rmi my-app:latest                       # remove one local tag
 boxr image push alpine:local ghcr.io/your-org/alpine-boxr:v1
 boxr image pull --platform linux/amd64 ghcr.io/your-org/alpine-boxr:v1
 boxr image ls
@@ -290,7 +294,7 @@ The store defaults to `$XDG_DATA_HOME/boxr/images` or `~/.local/share/boxr/image
 
 ## Docker-style pull, create, and start
 
-The top-level image commands are shortcuts for the full image namespace:
+The top-level image commands are shortcuts for the full image namespace. `boxr build -t NAME:TAG [CONTEXT]` uses the same verified Dockerfile builder as `boxr image build`; `boxr images`, `boxr tag`, and `boxr rmi` map to the corresponding local image-store operations:
 
 ```bash
 sudo boxr pull --platform linux/amd64 docker.io/library/alpine:latest
