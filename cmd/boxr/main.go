@@ -521,7 +521,6 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 	startedAny := false
 	var runErr error
 	for {
-		attemptStarted := false
 		runErr = container.RunWithHooks(commandArgs[0], commandArgs[1:], opts, container.Hooks{
 			Stdout: io.MultiWriter(stdout, combinedLog),
 			Stderr: io.MultiWriter(stderr, combinedLog),
@@ -535,7 +534,6 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 					_ = boxrnetwork.LeaveAll(record.ID)
 					return err
 				}
-				attemptStarted = true
 				startedAny = true
 				return nil
 			},
