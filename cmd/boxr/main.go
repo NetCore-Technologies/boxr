@@ -549,6 +549,7 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 	}
 
 	var record state.Record
+	var err error
 	if existingID != "" {
 		record, err = state.Get(existingID)
 		if err == nil && record.Status != "created" {
