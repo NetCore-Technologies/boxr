@@ -50,7 +50,7 @@ func TestCreateProducesPrivateSanitizedArchive(t *testing.T) {
 				t.Fatal(err)
 			}
 			_ = reader.Close()
-			if report.Boxr.Version != "1.2.3" || report.Diagnostics.OK != 1 || report.Diagnostics.Warn != 1 || len(report.Diagnostics.Checks) != 2 {
+			if report.Boxr.Version != "1.2.3" || report.Diagnostics.OK != 1 || report.Diagnostics.Warn != 1 || len(report.Diagnostics.Checks) != 2 || report.Runtime.Kernel != "6.12.1" || !report.Runtime.CgroupV2 {
 				t.Fatalf("unexpected report: %#v", report)
 			}
 			if report.Privacy.IncludesEnvironment || report.Privacy.IncludesCommandArgs ||

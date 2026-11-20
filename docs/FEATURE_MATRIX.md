@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 460 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 462 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -466,3 +466,5 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 458. support bundle rejects symlink destinations and requires explicit overwrite confirmation
 459. support bundle archives and reports a SHA-256 digest
 460. support bundle archive and entries use private file permissions
+461. support bundle includes host kernel release metadata
+462. support bundle reports cgroup v2 availability

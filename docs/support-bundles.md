@@ -4,7 +4,7 @@ Use `boxr support-bundle --output PATH` to create a compact ZIP archive for bug 
 
 ## Contents
 
-The archive contains `report.json` (schema version, generation time, Boxr build metadata, Go runtime/OS/architecture, and read-only `doctor` check names/statuses) and `README.txt` (privacy summary and sharing reminder).
+The archive contains `report.json` (schema version, generation time, Boxr build metadata, Go runtime/OS/architecture, host kernel release, cgroup v2 availability, and read-only `doctor` check names/statuses) and `README.txt` (privacy summary and sharing reminder).
 
 Diagnostic details are deliberately excluded because they may contain host paths or other machine-specific values. The archive does not include environment variables or values, command arguments, container labels, config files, container logs, container state, or filesystem paths.
 

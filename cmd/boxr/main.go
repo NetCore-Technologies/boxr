@@ -1053,10 +1053,18 @@ func runSupportBundle(args []string, stdout, stderr io.Writer) int {
 			Status: string(check.Status),
 		})
 	}
+	kernel := ""
+	if data, err := os.ReadFile("/proc/sys/kernel/osrelease"); err == nil {
+		kernel = strings.TrimSpace(string(data))
+	}
+	_, cgroupErr := os.Stat("/sys/fs/cgroup/cgroup.controllers")
+
 	result, err := support.Create(*output, *force, support.Metadata{
 		Version:     version,
 		Commit:      commit,
 		BuildDate:   buildDate,
+		Kernel:      kernel,
+		CgroupV2:    cgroupErr == nil,
 		Diagnostics: safeDiagnostics,
 	})
 	if err != nil {
@@ -1992,6 +2000,8 @@ var implementedFeatures = []string{
 	"support bundle rejects symlink destinations and requires explicit overwrite confirmation",
 	"support bundle archives and reports a SHA-256 digest",
 	"support bundle archive and entries use private file permissions",
+	"support bundle includes host kernel release metadata",
+	"support bundle reports cgroup v2 availability",
 }
 
 func printFeatures(stdout io.Writer) {

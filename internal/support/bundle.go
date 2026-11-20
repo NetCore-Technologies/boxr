@@ -26,6 +26,8 @@ type Metadata struct {
 	Commit      string       `json:"commit"`
 	BuildDate   string       `json:"buildDate"`
 	Diagnostics []Diagnostic `json:"-"`
+	Kernel      string       `json:"-"`
+	CgroupV2    bool         `json:"-"`
 }
 
 type Report struct {
@@ -47,6 +49,8 @@ type runtimeInfo struct {
 	OS        string `json:"os"`
 	Arch      string `json:"architecture"`
 	GoVersion string `json:"goVersion"`
+	Kernel    string `json:"kernel"`
+	CgroupV2  bool   `json:"cgroupV2"`
 }
 
 type diagSummary struct {
@@ -132,7 +136,13 @@ func Create(path string, force bool, metadata Metadata) (Result, error) {
 			Commit:    cleanMetadata(metadata.Commit),
 			BuildDate: cleanMetadata(metadata.BuildDate),
 		},
-		Runtime:     runtimeInfo{OS: runtime.GOOS, Arch: runtime.GOARCH, GoVersion: runtime.Version()},
+		Runtime: runtimeInfo{
+			OS:        runtime.GOOS,
+			Arch:      runtime.GOARCH,
+			GoVersion: runtime.Version(),
+			Kernel:    cleanMetadata(metadata.Kernel),
+			CgroupV2:  metadata.CgroupV2,
+		},
 		Diagnostics: diagSummary{Checks: checks},
 		Privacy:     privacyInfo{},
 	}
