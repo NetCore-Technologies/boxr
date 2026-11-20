@@ -2724,6 +2724,12 @@ var implementedFeatures = []string{
 	"deployment manifests validate service published port mappings through container option rules",
 	"deployment service plans expose normalized TCP and UDP published port bindings",
 	"deployment subprocess runs apply and release published port rules through the container lifecycle",
+	"Linux network store transactions use an advisory cross-process lock for IPAM and port reservations",
+	"Linux network store lock files are opened without following symlinks and restricted to owner read/write",
+	"non-Linux CLI builds retain process-local network store locking without claiming runtime support",
+	"published port setup checks exact PREROUTING OUTPUT and FORWARD rules before insertion",
+	"published port rollback removes only firewall rules inserted by the current attachment attempt",
+	"failed firewall cleanup retains the IPAM lease and host-port reservation until cleanup can be retried",
 }
 
 func printFeatures(stdout io.Writer) {
