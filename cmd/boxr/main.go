@@ -2928,6 +2928,18 @@ var implementedFeatures = []string{
 	"registry pushes convert Boxr's private rootfs layer media type to standard OCI gzip layer media type",
 	"registry pushes preserve compressed layer bytes and SHA-256 digest during OCI media type normalization",
 	"registry push verifies the published digest of the portable normalized OCI manifest",
+	"detached container restart policies support no on-failure always and unless-stopped modes",
+	"on-failure restart policy evaluates persisted non-zero container exit status",
+	"on-failure restart policy supports a bounded retry count with zero meaning unlimited",
+	"detached restart delay defaults to one second and is bounded from 100 milliseconds to five minutes",
+	"restarted container attempts retain one persistent container ID and one log stream",
+	"container state records persist restart attempt count and previous exit status",
+	"manual stop intent is persisted before termination signals and suppresses restart policies",
+	"boxr stop cancels a pending restart delay without signalling a non-existent process",
+	"terminating boxr kill signals cancel a pending restart delay and suppress future attempts",
+	"restarting containers remain visible in active container listings during backoff",
+	"container removal is blocked while a restart attempt is pending",
+	"restart policies require detached execution and reject automatic record removal",
 }
 
 func printFeatures(stdout io.Writer) {
