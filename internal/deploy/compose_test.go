@@ -270,7 +270,7 @@ func TestLoadComposeRejectsUnsafeOrImplicitVolumeSemantics(t *testing.T) {
 		},
 		{
 			name:    "undeclared named volume",
-			volumes: "volumes: [data:/data]",
+			volumes:  "volumes: [data:/data]",
 		},
 		{
 			name:    "unsupported propagation mode",
