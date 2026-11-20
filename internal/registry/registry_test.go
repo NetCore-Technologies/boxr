@@ -363,6 +363,7 @@ func testConfigWithDiffIDs(t *testing.T, arch string, diffIDs []string, runtimeC
 	}
 	return data
 }
+
 func TestPullRejectsTamperedLayerDigest(t *testing.T) {
 	layer, diffID := testLayer(t)
 	configData := testConfig(t, "amd64", diffID)
