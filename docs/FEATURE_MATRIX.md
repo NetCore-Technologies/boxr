@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 842 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 843 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -848,3 +848,4 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 840. top-level pull command reuses verified OCI and Docker registry image downloads
 841. native create command records a verified image-backed container without starting it
 842. native start command launches a created image-backed container through the detached supervisor
+843. native start restarts stopped image-backed containers and clears stale manual-stop intent
