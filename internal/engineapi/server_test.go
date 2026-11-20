@@ -235,3 +235,55 @@ func TestMalformedContainerQueriesReturnDockerErrors(t *testing.T) {
 		t.Fatalf("missing container status=%d", response.Code)
 	}
 }
+
+
+func TestDockerImageIDDoesNotDuplicateDigestAlgorithm(t *testing.T) {
+	if got := dockerImageID("sha256:abc123"); got != "sha256:abc123" {
+		t.Fatalf("prefixed image ID = %q", got)
+	}
+	if got := dockerImageID("abc123"); got != "sha256:abc123" {
+		t.Fatalf("unprefixed image ID = %q", got)
+	}
+}
+
+func TestEngineAPIValidatesLogAndEventQueryParameters(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("query-test", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := engineAPIRequest(server, http.MethodGet, "/containers/"+record.ID+"/logs?stdout=1&follow=not-a-bool")
+	if response.Code != http.StatusBadRequest {
+		t.Errorf("invalid log follow status=%d", response.Code)
+	}
+	response = engineAPIRequest(server, http.MethodGet, "/events?since=not-a-timestamp")
+	if response.Code != http.StatusBadRequest {
+		t.Errorf("invalid event timestamp status=%d", response.Code)
+	}
+	response = engineAPIRequest(server, http.MethodGet, "/events?until="+strconv.FormatInt(time.Now().Add(time.Minute).Unix(), 10)+"&filters=not-base64")
+	if response.Code != http.StatusBadRequest {
+		t.Errorf("invalid event filters status=%d", response.Code)
+	}
+}
+
+func TestEventFiltersMatchContainerActionsAndIDs(t *testing.T) {
+	event := state.Event{Action: "start", ID: "abcdef123456", Name: "api"}
+	tests := []struct {
+		name    string
+		filters map[string][]string
+		want    bool
+	}{
+		{name: "type and event", filters: map[string][]string{"type": {"container"}, "event": {"start"}}, want: true},
+		{name: "container ID prefix", filters: map[string][]string{"container": {"abcdef"}}, want: true},
+		{name: "container name", filters: map[string][]string{"container": {"api"}}, want: true},
+		{name: "wrong event", filters: map[string][]string{"event": {"die"}}, want: false},
+		{name: "unsupported filter", filters: map[string][]string{"image": {"alpine"}}, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := matchesEventFilters(event, test.filters); got != test.want {
+				t.Fatalf("matchesEventFilters() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
