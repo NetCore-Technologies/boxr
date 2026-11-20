@@ -76,8 +76,9 @@ type ServicePlan struct {
 	DependsOn             []string      `json:"dependsOn,omitempty"`
 	Profiles              []string      `json:"profiles,omitempty"`
 	ReadinessType         string        `json:"readinessType,omitempty"`
-	Volumes               []VolumeMount `json:"volumes,omitempty"`
-	NetworkMode           string        `json:"networkMode"`
+	Volumes               []VolumeMount          `json:"volumes,omitempty"`
+	PublishedPorts        []container.PortMapping `json:"publishedPorts,omitempty"`
+	NetworkMode           string                 `json:"networkMode"`
 	SecurityProfile       string        `json:"securityProfile,omitempty"`
 	ResourceProfile       string        `json:"resourceProfile,omitempty"`
 	RootFSConfigured      bool          `json:"rootfsConfigured"`
@@ -189,6 +190,17 @@ func Load(path string) (File, error) {
 // The returned plan is safe to print: secrets and command arguments are omitted.
 // BuildPlan validates the complete manifest and plans only services that do
 // not opt into a profile. Profile-bound services are inactive until selected.
+func normalizePublishedPorts(mappings []container.PortMapping) []container.PortMapping {
+	result := make([]container.PortMapping, 0, len(mappings))
+	for _, mapping := range mappings {
+		normalized, err := mapping.Normalize()
+		if err == nil {
+			result = append(result, normalized)
+		}
+	}
+	return result
+}
+
 func BuildPlan(file File) (Plan, error) {
 	return BuildPlanWithProfiles(file, nil)
 }
@@ -466,6 +478,7 @@ func buildPlan(file File) (Plan, error) {
 			Profiles:              append([]string(nil), service.Profiles...),
 			ReadinessType:         readinessType,
 			Volumes:               append([]VolumeMount(nil), service.Volumes...),
+			PublishedPorts:        normalizePublishedPorts(service.Options.PublishedPorts),
 			NetworkMode:           networkMode,
 			SecurityProfile:       service.Options.SecurityProfile,
 			ResourceProfile:       service.Options.ResourceProfile,
