@@ -24,6 +24,7 @@ import (
 	"github.com/manit6752025/boxr/internal/registry"
 	"github.com/manit6752025/boxr/internal/rootfs"
 	"github.com/manit6752025/boxr/internal/state"
+	"github.com/manit6752025/boxr/internal/support"
 	"github.com/manit6752025/boxr/internal/volume"
 )
 
@@ -74,6 +75,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "doctor":
 		return runDoctor(args[1:], stdout, stderr)
+	case "support-bundle":
+		return runSupportBundle(args[1:], stdout, stderr)
 	case "rootfs":
 		return runRootFS(args[1:], stdout, stderr)
 	case "image":
@@ -1029,6 +1032,45 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+
+func runSupportBundle(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("support-bundle", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	output := flags.String("output", "", "write the support archive to PATH")
+	force := flags.Bool("force", false, "replace an existing regular output file")
+	jsonOutput := flags.Bool("json", false, "write archive metadata as JSON")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*output) == "" {
+		fmt.Fprintln(stderr, "Usage: boxr support-bundle --output PATH [--force] [--json]")
+		return 2
+	}
+	diagnostics := container.Doctor()
+	safeDiagnostics := make([]support.Diagnostic, 0, len(diagnostics))
+	for _, check := range diagnostics {
+		safeDiagnostics = append(safeDiagnostics, support.Diagnostic{
+			Name: check.Name,
+			Status: string(check.Status),
+		})
+	}
+	result, err := support.Create(*output, *force, support.Metadata{
+		Version: version,
+		Commit: commit,
+		BuildDate: buildDate,
+		Diagnostics: safeDiagnostics,
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr support-bundle: %v\n", err)
+		return 1
+	}
+	if *jsonOutput {
+		return writeJSON(stdout, result, stderr, "boxr support-bundle")
+	}
+	fmt.Fprintf(stdout, "created support bundle %s (%d bytes)\nsha256: %s\n", result.Path, result.Bytes, result.SHA256)
+	return 0
+}
+
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `boxr — lightweight Linux process isolation
 
@@ -1038,6 +1080,7 @@ Usage:
   boxr info [--json]
   boxr system df [--json]
   boxr doctor [--json] [--strict]
+  boxr support-bundle --output PATH [--force] [--json]
   boxr ps [--all] [--last N] [--quiet] [--no-trunc] [--filter KEY=VALUE]
   boxr inspect ID|NAME
   boxr stop [--time 10s] ID|NAME [...]
@@ -1942,6 +1985,14 @@ var implementedFeatures = []string{
 	"rootfs archive normalizes entry modification timestamps", "rootfs archive normalizes access and change timestamps", "rootfs archive normalizes UID and GID metadata", "rootfs archive omits host account names", "rootfs archives are byte-identical for equivalent trees with different mtimes",
 	"named runtime security profiles", "default security profile preserves explicit runtime settings", "baseline security profile enforces no-new-privileges", "baseline security profile enables the built-in seccomp filter", "baseline security profile drops NET_RAW", "restricted security profile disables container networking", "restricted security profile enables a private user namespace", "restricted security profile enforces no-new-privileges and seccomp", "restricted security profile drops high-risk Linux capabilities", "untrusted security profile requires an explicit root filesystem", "untrusted security profile enforces read-only rootfs", "security profiles apply after user flags so weaker flags cannot relax mandatory controls", "security profile is recorded in container metadata and dry-run plans", "strict JSON Schema for versioned run configuration", "config schema command emits a JSON Schema document", "config schema rejects unknown top-level properties", "config schema describes security profile options", "system storage usage summary", "system storage usage includes verified image-store bytes", "system storage usage includes named volume logical bytes", "system storage usage includes container metadata and logs", "system storage usage JSON output", "system storage scanner does not follow symlink entries", "system storage scanner rejects symlinked roots", "system storage scanner treats absent directories as empty",
 	"named resource sizing profiles", "micro resource profile defaults", "small resource profile defaults", "medium resource profile defaults", "large resource profile defaults", "resource profiles fill only unset memory limits", "resource profiles fill only unset CPU quotas", "resource profiles fill only unset PID limits", "resource profiles fill CPU and I/O weights", "resource profile preserves explicit config limits", "resource profile preserves explicit command-line overrides", "resource profile name is validated", "resource profile appears in dry-run plans", "image list filter by ARM variant", "image list filter by digest prefix", "image list filter by metadata label presence", "image list filter by exact metadata label value", "image list filters combine with AND semantics across platform and metadata", "image list rejects empty metadata label filter keys",
+	"privacy-preserving support bundle generation",
+	"support bundle includes Boxr build and Go runtime metadata",
+	"support bundle includes diagnostic names and statuses without detail strings",
+	"support bundle excludes environment values and command arguments",
+	"support bundle excludes container logs, state files, configuration and filesystem paths",
+	"support bundle rejects symlink destinations and requires explicit overwrite confirmation",
+	"support bundle archives and reports a SHA-256 digest",
+	"support bundle archive and entries use private file permissions",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -1992,7 +2043,7 @@ func runCompletion(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Usage: boxr completion bash|zsh|fish|powershell")
 		return 2
 	}
-	commands := "run ps inspect stop kill wait logs volume image stats rm events prune info system doctor rootfs config features version help completion"
+	commands := "run ps inspect stop kill wait logs volume image stats rm events prune info system doctor support-bundle rootfs config features version help completion"
 	switch args[0] {
 	case "bash":
 		fmt.Fprintf(stdout, `_boxr_complete() { COMPREPLY=($(compgen -W "%s" -- "${COMP_WORDS[COMP_CWORD]}")); }
