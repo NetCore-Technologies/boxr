@@ -209,7 +209,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 func runContainerCommand(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "Usage: boxr container create|run|start|restart|rename|stop|kill|wait|logs|exec|ls|ps|inspect|rm|stats ...")
+		fmt.Fprintln(stderr, "Usage: boxr container create|run|start|restart|rename|stop|kill|wait|logs|exec|ls|ps|inspect|rm|stats|prune ...")
 		return 2
 	}
 	switch args[0] {
@@ -1100,6 +1100,10 @@ func runContainerPrune(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Usage: boxr container prune (--dry-run|--force) [--json] [--filter name=VALUE|status=VALUE|label=KEY[=VALUE]]")
 		return 2
 	}
+	if err := validateContainerPruneFilters(filters); err != nil {
+		fmt.Fprintf(stderr, "boxr container prune: %v\n", err)
+		return 2
+	}
 	records, err := state.List(true)
 	if err != nil {
 		fmt.Fprintf(stderr, "boxr container prune: %v\n", err)
@@ -1149,6 +1153,26 @@ func runContainerPrune(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "removed %d stopped container record(s)\n", len(report.Removed))
 	return 0
+}
+
+func validateContainerPruneFilters(filters []string) error {
+	for _, raw := range filters {
+		key, value, ok := strings.Cut(raw, "=")
+		if !ok || value == "" {
+			return fmt.Errorf("invalid filter %q", raw)
+		}
+		switch key {
+		case "name", "status":
+		case "label":
+			labelKey, _, _ := strings.Cut(value, "=")
+			if strings.TrimSpace(labelKey) == "" {
+				return fmt.Errorf("invalid label filter %q", raw)
+			}
+		default:
+			return fmt.Errorf("unsupported filter key %q", key)
+		}
+	}
+	return nil
 }
 
 func matchesContainerPruneFilters(record state.Record, filters []string) (bool, error) {
@@ -3627,7 +3651,8 @@ var implementedFeatures = []string{
 	"native rename and container rename commands preserve container IDs while changing unique names",
 	"Engine API POST containers rename updates unique container names and returns Docker-compatible errors",
 	"compose command aliases the supported Compose YAML deployment validation planning pull and lifecycle workflows",
-	"Engine API POST containers wait blocks for not-running state and returns the persisted workload exit status"
+	"Engine API POST containers wait blocks for not-running state and returns the persisted workload exit status",
+	"container prune previews and filters stopped records and requires explicit force before removal"
 	"Engine API DELETE force true delegates to native safe forced removal for running or restarting containers"
 	"native create command records a verified image-backed container without starting it",
 	"native start command launches a created image-backed container through the detached supervisor",
