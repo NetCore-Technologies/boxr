@@ -1,6 +1,8 @@
 package volume
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +13,80 @@ func useTempData(t *testing.T) string {
 	path := t.TempDir()
 	t.Setenv("BOXR_DATA_DIR", path)
 	return path
+}
+
+func TestExportArchiveDigestRoundTripAndNoClobber(t *testing.T) {
+	useTempData(t)
+	created, err := Create("backup-source", map[string]string{"purpose": "backup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(created.Path, "nested"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(created.Path, "nested", "data.bin"), []byte("important volume data"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("nested/data.bin", filepath.Join(created.Path, "current")); err != nil {
+		t.Fatal(err)
+	}
+
+	archivePath := filepath.Join(t.TempDir(), "backup.tar.gz")
+	archive, err := ExportArchive(created.Name, archivePath)
+	if err != nil {
+		t.Fatalf("ExportArchive: %v", err)
+	}
+	data, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(data)
+	if archive.Volume != created.Name || archive.Path != archivePath ||
+		archive.Digest != "sha256:"+hex.EncodeToString(digest[:]) || archive.SizeBytes != int64(len(data)) {
+		t.Fatalf("archive metadata does not match the exported file: %+v", archive)
+	}
+	if archive.Manifest.Files != 1 || archive.Manifest.Symlinks != 1 {
+		t.Fatalf("archive manifest = %+v", archive.Manifest)
+	}
+
+	restored, manifest, err := ImportArchive("backup-restored", archivePath, nil)
+	if err != nil {
+		t.Fatalf("ImportArchive: %v", err)
+	}
+	contents, err := os.ReadFile(filepath.Join(restored.Path, "nested", "data.bin"))
+	if err != nil || string(contents) != "important volume data" {
+		t.Fatalf("restored data = %q, %v", contents, err)
+	}
+	link, err := os.Readlink(filepath.Join(restored.Path, "current"))
+	if err != nil || link != "nested/data.bin" {
+		t.Fatalf("restored symlink = %q, %v", link, err)
+	}
+	if manifest.Files != archive.Manifest.Files || manifest.Symlinks != archive.Manifest.Symlinks {
+		t.Fatalf("restored manifest = %+v, want %+v", manifest, archive.Manifest)
+	}
+
+	if _, err := ExportArchive(created.Name, archivePath); err == nil {
+		t.Fatal("ExportArchive unexpectedly replaced an existing backup")
+	}
+	after, err := os.ReadFile(archivePath)
+	if err != nil || string(after) != string(data) {
+		t.Fatalf("existing backup changed after rejected overwrite: %v", err)
+	}
+}
+
+func TestExportArchiveRejectsDestinationInsideSourceVolume(t *testing.T) {
+	useTempData(t)
+	created, err := Create("no-recursion", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(created.Path, "backup.tar.gz")
+	if _, err := ExportArchive(created.Name, destination); err == nil {
+		t.Fatal("archive destination inside the source volume unexpectedly accepted")
+	}
+	if _, err := os.Lstat(destination); !os.IsNotExist(err) {
+		t.Fatalf("rejected export left an archive in the source volume: %v", err)
+	}
 }
 
 func TestCreateGetListAndRemoveVolume(t *testing.T) {

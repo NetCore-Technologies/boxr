@@ -27,7 +27,7 @@ It is an early-stage runtime and **not a hardened security boundary or Docker re
 - **cgroup v2:** memory max/high/low/min/swap, CPU quota/weight, I/O weight, PID limits and group OOM policy. The blocked helper is attached before workload execution.
 - **Configuration and deployment:** versioned JSON run files, strict multi-service manifests, dependency-aware parallel startup, bounded TCP/HTTP loopback readiness gates and secret-redacted plans.
 - **Local lifecycle:** persistent records, `ps`, `inspect`, `stats`, `events`, `logs` (tail/follow), `stop` (graceful TERM then KILL), `kill`, `wait`, `rm`, automatic record removal and age-based pruning.
-- **Persistent storage:** named, owner-private volumes with labels, name/label filtering, inspection, listing, safe removal, usage protection, filtered pruning, gzip-tar export and `--volume NAME:/PATH[:ro|rw]` mounts (requires `--rootfs`). OverlayFS upper/work data can also persist between runs.
+- **Persistent storage:** named, owner-private volumes with labels, name/label filtering, inspection, listing, safe removal, usage protection, filtered pruning, SHA-256-described gzip-tar export/import, and `--volume NAME:/PATH[:ro|rw]` mounts (requires `--rootfs`). Export archives are atomically published and never overwrite an existing backup. OverlayFS upper/work data can also persist between runs.
 - **Rootfs workflows:** pack/unpack gzip-tar archives, inspect and verify rootfs, deterministic SHA-256 tree digest and directory diff.
 - **Tooling:** host diagnostics, JSON output (including `boxr features --json`), shell completions, cross-platform CLI builds, CI, vulnerability scanning, CodeQL, release checksums and GitHub Pages.
 
@@ -149,7 +149,8 @@ boxr volume ls
 boxr volume inspect web-data
 boxr volume clone web-data web-data-copy
 boxr volume du --json web-data  # logical snapshot; symlinks are not followed
-boxr volume export web-data web-data-backup.tar.gz
+boxr volume export --json web-data web-data-backup.tar.gz
+# Export refuses to replace an existing file; JSON includes the SHA-256 digest.
 boxr volume import web-data-backup.tar.gz web-data-restored
 boxr volume import web-data-backup.tar.gz web-data-restored
 boxr volume ls --filter label=app=web

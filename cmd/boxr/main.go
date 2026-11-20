@@ -2592,6 +2592,9 @@ var implementedFeatures = []string{
 	"named volume names and mount targets validated before startup",
 	"deployment preflights every named volume before creating services",
 	"named volumes reuse Boxr's secure persistent volume store",
+	"volume archive exports never overwrite an existing destination",
+	"volume archive exports publish atomically from a same-directory staging file",
+	"volume export JSON includes SHA-256 integrity and filesystem manifest metadata",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -4315,11 +4318,17 @@ func runVolume(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "cloned %s to %s: %d file(s), %d directory(s), %d symlink(s)\n", source.Name, cloned.Name, manifest.Files, manifest.Directories, manifest.Symlinks)
 		return 0
 	case "export":
-		if len(args) != 3 {
-			fmt.Fprintln(stderr, "Usage: boxr volume export NAME ARCHIVE.tar.gz")
+		flags := flag.NewFlagSet("volume export", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		jsonOutput := flags.Bool("json", false, "write archive path, SHA-256 digest and manifest as JSON")
+		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}
-		item, err := volume.Get(args[1])
+		if flags.NArg() != 2 {
+			fmt.Fprintln(stderr, "Usage: boxr volume export [--json] NAME ARCHIVE.tar.gz")
+			return 2
+		}
+		item, err := volume.Get(flags.Arg(0))
 		if err == nil {
 			err = ensureVolumeUnused(item.Path)
 		}
@@ -4327,12 +4336,17 @@ func runVolume(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "boxr volume export: %v\n", err)
 			return 1
 		}
-		manifest, err := rootfs.PackTarGz(item.Path, args[2])
+		archive, err := volume.ExportArchive(item.Name, flags.Arg(1))
 		if err != nil {
 			fmt.Fprintf(stderr, "boxr volume export: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "exported %s: %d file(s), %d directory(s), %d symlink(s), %d bytes\n", item.Name, manifest.Files, manifest.Directories, manifest.Symlinks, manifest.Bytes)
+		if *jsonOutput {
+			return writeJSON(stdout, archive, stderr, "boxr volume export")
+		}
+		fmt.Fprintf(stdout, "exported %s to %s (%s; %d bytes; %d file(s), %d directory(s), %d symlink(s))\n",
+			archive.Volume, archive.Path, archive.Digest, archive.SizeBytes,
+			archive.Manifest.Files, archive.Manifest.Directories, archive.Manifest.Symlinks)
 		return 0
 	case "rm", "remove":
 		if len(args) < 2 {

@@ -3,9 +3,12 @@
 package volume
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,6 +41,15 @@ type Usage struct {
 	SymlinkBytes int64  `json:"symlinkBytes"`
 	TotalBytes   int64  `json:"totalBytes"`
 	Snapshot     bool   `json:"snapshot"`
+}
+
+// Archive describes a portable, gzip-compressed volume export.
+type Archive struct {
+	Volume    string          `json:"volume"`
+	Path      string          `json:"path"`
+	Digest    string          `json:"digest"`
+	SizeBytes int64           `json:"sizeBytes"`
+	Manifest  rootfs.Manifest `json:"manifest"`
 }
 
 func DataDir() (string, error) {
@@ -186,6 +198,98 @@ func ImportArchive(name, archivePath string, labels map[string]string) (Volume, 
 	}
 	committed = true
 	return item, manifest, nil
+}
+
+// ExportArchive writes a portable gzip-tar snapshot to a new path. The
+// destination is published with an atomic no-clobber link, so an existing
+// backup is never silently replaced. Callers should prevent active workloads
+// from writing the volume while the point-in-time archive is being created.
+func ExportArchive(name, archivePath string) (Archive, error) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	var result Archive
+	item, err := GetUnlocked(name)
+	if err != nil {
+		return result, err
+	}
+	absolute, err := filepath.Abs(archivePath)
+	if err != nil {
+		return result, fmt.Errorf("resolve archive destination: %w", err)
+	}
+	filename := filepath.Base(absolute)
+	if filename == "." || filename == string(filepath.Separator) || filename == "" {
+		return result, fmt.Errorf("archive destination must name a file")
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(absolute))
+	if err != nil {
+		return result, fmt.Errorf("resolve archive directory: %w", err)
+	}
+	parentInfo, err := os.Stat(parent)
+	if err != nil || !parentInfo.IsDir() {
+		return result, fmt.Errorf("archive parent must be an existing directory")
+	}
+	destination := filepath.Join(parent, filename)
+	if _, err := os.Lstat(destination); err == nil {
+		return result, fmt.Errorf("archive destination %s already exists", destination)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return result, fmt.Errorf("inspect archive destination: %w", err)
+	}
+
+	volumeRoot, err := filepath.EvalSymlinks(item.Path)
+	if err != nil {
+		return result, fmt.Errorf("resolve volume data path: %w", err)
+	}
+	relative, err := filepath.Rel(volumeRoot, destination)
+	if err != nil {
+		return result, err
+	}
+	if relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))) {
+		return result, fmt.Errorf("archive destination must be outside the source volume")
+	}
+
+	temporary, err := os.CreateTemp(parent, ".boxr-volume-export-*.tar.gz")
+	if err != nil {
+		return result, fmt.Errorf("create archive staging file: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(temporaryPath)
+		return result, err
+	}
+	defer os.Remove(temporaryPath)
+
+	manifest, err := rootfs.PackTarGz(item.Path, temporaryPath)
+	if err != nil {
+		return result, fmt.Errorf("pack volume %s: %w", name, err)
+	}
+	archive, err := os.Open(temporaryPath)
+	if err != nil {
+		return result, fmt.Errorf("open completed volume archive: %w", err)
+	}
+	hasher := sha256.New()
+	size, copyErr := io.Copy(hasher, archive)
+	closeErr := archive.Close()
+	if copyErr != nil {
+		return result, fmt.Errorf("digest volume archive: %w", copyErr)
+	}
+	if closeErr != nil {
+		return result, fmt.Errorf("close volume archive: %w", closeErr)
+	}
+	if err := os.Link(temporaryPath, destination); err != nil {
+		return result, fmt.Errorf("publish archive without replacing an existing file: %w", err)
+	}
+	if directory, err := os.Open(parent); err == nil {
+		_ = directory.Sync()
+		_ = directory.Close()
+	}
+	return Archive{
+		Volume:    name,
+		Path:      destination,
+		Digest:    "sha256:" + hex.EncodeToString(hasher.Sum(nil)),
+		SizeBytes: size,
+		Manifest:  manifest,
+	}, nil
 }
 
 func Get(name string) (Volume, error) {

@@ -1455,8 +1455,20 @@ func TestVolumeFiltersAndExport(t *testing.T) {
 	archive := filepath.Join(base, "frontend.tar.gz")
 	out.Reset()
 	errOut.Reset()
-	if code := run([]string{"volume", "export", "frontend", archive}, &out, &errOut); code != 0 || !strings.Contains(out.String(), "exported frontend") {
+	if code := run([]string{"volume", "export", "--json", "frontend", archive}, &out, &errOut); code != 0 {
 		t.Fatalf("volume export: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	var exported volume.Archive
+	if err := json.Unmarshal(out.Bytes(), &exported); err != nil {
+		t.Fatalf("decode volume export metadata: %v", err)
+	}
+	if exported.Volume != "frontend" || !strings.HasPrefix(exported.Digest, "sha256:") || exported.SizeBytes <= 0 {
+		t.Fatalf("volume export metadata is incomplete: %+v", exported)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"volume", "export", "frontend", archive}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "already exists") {
+		t.Fatalf("volume export overwrote existing archive: code=%d out=%q err=%q", code, out.String(), errOut.String())
 	}
 	extracted := filepath.Join(base, "restored")
 	if _, err := rootfs.ExtractTarGz(archive, extracted, rootfs.Limits{}); err != nil {

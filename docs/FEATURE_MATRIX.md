@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 611 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 618 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -621,3 +621,6 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 613. named volume names and mount targets validated before startup
 614. deployment preflights every named volume before creating services
 615. named volumes reuse Boxr's secure persistent volume store
+616. volume archive exports never overwrite an existing destination
+617. volume archive exports publish atomically from a same-directory staging file
+618. volume export JSON includes SHA-256 integrity and filesystem manifest metadata
