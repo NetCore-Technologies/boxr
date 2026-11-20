@@ -25,6 +25,9 @@ func (runner *fakeRunner) Run(_ context.Context, executable string, args ...stri
 		}
 		return errors.New(message)
 	}
+	if strings.Contains(call, "iptables -C ") {
+		return errors.New("Bad rule (does a matching rule exist in that chain?)")
+	}
 	return nil
 }
 
@@ -351,7 +354,7 @@ func TestJoinRollsBackPublishedRulesWhenFirewallSetupFails(t *testing.T) {
 	}
 	// Nine link/namespace operations succeed. Fail the PREROUTING rule after
 	// enabling forwarding and then verify every partial rule and lease is cleaned.
-	runner := &fakeRunner{failAt: 11}
+	runner := &fakeRunner{failAt: 14}
 	_, err := JoinWithRunner(context.Background(), "frontend", 3325, "container-firewall-fail", runner, PortMapping{HostPort: 8081, ContainerPort: 80})
 	if err == nil {
 		t.Fatal("injected firewall failure unexpectedly succeeded")
