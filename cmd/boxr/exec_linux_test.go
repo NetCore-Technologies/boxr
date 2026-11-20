@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"reflect"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -148,5 +149,42 @@ func TestFirstExecTerminalSelectsFirstAvailableTerminal(t *testing.T) {
 	}
 	if got := firstExecTerminal(nil); got != nil {
 		t.Fatalf("selected terminal without candidates = %v, want nil", got)
+	}
+}
+
+func TestExpandExecShortFlagsSupportsDockerStyleCombinedOptions(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "interactive and tty",
+			args: []string{"-it", "web", "/bin/sh"},
+			want: []string{"-i", "-t", "web", "/bin/sh"},
+		},
+		{
+			name: "reverse order after value option",
+			args: []string{"--workdir", "/app", "-ti", "web", "/bin/sh"},
+			want: []string{"--workdir", "/app", "-t", "-i", "web", "/bin/sh"},
+		},
+		{
+			name: "do not rewrite command arguments",
+			args: []string{"web", "/bin/sh", "-it"},
+			want: []string{"web", "/bin/sh", "-it"},
+		},
+		{
+			name: "do not rewrite arguments after separator",
+			args: []string{"--", "-it", "web", "/bin/sh"},
+			want: []string{"--", "-it", "web", "/bin/sh"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := expandExecShortFlags(test.args)
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("expanded arguments = %#v, want %#v", got, test.want)
+			}
+		})
 	}
 }
