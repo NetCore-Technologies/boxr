@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 606 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 611 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -615,3 +615,5 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 607. stack-wide service-prefixed deployment logs
 608. deployment logs filter by service name
 609. follow mode streams and drains all service logs
+610. image build writes resolve in-root symlinks and reject host-root escapes
+611. container-absolute COPY symlinks are normalized inside the staged rootfs

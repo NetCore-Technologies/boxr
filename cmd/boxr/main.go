@@ -2586,6 +2586,8 @@ var implementedFeatures = []string{
 	"stack-wide service-prefixed deployment logs",
 	"deployment logs filter by service name",
 	"follow mode streams and drains all service logs",
+	"image build writes resolve in-root symlinks and reject host-root escapes",
+	"container-absolute COPY symlinks are normalized inside the staged rootfs",
 }
 
 func printFeatures(stdout io.Writer) {

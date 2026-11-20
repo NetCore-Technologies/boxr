@@ -236,7 +236,7 @@ func BuildForPlatform(contextDir, specPath, reference, platform string) (Image, 
 		if err != nil {
 			return Image{}, err
 		}
-		if err := os.MkdirAll(destination, 0755); err != nil {
+		if _, err := ensureRootfsDirectory(root, destination); err != nil {
 			return Image{}, fmt.Errorf("create image WorkingDir: %w", err)
 		}
 	}
@@ -345,6 +345,119 @@ func rootfsDestination(root, target string) (string, error) {
 	return filepath.Join(root, strings.TrimLeft(clean, string(filepath.Separator))), nil
 }
 
+// normalizeBuildSymlink rewrites container-absolute link targets to paths
+// relative to the staged rootfs, never the build host's filesystem root.
+func normalizeBuildSymlink(root, destination, link string) (string, error) {
+	if !filepath.IsAbs(link) {
+		return link, nil
+	}
+	target, err := rootfsDestination(root, link)
+	if err != nil {
+		return "", fmt.Errorf("invalid absolute symlink target: %w", err)
+	}
+	relative, err := filepath.Rel(filepath.Dir(destination), target)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute symlink target: %w", err)
+	}
+	return relative, nil
+}
+
+// ensureRootfsDirectory creates a directory path without following symlinks
+// outside the image root. In-root links are resolved so paths such as
+// /bin -> /usr/bin continue to behave as expected during an image build.
+func ensureRootfsDirectory(root, directory string) (string, error) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	directoryAbs, err := filepath.Abs(directory)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(rootAbs, directoryAbs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("directory escapes the image rootfs")
+	}
+	rootInfo, err := os.Lstat(rootAbs)
+	if err != nil {
+		return "", err
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
+		return "", fmt.Errorf("image rootfs must remain a real directory")
+	}
+	if rel == "." {
+		return rootAbs, nil
+	}
+	current := rootAbs
+	for _, component := range strings.Split(rel, string(filepath.Separator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		next := filepath.Join(current, component)
+		info, statErr := os.Lstat(next)
+		if errors.Is(statErr, os.ErrNotExist) {
+			if err := os.Mkdir(next, 0755); err != nil && !errors.Is(err, os.ErrExist) {
+				return "", fmt.Errorf("create rootfs directory %s: %w", component, err)
+			}
+			info, statErr = os.Lstat(next)
+		}
+		if statErr != nil {
+			return "", statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			resolved, err := filepath.EvalSymlinks(next)
+			if err != nil {
+				return "", fmt.Errorf("resolve rootfs symlink %s: %w", component, err)
+			}
+			inside, err := filepath.Rel(rootAbs, resolved)
+			if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
+				return "", fmt.Errorf("rootfs symlink %s escapes the image rootfs", component)
+			}
+			resolvedInfo, err := os.Stat(resolved)
+			if err != nil || !resolvedInfo.IsDir() {
+				return "", fmt.Errorf("rootfs symlink %s does not resolve to a directory", component)
+			}
+			current = resolved
+			continue
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("rootfs path component %s is not a directory", component)
+		}
+		current = next
+	}
+	return current, nil
+}
+
+// resolveRootfsTarget resolves and creates the parent path before the caller
+// opens a file, preventing a copied symlink from redirecting writes onto host paths.
+func resolveRootfsTarget(root, target string) (string, error) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(rootAbs, targetAbs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("target escapes the image rootfs")
+	}
+	if rel == "." {
+		return rootAbs, nil
+	}
+	parent, err := ensureRootfsDirectory(rootAbs, filepath.Dir(targetAbs))
+	if err != nil {
+		return "", err
+	}
+	resolved := filepath.Join(parent, filepath.Base(targetAbs))
+	inside, err := filepath.Rel(rootAbs, resolved)
+	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("resolved target escapes the image rootfs")
+	}
+	return resolved, nil
+}
+
 func applyCopy(contextRoot, root string, instruction CopyInstruction, ignorePatterns []ignorePattern) error {
 	if err := validateContextPath(instruction.Source); err != nil {
 		return err
@@ -369,19 +482,26 @@ func applyCopy(contextRoot, root string, instruction CopyInstruction, ignorePatt
 		return err
 	}
 	if info.IsDir() {
+		destination, err = ensureRootfsDirectory(root, destination)
+		if err != nil {
+			return fmt.Errorf("prepare COPY destination: %w", err)
+		}
 		return copyContextDirectory(source, destination, root, instruction.Source, ignorePatterns)
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("COPY source must be a regular file or directory")
 	}
-	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
-		return fmt.Errorf("create COPY destination parent: %w", err)
+	destination, err = resolveRootfsTarget(root, destination)
+	if err != nil {
+		return fmt.Errorf("prepare COPY destination: %w", err)
 	}
 	return copyContextFile(source, destination, info.Mode())
 }
 
 func copyContextDirectory(source, destination, root, sourceRelative string, ignorePatterns []ignorePattern) error {
-	if err := os.MkdirAll(destination, 0755); err != nil {
+	var err error
+	destination, err = ensureRootfsDirectory(root, destination)
+	if err != nil {
 		return err
 	}
 	var directories []struct {
@@ -413,7 +533,8 @@ func copyContextDirectory(source, destination, root, sourceRelative string, igno
 		target := filepath.Join(destination, rel)
 		switch {
 		case info.IsDir():
-			if err := os.MkdirAll(target, info.Mode().Perm()); err != nil {
+			target, err = ensureRootfsDirectory(root, target)
+			if err != nil {
 				return err
 			}
 			directories = append(directories, struct {
@@ -421,16 +542,28 @@ func copyContextDirectory(source, destination, root, sourceRelative string, igno
 				mode os.FileMode
 			}{target, info.Mode()})
 		case info.Mode().IsRegular():
+			target, err = resolveRootfsTarget(root, target)
+			if err != nil {
+				return err
+			}
 			return copyContextFile(path, target, info.Mode())
 		case info.Mode()&os.ModeSymlink != 0:
 			link, err := os.Readlink(path)
 			if err != nil {
 				return err
 			}
+			link, err = normalizeBuildSymlink(root, target, link)
+			if err != nil {
+				return err
+			}
 			if err := validateCopiedSymlink(root, target, link); err != nil {
 				return err
 			}
-			if err := os.Symlink(link, target); err != nil {
+			parent, err := ensureRootfsDirectory(root, filepath.Dir(target))
+			if err != nil {
+				return err
+			}
+			if err := os.Symlink(link, filepath.Join(parent, filepath.Base(target))); err != nil {
 				return err
 			}
 		default:

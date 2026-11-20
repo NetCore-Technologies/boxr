@@ -199,6 +199,118 @@ func TestBuildFromLocalImageBaseInheritsAndOverridesRuntimeConfig(t *testing.T) 
 	}
 }
 
+func TestBuildRejectsCopyThroughHostAbsoluteSymlink(t *testing.T) {
+	useStore(t)
+	contextDir := t.TempDir()
+	links := filepath.Join(contextDir, "links")
+	if err := os.Mkdir(links, 0755); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(links, "redirect")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(contextDir, "payload"), []byte("must stay inside rootfs"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	specPath := writeBuildSpec(t, contextDir, BuildSpec{
+		Version: 1,
+		Base:    "scratch",
+		Copy: []CopyInstruction{
+			{Source: "links", Destination: "/opt"},
+			{Source: "payload", Destination: "/opt/redirect/escaped"},
+		},
+	})
+	if _, err := Build(contextDir, specPath, "demo:symlink-escape"); err == nil {
+		t.Fatal("COPY through a host-absolute symlink unexpectedly succeeded")
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "escaped")); !os.IsNotExist(err) {
+		t.Fatalf("COPY created a file outside the rootfs: err=%v", err)
+	}
+}
+
+func TestBuildAllowsInRootSymlinkDestinations(t *testing.T) {
+	useStore(t)
+	baseRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(baseRoot, "usr", "bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(baseRoot, "usr", "bin", "base"), []byte("base"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/usr/bin", filepath.Join(baseRoot, "bin")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ImportRootFS(baseRoot, "demo:symlink-base"); err != nil {
+		t.Fatalf("import base: %v", err)
+	}
+	contextDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(contextDir, "tool"), []byte("child"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	specPath := writeBuildSpec(t, contextDir, BuildSpec{
+		Version: 1,
+		Base:    "demo:symlink-base",
+		Copy:    []CopyInstruction{{Source: "tool", Destination: "/bin/child"}},
+	})
+	if _, err := Build(contextDir, specPath, "demo:symlink-child"); err != nil {
+		t.Fatalf("Build through an in-root symlink: %v", err)
+	}
+	unpacked := filepath.Join(t.TempDir(), "rootfs")
+	if _, err := Unpack("demo:symlink-child", unpacked); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(unpacked, "usr", "bin", "child")); err != nil || string(data) != "child" {
+		t.Fatalf("in-root symlink destination not written to canonical path: data=%q err=%v", data, err)
+	}
+	if info, err := os.Lstat(filepath.Join(unpacked, "bin")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("base /bin symlink was not preserved: info=%v err=%v", info, err)
+	}
+}
+
+func TestBuildNormalizesContainerAbsoluteSymlinksForLaterWrites(t *testing.T) {
+	useStore(t)
+	contextDir := t.TempDir()
+	for name, content := range map[string]string{
+		"usrbin/base": "base",
+		"tool":        "child",
+	} {
+		path := filepath.Join(contextDir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	links := filepath.Join(contextDir, "links")
+	if err := os.Mkdir(links, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/usr/bin", filepath.Join(links, "bin")); err != nil {
+		t.Fatal(err)
+	}
+	specPath := writeBuildSpec(t, contextDir, BuildSpec{
+		Version: 1,
+		Base:    "scratch",
+		Copy: []CopyInstruction{
+			{Source: "usrbin", Destination: "/usr/bin"},
+			{Source: "links", Destination: "/"},
+			{Source: "tool", Destination: "/bin/child"},
+		},
+	})
+	if _, err := Build(contextDir, specPath, "demo:normalized-symlink"); err != nil {
+		t.Fatalf("Build after normalizing container-absolute symlink: %v", err)
+	}
+	unpacked := filepath.Join(t.TempDir(), "rootfs")
+	if _, err := Unpack("demo:normalized-symlink", unpacked); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(unpacked, "usr", "bin", "child")); err != nil || string(data) != "child" {
+		t.Fatalf("later write did not resolve container symlink inside rootfs: data=%q err=%v", data, err)
+	}
+}
+
 func TestBuildRejectsMissingLocalImageBaseWithoutPulling(t *testing.T) {
 	useStore(t)
 	contextDir := t.TempDir()
