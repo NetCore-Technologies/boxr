@@ -3725,3 +3725,55 @@ func TestContainerNamespaceRoutesDockerStyleLifecycleCommands(t *testing.T) {
 		t.Fatalf("unknown container action returned %d, want 2", code)
 	}
 }
+
+
+func TestRemoveCanDeleteCreatedContainersButStillProtectsRunningOnes(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+	var stdout, stderr bytes.Buffer
+
+	created, err := state.Create("created-remove", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := run([]string{"rm", created.ID}, &stdout, &stderr); code != 0 {
+		t.Fatalf("rm of created container returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := state.Get(created.ID); err == nil {
+		t.Fatal("created container remains after rm")
+	}
+
+	created, err = state.Create("container-created-remove", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"container", "rm", "container-created-remove"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("container rm of created container returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := state.Get(created.ID); err == nil {
+		t.Fatal("created container remains after container rm")
+	}
+
+	running, err := state.Create("running-remove", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(running.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"container", "rm", running.ID}, &stdout, &stderr); code == 0 {
+		t.Fatal("container rm removed a running container")
+	}
+	if _, err := state.Get(running.ID); err != nil {
+		t.Fatalf("running container record disappeared: %v", err)
+	}
+	if err := state.Finish(running.ID, nil); err != nil {
+		t.Fatalf("finish running test record: %v", err)
+	}
+	if err := state.Remove(running.ID); err != nil {
+		t.Fatalf("clean up completed test record: %v", err)
+	}
+}
