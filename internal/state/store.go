@@ -30,8 +30,11 @@ type Record struct {
 	PID        int               `json:"pid,omitempty"`
 	Command    []string          `json:"command"`
 	Status     string            `json:"status"`
-	ExitCode   *int              `json:"exitCode,omitempty"`
-	Error      string            `json:"error,omitempty"`
+	ExitCode      *int              `json:"exitCode,omitempty"`
+	LastExitCode  *int              `json:"lastExitCode,omitempty"`
+	RestartCount  int               `json:"restartCount,omitempty"`
+	StopRequested bool              `json:"stopRequested,omitempty"`
+	Error         string            `json:"error,omitempty"`
 	Labels     map[string]string `json:"labels,omitempty"`
 	Options    container.Options `json:"options"`
 	CreatedAt  time.Time         `json:"createdAt"`
@@ -124,11 +127,18 @@ func Start(id string, pid int) error {
 		return fmt.Errorf("host PID must be positive")
 	}
 	return update(id, func(record *Record) error {
-		if record.Status != "created" {
+		if record.Status != "created" && record.Status != "restarting" {
 			return fmt.Errorf("cannot start container in %q state", record.Status)
+		}
+		if record.StopRequested {
+			return fmt.Errorf("container %s has a pending stop request", record.ID)
 		}
 		now := time.Now().UTC()
 		record.Status, record.PID, record.StartedAt = "running", pid, &now
+		record.ExitCode = nil
+		record.LastExitCode = nil
+		record.Error = ""
+		record.FinishedAt = nil
 		if err := appendEvent(Event{Time: now, Action: "start", ID: record.ID, Name: record.Name, PID: pid}); err != nil {
 			return err
 		}
@@ -136,9 +146,66 @@ func Start(id string, pid int) error {
 	})
 }
 
+// PrepareRestart moves a completed container into a bounded restart delay.
+// The previous exit code remains inspectable until the next attempt starts.
+func PrepareRestart(id string) error {
+	return update(id, func(record *Record) error {
+		if record.Status != "exited" && record.Status != "failed" {
+			return fmt.Errorf("cannot prepare restart in %q state", record.Status)
+		}
+		if record.StopRequested {
+			return fmt.Errorf("container %s has a pending stop request", record.ID)
+		}
+		if record.ExitCode != nil {
+			code := *record.ExitCode
+			record.LastExitCode = &code
+		}
+		record.RestartCount++
+		record.PID = 0
+		record.Status = "restarting"
+		return appendEvent(Event{Time: time.Now().UTC(), Action: "restart", ID: record.ID, Name: record.Name})
+	})
+}
+
+// RequestStop prevents any configured restart policy from starting another
+// attempt. It is safe to call repeatedly for running or restarting records.
+func RequestStop(id string) error {
+	return update(id, func(record *Record) error {
+		if record.Status == "restarting" {
+			record.StopRequested = true
+			record.PID = 0
+			if record.ExitCode != nil && *record.ExitCode != 0 {
+				record.Status = "failed"
+			} else {
+				record.Status = "exited"
+			}
+			return appendEvent(Event{Time: time.Now().UTC(), Action: "restart-cancelled", ID: record.ID, Name: record.Name})
+		}
+		if record.Status != "running" {
+			return fmt.Errorf("cannot request stop in %q state", record.Status)
+		}
+		if record.StopRequested {
+			return nil
+		}
+		record.StopRequested = true
+		return appendEvent(Event{Time: time.Now().UTC(), Action: "stop-requested", ID: record.ID, Name: record.Name, PID: record.PID})
+	})
+}
+
+// CancelStopRequest rolls back an unsuccessful stop signal delivery.
+func CancelStopRequest(id string) error {
+	return update(id, func(record *Record) error {
+		if record.Status != "running" || !record.StopRequested {
+			return fmt.Errorf("container %s has no cancellable stop request", record.ID)
+		}
+		record.StopRequested = false
+		return appendEvent(Event{Time: time.Now().UTC(), Action: "stop-cancelled", ID: record.ID, Name: record.Name, PID: record.PID})
+	})
+}
+
 func Finish(id string, runErr error) error {
 	return update(id, func(record *Record) error {
-		if record.Status != "running" && record.Status != "created" {
+		if record.Status != "running" && record.Status != "created" && record.Status != "restarting" {
 			return fmt.Errorf("cannot finish container in %q state", record.Status)
 		}
 		now := time.Now().UTC()
@@ -173,7 +240,62 @@ func Finish(id string, runErr error) error {
 	})
 }
 
-func RemoveCreated(id string) error {
+// PrepareRestart moves a completed container into a bounded restart delay.
+// The previous exit code remains inspectable until the next attempt starts.
+func PrepareRestart(id string) error {
+	return update(id, func(record *Record) error {
+		if record.Status != "exited" && record.Status != "failed" {
+			return fmt.Errorf("cannot prepare restart in %q state", record.Status)
+		}
+		if record.StopRequested {
+			return fmt.Errorf("container %s has a pending stop request", record.ID)
+		}
+		if record.ExitCode != nil {
+			code := *record.ExitCode
+			record.LastExitCode = &code
+		}
+		record.RestartCount++
+		record.PID = 0
+		record.Status = "restarting"
+		return appendEvent(Event{Time: time.Now().UTC(), Action: "restart", ID: record.ID, Name: record.Name})
+	})
+}
+
+// RequestStop prevents any configured restart policy from starting another
+// attempt. It is safe to call repeatedly for running or restarting records.
+func RequestStop(id string) error {
+	return update(id, func(record *Record) error {
+		if record.Status == "restarting" {
+			record.StopRequested = true
+			record.PID = 0
+			if record.ExitCode != nil && *record.ExitCode != 0 {
+				record.Status = "failed"
+			} else {
+				record.Status = "exited"
+			}
+			return appendEvent(Event{Time: time.Now().UTC(), Action: "restart-cancelled", ID: record.ID, Name: record.Name})
+		}
+		if record.Status != "running" {
+			return fmt.Errorf("cannot request stop in %q state", record.Status)
+		}
+		if record.StopRequested {
+			return nil
+		}
+		record.StopRequested = true
+		return appendEvent(Event{Time: time.Now().UTC(), Action: "stop-requested", ID: record.ID, Name: record.Name, PID: record.PID})
+	})
+}
+
+// CancelStopRequest rolls back an unsuccessful stop signal delivery.
+func CancelStopRequest(id string) error {
+	return update(id, func(record *Record) error {
+		if record.Status != "running" || !record.StopRequested {
+			return fmt.Errorf("container %s has no cancellable stop request", record.ID)
+		}
+		record.StopRequested = false
+		return appendEvent(Event{Time: time.Now().UTC(), Action: "stop-cancelled", ID: record.ID, Name: record.Name, PID: record.PID})
+	})
+}
 	return remove(id, true)
 }
 
