@@ -636,12 +636,46 @@ func TestResolveDeploymentImageReferenceFindsCanonicalDockerHubAlias(t *testing.
 	if _, err := imageStore.ImportRootFS(root, want); err != nil {
 		t.Fatal(err)
 	}
-	got, err := resolveDeploymentImageReference("busybox:test")
+	got, err := resolveDeploymentImageReference("busybox:test", "")
 	if err != nil {
 		t.Fatalf("resolve shorthand image: %v", err)
 	}
 	if got != want {
 		t.Fatalf("resolved reference = %q, want %q", got, want)
+	}
+}
+
+
+func TestResolveDeploymentImageReferenceRejectsWrongCachedPlatform(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "marker"), []byte("foreign-platform"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	foreignArch := "arm64"
+	if runtime.GOARCH == "arm64" {
+		foreignArch = "amd64"
+	}
+	if _, err := imageStore.ImportRootFSWithConfig(root, "demo:foreign", "linux", foreignArch, "", imageStore.ImageRuntimeConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveDeploymentImageReference("demo:foreign", "linux/"+runtime.GOARCH); err == nil || !strings.Contains(err.Error(), "local image platform is") {
+		t.Fatalf("expected cached image platform mismatch, got %v", err)
+	}
+	if got, err := resolveDeploymentImageReference("demo:foreign", "linux/"+foreignArch); err != nil || got != "demo:foreign" {
+		t.Fatalf("matching platform should resolve cached image, got %q, error %v", got, err)
+	}
+}
+
+func TestDeploymentTargetPlatformValidation(t *testing.T) {
+	for _, invalid := range []string{"linux", "windows/amd64", "linux/", "linux/amd64/", "linux/amd64/v8/extra", "linux/amd64\n"} {
+		if _, _, _, err := deploymentTargetPlatform(invalid); err == nil {
+			t.Errorf("invalid platform %q unexpectedly accepted", invalid)
+		}
+	}
+	osName, arch, variant, err := deploymentTargetPlatform("linux/arm64/v8")
+	if err != nil || osName != "linux" || arch != "arm64" || variant != "v8" {
+		t.Fatalf("unexpected parsed platform: %q %q %q, error %v", osName, arch, variant, err)
 	}
 }
 

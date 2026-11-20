@@ -2559,6 +2559,8 @@ var implementedFeatures = []string{
 	"deployment pull platform selection",
 	"deployment pull registry auth-file support",
 	"canonical local image reference resolution before service start",
+	"deployment pull validates cached image architecture and variant",
+	"image-backed service startup enforces the host Linux platform",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -3009,8 +3011,43 @@ func waitForDeploymentStart(ctx context.Context, name string, timeout time.Durat
 	}
 }
 
-func resolveDeploymentImageReference(reference string) (string, error) {
-	if _, err := imageStore.Verify(reference); err == nil {
+func deploymentTargetPlatform(platform string) (string, string, string, error) {
+	if platform == "" {
+		platform = "linux/" + runtime.GOARCH
+	}
+	if strings.ContainsAny(platform, "\\\x00\r\n ") {
+		return "", "", "", fmt.Errorf("invalid target platform %q", platform)
+	}
+	parts := strings.Split(platform, "/")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] != "linux" || parts[1] == "" || (len(parts) == 3 && parts[2] == "") {
+		return "", "", "", fmt.Errorf("platform must be linux/ARCH[/VARIANT]")
+	}
+	variant := ""
+	if len(parts) == 3 {
+		variant = parts[2]
+	}
+	return parts[0], parts[1], variant, nil
+}
+
+func resolveDeploymentImageReference(reference, platform string) (string, error) {
+	targetOS, targetArch, targetVariant, err := deploymentTargetPlatform(platform)
+	if err != nil {
+		return "", err
+	}
+	verify := func(localReference string) error {
+		image, err := imageStore.Verify(localReference)
+		if err != nil {
+			return err
+		}
+		if image.OS != targetOS || image.Arch != targetArch {
+			return fmt.Errorf("local image platform is %s/%s; requested %s/%s", image.OS, image.Arch, targetOS, targetArch)
+		}
+		if targetVariant != "" && image.Variant != targetVariant {
+			return fmt.Errorf("local image variant is %q; requested %q", image.Variant, targetVariant)
+		}
+		return nil
+	}
+	if err := verify(reference); err == nil {
 		return reference, nil
 	}
 	parsed, err := registry.ParseReference(reference)
@@ -3018,8 +3055,8 @@ func resolveDeploymentImageReference(reference string) (string, error) {
 		return "", fmt.Errorf("parse image reference: %w", err)
 	}
 	localReference := parsed.LocalReference()
-	if _, err := imageStore.Verify(localReference); err != nil {
-		return "", fmt.Errorf("image is not present in the local store: %w", err)
+	if err := verify(localReference); err != nil {
+		return "", fmt.Errorf("no verified local image matching %s/%s: %w", targetOS, targetArch, err)
 	}
 	return localReference, nil
 }
@@ -3031,7 +3068,7 @@ func runDeploymentPull(file deploy.File, plan deploy.Plan, platform, authFile st
 		if service.Image == "" {
 			continue
 		}
-		localReference, resolveErr := resolveDeploymentImageReference(service.Image)
+		localReference, resolveErr := resolveDeploymentImageReference(service.Image, platform)
 		deduplicationKey := ""
 		if resolveErr == nil {
 			deduplicationKey = localReference
@@ -3066,7 +3103,7 @@ func runDeploymentPull(file deploy.File, plan deploy.Plan, platform, authFile st
 			fmt.Fprintf(stderr, "boxr deploy pull: image pull failed for service %s\n", service.Name)
 			return code
 		}
-		localReference, err := resolveDeploymentImageReference(service.Image)
+		localReference, err := resolveDeploymentImageReference(service.Image, platform)
 		if err != nil {
 			fmt.Fprintf(stderr, "boxr deploy pull: downloaded image for service %s could not be verified locally: %v\n", service.Name, err)
 			return 1
@@ -3103,7 +3140,7 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 			return 1
 		}
 		if service.Image != "" {
-			localReference, err := resolveDeploymentImageReference(service.Image)
+			localReference, err := resolveDeploymentImageReference(service.Image, "")
 			if err != nil {
 				fmt.Fprintf(stderr, "boxr deploy up: image %q for service %q is not ready: %v (run boxr deploy pull first)\n", service.Image, service.Name, err)
 				return 1

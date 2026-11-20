@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 585 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 587 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -591,3 +591,5 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 583. deployment pull platform selection
 584. deployment pull registry auth-file support
 585. canonical local image reference resolution before service start
+586. deployment pull validates cached image architecture and variant
+587. image-backed service startup enforces the host Linux platform

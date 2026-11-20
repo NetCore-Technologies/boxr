@@ -43,7 +43,7 @@ Version 1 is strict JSON. Unknown fields, trailing JSON values, oversized files,
 }
 ```
 
-Each service uses the existing `container.Options` validation rules. Define either an OCI image reference, a command, or both. The command is an argument array, not a shell string. Run `boxr deploy pull FILE.json` to prefetch all unique image references before startup; `--platform linux/ARCH[/VARIANT]` selects the target and `--authfile PATH` supplies Docker/Podman registry credentials. Already available local images are verified and skipped, and equivalent Docker Hub shorthand/canonical references are deduplicated. Images are checked again immediately before `deploy up`. A service can list up to 64 dependencies; a deployment can contain up to 64 services. The manifest and command data are bounded to avoid unbounded input.
+Each service uses the existing `container.Options` validation rules. Define either an OCI image reference, a command, or both. The command is an argument array, not a shell string. Run `boxr deploy pull FILE.json` to prefetch all unique image references before startup; `--platform linux/ARCH[/VARIANT]` selects the target and `--authfile PATH` supplies Docker/Podman registry credentials. Already available local images are verified and skipped only when their OS, architecture and any explicitly requested variant match the target platform; equivalent Docker Hub shorthand/canonical references are deduplicated. `deploy up` checks cached images again against the host Linux architecture before starting services. A service can list up to 64 dependencies; a deployment can contain up to 64 services. The manifest and command data are bounded to avoid unbounded input.
 
 ## Deployment image prefetch
 
