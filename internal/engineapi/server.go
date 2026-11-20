@@ -98,6 +98,13 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			s.handleContainerKill(writer, request, strings.TrimSuffix(remainder, "/kill"))
 			return
 		}
+		if strings.HasSuffix(remainder, "/wait") {
+			if !requireMethod(writer, request, http.MethodPost) {
+				return
+			}
+			s.handleContainerWait(writer, request, strings.TrimSuffix(remainder, "/wait"))
+			return
+		}
 		if strings.HasSuffix(remainder, "/rename") {
 			if !requireMethod(writer, request, http.MethodPost) {
 				return
@@ -488,6 +495,52 @@ func (s *Server) handleContainerKill(writer http.ResponseWriter, request *http.R
 		return
 	}
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleContainerWait(writer http.ResponseWriter, request *http.Request, rawID string) {
+	query, err := decodeContainerID(rawID)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	condition, err := singleQueryValue(request.URL.Query(), "condition")
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if condition == "" {
+		condition = "not-running"
+	}
+	if condition != "not-running" {
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("unsupported wait condition %q; only not-running is supported", condition))
+		return
+	}
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		record, err := state.Get(query)
+		if err != nil {
+			writeError(writer, http.StatusNotFound, err)
+			return
+		}
+		if record.Status != "running" && record.Status != "restarting" {
+			statusCode := 0
+			if record.ExitCode != nil {
+				statusCode = *record.ExitCode
+			}
+			writeJSON(writer, http.StatusOK, map[string]any{
+				"StatusCode": statusCode,
+				"Error":      nil,
+			})
+			return
+		}
+		select {
+		case <-request.Context().Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *Server) handleContainerRename(writer http.ResponseWriter, request *http.Request, rawID string) {
