@@ -350,3 +350,16 @@ boxr events --follow --since 10m --format json
 ```
 
 Follow mode starts at the current end of the event log unless `--since` is supplied for a retained-history catch-up. JSON output is one event per line. The default poll interval is 500 ms (minimum 100 ms); a positive `--count` stops after that many matching events. See [event streaming](docs/event-streaming.md).
+
+
+## Wait for container readiness or completion
+
+Use `wait` as an orchestration gate:
+
+```bash
+boxr wait --condition running --timeout 10s web
+boxr wait --condition stopped --timeout 30m web
+boxr wait --condition running --json api worker
+```
+
+The default condition remains `stopped`, preserving the existing exit-code output. `--condition running` waits for startup, but fails if the container exits before becoming ready. Polling defaults to 100 ms (minimum 10 ms), and `--json` returns the container ID, resulting status, exit code and elapsed milliseconds. See [container orchestration](docs/orchestration.md).

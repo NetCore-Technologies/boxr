@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 478 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 486 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -484,3 +484,11 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 476. event follow supports since-based historical catch-up
 477. event follow handles event log truncation by resuming
 478. event follow reports event source and output errors
+479. wait for container startup readiness
+480. wait for container process completion
+481. configurable lifecycle wait polling interval
+482. lifecycle wait enforces timeout for either condition
+483. lifecycle wait returns structured JSON results
+484. lifecycle wait reports containers that exit before becoming ready
+485. lifecycle wait supports multiple container IDs
+486. lifecycle wait preserves the default exit-code output

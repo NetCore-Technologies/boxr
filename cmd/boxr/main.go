@@ -1264,7 +1264,7 @@ Usage:
   boxr inspect ID|NAME
   boxr stop [--time 10s] ID|NAME [...]
   boxr kill [--signal KILL] ID|NAME [...]
-  boxr wait [--timeout 0] ID|NAME [...]
+  boxr wait [--condition running|stopped] [--timeout 30s] [--interval 100ms] [--json] ID|NAME [...]
   boxr logs [--tail 100] [--follow] ID|NAME
   boxr volume create [--label KEY=VALUE] NAME
   boxr volume ls [--format table|json] [--filter label=KEY=VALUE]
@@ -2190,6 +2190,14 @@ var implementedFeatures = []string{
 	"event follow supports since-based historical catch-up",
 	"event follow handles event log truncation by resuming",
 	"event follow reports event source and output errors",
+	"wait for container startup readiness",
+	"wait for container process completion",
+	"configurable lifecycle wait polling interval",
+	"lifecycle wait enforces timeout for either condition",
+	"lifecycle wait returns structured JSON results",
+	"lifecycle wait reports containers that exit before becoming ready",
+	"lifecycle wait supports multiple container IDs",
+	"lifecycle wait preserves the default exit-code output",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -2460,56 +2468,95 @@ func runKill(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+type waitResult struct {
+	ID        string        `json:"id"`
+	Condition string        `json:"condition"`
+	Status    string        `json:"status"`
+	ExitCode  *int          `json:"exitCode,omitempty"`
+	WaitedMS  int64         `json:"waitedMs"`
+}
+
 func runWait(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("wait", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	timeout := flags.Duration("timeout", 0, "maximum wait duration (0 means no timeout)")
+	condition := flags.String("condition", "stopped", "condition to wait for: running or stopped")
+	interval := flags.Duration("interval", 100*time.Millisecond, "poll interval (minimum 10ms)")
+	jsonOutput := flags.Bool("json", false, "write wait results as JSON")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	if flags.NArg() == 0 || *timeout < 0 {
-		fmt.Fprintln(stderr, "Usage: boxr wait [--timeout 30s] ID|NAME [...]")
+	if flags.NArg() == 0 || *timeout < 0 || *interval < 10*time.Millisecond || (*condition != "running" && *condition != "stopped") {
+		fmt.Fprintln(stderr, "Usage: boxr wait [--condition running|stopped] [--timeout 30s] [--interval 100ms] [--json] ID|NAME [...]")
 		return 2
 	}
+
+	results := make([]waitResult, 0, flags.NArg())
 	failed := false
 	for _, query := range flags.Args() {
-		record, err := state.Get(query)
+		result, err := waitForCondition(query, *condition, *timeout, *interval)
 		if err != nil {
 			fmt.Fprintf(stderr, "boxr wait: %s: %v\n", query, err)
 			failed = true
 			continue
 		}
-		if record.Status == "created" {
-			fmt.Fprintf(stderr, "boxr wait: %s has not started\n", record.ID)
-			failed = true
-			continue
-		}
-		deadline := time.Time{}
-		if *timeout > 0 {
-			deadline = time.Now().Add(*timeout)
-		}
-		for record.Status == "running" {
-			if !deadline.IsZero() && !time.Now().Before(deadline) {
-				fmt.Fprintf(stderr, "boxr wait: timed out waiting for %s\n", record.ID)
-				failed = true
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-			record, err = state.Get(record.ID)
-			if err != nil {
-				fmt.Fprintf(stderr, "boxr wait: %s: %v\n", query, err)
-				failed = true
-				break
+		results = append(results, result)
+		if !*jsonOutput {
+			if *condition == "stopped" && result.ExitCode != nil {
+				fmt.Fprintf(stdout, "%d\n", *result.ExitCode)
+			} else {
+				fmt.Fprintln(stdout, result.ID)
 			}
 		}
-		if err == nil && (record.Status == "exited" || record.Status == "failed") && record.ExitCode != nil {
-			fmt.Fprintf(stdout, "%d\n", *record.ExitCode)
+	}
+	if *jsonOutput {
+		if code := writeJSON(stdout, results, stderr, "boxr wait"); code != 0 {
+			return code
 		}
 	}
 	if failed {
 		return 1
 	}
 	return 0
+}
+
+// waitForCondition polls a persisted container record until it reaches the
+// requested lifecycle state, times out, or terminates before becoming ready.
+func waitForCondition(query, condition string, timeout, interval time.Duration) (waitResult, error) {
+	var result waitResult
+	started := time.Now()
+	record, err := state.Get(query)
+	if err != nil {
+		return result, err
+	}
+	for {
+		switch condition {
+		case "running":
+			if record.Status == "running" {
+				return waitResult{ID: record.ID, Condition: condition, Status: record.Status, ExitCode: record.ExitCode, WaitedMS: time.Since(started).Milliseconds()}, nil
+			}
+			if record.Status == "exited" || record.Status == "failed" {
+				return result, fmt.Errorf("container reached %s before becoming running", record.Status)
+			}
+		case "stopped":
+			if record.Status == "exited" || record.Status == "failed" {
+				return waitResult{ID: record.ID, Condition: condition, Status: record.Status, ExitCode: record.ExitCode, WaitedMS: time.Since(started).Milliseconds()}, nil
+			}
+			if record.Status == "created" {
+				return result, fmt.Errorf("container %s has not started", record.ID)
+			}
+		default:
+			return result, fmt.Errorf("unsupported condition %q", condition)
+		}
+		if timeout > 0 && time.Since(started) >= timeout {
+			return result, fmt.Errorf("timed out waiting for condition %s", condition)
+		}
+		time.Sleep(interval)
+		record, err = state.Get(record.ID)
+		if err != nil {
+			return result, err
+		}
+	}
 }
 
 func runLogs(args []string, stdout, stderr io.Writer) int {
