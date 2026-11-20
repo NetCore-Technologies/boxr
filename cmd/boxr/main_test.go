@@ -506,6 +506,77 @@ func TestDeployExamplePlanAndValidationCommands(t *testing.T) {
 	}
 }
 
+func TestDeployStatusDryRunDownAndRemoval(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	create := func(service, name string, order int) state.Record {
+		t.Helper()
+		labels := map[string]string{
+			deploy.StackLabel: "test-stack",
+			deploy.ServiceLabel: service,
+			deploy.OrderLabel: strconv.Itoa(order),
+		}
+		record, err := state.Create(name, []string{"/bin/true", "private-command"}, container.Options{
+			Env: []string{"TOKEN=private-deployment-secret"},
+		}, labels)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+	database := create("database", deploy.ContainerName("test-stack", "database"), 0)
+	api := create("api", deploy.ContainerName("test-stack", "api"), 1)
+	other := state.Record{}
+	other, err := state.Create("other-stack-api", []string{"/bin/true"}, container.Options{}, map[string]string{
+		deploy.StackLabel: "other-stack",
+		deploy.ServiceLabel: "api",
+		deploy.OrderLabel: "0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	if code := run([]string{"deploy", "ps", "--json", "test-stack"}, &out, &errOut); code != 0 {
+		t.Fatalf("deploy ps: code=%d err=%q", code, errOut.String())
+	}
+	var statuses []deploymentStatus
+	if err := json.Unmarshal(out.Bytes(), &statuses); err != nil {
+		t.Fatalf("decode deploy ps output: %v", err)
+	}
+	if len(statuses) != 2 || statuses[0].Service != "database" || statuses[1].Service != "api" {
+		t.Fatalf("unexpected deployment statuses: %#v", statuses)
+	}
+	if strings.Contains(out.String(), "private-command") || strings.Contains(out.String(), "private-deployment-secret") {
+		t.Fatalf("deploy ps leaked command or environment data: %s", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"deploy", "down", "--dry-run", "test-stack"}, &out, &errOut); code != 0 {
+		t.Fatalf("deploy down --dry-run: code=%d err=%q", code, errOut.String())
+	}
+	if first, second := strings.Index(out.String(), "service api"), strings.Index(out.String(), "service database"); first < 0 || second < 0 || first > second {
+		t.Fatalf("dry-run did not stop in reverse dependency order: %q", out.String())
+	}
+	if _, err := state.Get(database.ID); err != nil {
+		t.Fatalf("dry-run removed database record: %v", err)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"deploy", "down", "--remove", "test-stack"}, &out, &errOut); code != 0 {
+		t.Fatalf("deploy down --remove: code=%d err=%q", code, errOut.String())
+	}
+	for _, record := range []state.Record{database, api} {
+		if _, err := state.Get(record.ID); err == nil {
+			t.Errorf("deployment record %s survived --remove", record.Name)
+		}
+	}
+	if _, err := state.Get(other.ID); err != nil {
+		t.Fatalf("removing test-stack affected another stack: %v", err)
+	}
+}
+
 func TestVersionJSONOutput(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run([]string{"version", "--json"}, &out, &errOut); code != 0 {

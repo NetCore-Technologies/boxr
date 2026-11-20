@@ -5,6 +5,8 @@ package deploy
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,11 +23,79 @@ const (
 	MaxServices      = 64
 	MaxCommandArgs   = 128
 	MaxCommandBytes  = 32 << 10
+	StackLabel       = "io.boxr.deployment"
+	ServiceLabel     = "io.boxr.service"
+	OrderLabel       = "io.boxr.deployment-order"
 )
 
 var (
 	stackNamePattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
-	serviceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
+	serviceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}// Package deploy validates declarative, multi-service Boxr deployment manifests.
+// It builds a deterministic dependency order without starting processes or
+// changing host state. Execution is intentionally a separate operation.
+package deploy
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/manit6752025/boxr/internal/container"
+)
+
+const (
+	MaxManifestBytes = 1 << 20
+	MaxServices      = 64
+	MaxCommandArgs   = 128
+	MaxCommandBytes  = 32 << 10
+	StackLabel       = "io.boxr.deployment"
+	ServiceLabel     = "io.boxr.service"
+	OrderLabel       = "io.boxr.deployment-order"
+)
+
+var (
+	stackNamePattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+)
+	imageReferencePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}// Package deploy validates declarative, multi-service Boxr deployment manifests.
+// It builds a deterministic dependency order without starting processes or
+// changing host state. Execution is intentionally a separate operation.
+package deploy
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"regexp"
+	"sort"
+	"strings"
+
+	"github.com/manit6752025/boxr/internal/container"
+)
+
+const (
+	MaxManifestBytes = 1 << 20
+	MaxServices      = 64
+	MaxCommandArgs   = 128
+	MaxCommandBytes  = 32 << 10
+	StackLabel       = "io.boxr.deployment"
+	ServiceLabel     = "io.boxr.service"
+	OrderLabel       = "io.boxr.deployment-order"
+)
+
+var (
+	stackNamePattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+)
 )
 
 // File is a versioned deployment manifest. Each service maps to one Boxr
@@ -38,7 +108,8 @@ type File struct {
 
 // Service describes one process-isolated workload.
 type Service struct {
-	Command   []string          `json:"command"`
+	Image     string            `json:"image,omitempty"`
+	Command   []string          `json:"command,omitempty"`
 	Options   container.Options `json:"options"`
 	DependsOn []string          `json:"dependsOn,omitempty"`
 }
@@ -47,6 +118,8 @@ type Service struct {
 // command contents, environment values, labels and host paths.
 type ServicePlan struct {
 	Name                  string   `json:"name"`
+	ContainerName         string   `json:"containerName,omitempty"`
+	Image                 string   `json:"image,omitempty"`
 	DependsOn             []string `json:"dependsOn,omitempty"`
 	NetworkMode           string   `json:"networkMode"`
 	SecurityProfile       string   `json:"securityProfile,omitempty"`
@@ -132,8 +205,20 @@ func BuildPlan(file File) (Plan, error) {
 
 	for _, name := range names {
 		service := file.Services[name]
-		if len(service.Command) == 0 || len(service.Command) > MaxCommandArgs {
-			return plan, fmt.Errorf("service %q command must contain between 1 and %d arguments", name, MaxCommandArgs)
+		if service.Image == "" {
+			if len(service.Command) == 0 {
+				return plan, fmt.Errorf("service %q must define an image or a command", name)
+			}
+		} else {
+			if !imageReferencePattern.MatchString(service.Image) {
+				return plan, fmt.Errorf("service %q has an invalid image reference", name)
+			}
+			if service.Options.RootFS != "" {
+				return plan, fmt.Errorf("service %q cannot combine an image with an explicit rootfs", name)
+			}
+		}
+		if len(service.Command) > MaxCommandArgs {
+			return plan, fmt.Errorf("service %q command has more than %d arguments", name, MaxCommandArgs)
 		}
 		commandBytes := 0
 		for index, arg := range service.Command {
@@ -143,6 +228,11 @@ func BuildPlan(file File) (Plan, error) {
 			commandBytes += len(arg)
 			if commandBytes > MaxCommandBytes {
 				return plan, fmt.Errorf("service %q command exceeds %d bytes", name, MaxCommandBytes)
+			}
+		}
+		for key := range service.Options.Labels {
+			if key == StackLabel || key == ServiceLabel || key == OrderLabel {
+				return plan, fmt.Errorf("service %q uses reserved Boxr deployment label %q", name, key)
 			}
 		}
 		if err := service.Options.Validate(); err != nil {
@@ -178,8 +268,14 @@ func BuildPlan(file File) (Plan, error) {
 		if networkMode == "" {
 			networkMode = "host"
 		}
+		containerName := ""
+		if file.Name != "" {
+			containerName = ContainerName(file.Name, name)
+		}
 		servicePlans[name] = ServicePlan{
 			Name:                  name,
+			ContainerName:         containerName,
+			Image:                 service.Image,
 			DependsOn:             deps,
 			NetworkMode:           networkMode,
 			SecurityProfile:       service.Options.SecurityProfile,
@@ -242,6 +338,19 @@ func BuildPlan(file File) (Plan, error) {
 		plan.Services = append(plan.Services, servicePlans[name])
 	}
 	return plan, nil
+}
+
+// ContainerName returns the stable, stack-scoped Boxr container name for a
+// service. Long combinations receive a deterministic hash suffix and remain
+// within the runtime's 64-character container-name limit.
+func ContainerName(stack, service string) string {
+	full := stack + "-" + service
+	if len(full) <= 64 {
+		return full
+	}
+	digest := sha256.Sum256([]byte(full))
+	suffix := hex.EncodeToString(digest[:8])
+	return full[:47] + "-" + suffix
 }
 
 // Example returns a valid two-service deployment manifest.

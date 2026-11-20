@@ -154,3 +154,72 @@ func TestExampleIsValidAndServiceLimitIsEnforced(t *testing.T) {
 		t.Fatal("manifest with too many services unexpectedly validated")
 	}
 }
+
+func TestBuildPlanSupportsLocalImageServicesAndRejectsReservedLabels(t *testing.T) {
+	file := File{
+		Version: 1,
+		Name:    "sample-stack",
+		Services: map[string]Service{
+			"web": {
+				Image: "ghcr.io/example/web:1.2.3",
+				Options: container.Options{
+					NetworkMode: "none",
+				},
+			},
+		},
+	}
+	plan, err := BuildPlan(file)
+	if err != nil {
+		t.Fatalf("BuildPlan(image service): %v", err)
+	}
+	if plan.Services[0].Image != file.Services["web"].Image {
+		t.Fatalf("image reference = %q, want %q", plan.Services[0].Image, file.Services["web"].Image)
+	}
+	if plan.Services[0].ContainerName != ContainerName("sample-stack", "web") {
+		t.Fatalf("container name = %q", plan.Services[0].ContainerName)
+	}
+
+	file.Services["web"] = Service{
+		Image: "alpine:latest",
+		Options: container.Options{
+			Labels: map[string]string{StackLabel: "spoofed"},
+		},
+	}
+	if _, err := BuildPlan(file); err == nil {
+		t.Fatal("reserved deployment labels unexpectedly accepted")
+	}
+}
+
+func TestContainerNameIsStableAndBounded(t *testing.T) {
+	stack := "deployment-stack-with-a-long-name"
+	service := "service-name-that-is-also-very-long-and-near-the-limit"
+	first := ContainerName(stack, service)
+	second := ContainerName(stack, service)
+	if first != second {
+		t.Fatalf("container name is not deterministic: %q != %q", first, second)
+	}
+	if len(first) > 64 {
+		t.Fatalf("container name has %d characters, maximum is 64", len(first))
+	}
+	if !strings.Contains(first, "-") {
+		t.Fatalf("container name is not readable: %q", first)
+	}
+}
+
+func TestBuildPlanRejectsImageAndRootFSTogether(t *testing.T) {
+	_, err := BuildPlan(File{
+		Version: 1,
+		Name:    "sample",
+		Services: map[string]Service{
+			"web": {
+				Image: "alpine:latest",
+				Options: container.Options{
+					RootFS: "/tmp/rootfs",
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("image and explicit rootfs unexpectedly accepted together")
+	}
+}

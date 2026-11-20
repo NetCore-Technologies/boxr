@@ -259,9 +259,12 @@ boxr deploy example > boxr.deploy.json
 boxr deploy validate boxr.deploy.json
 boxr deploy plan boxr.deploy.json
 boxr deploy plan --json boxr.deploy.json
+boxr deploy up boxr.deploy.json
+boxr deploy ps sample-app
+boxr deploy down sample-app
 ```
 
-Deployment manifests define named services, each service's command and existing Boxr container options, and its `dependsOn` services. Boxr rejects missing dependencies, duplicate edges, invalid run options and cycles, then produces a stable dependency-first order. JSON plans omit command contents, environment values, labels and host paths. This milestone is a validated planner only: it does not start, supervise, network, or stop services; use `boxr run` for execution. Managed multi-service lifecycle and networking remain separate runtime work.
+Deployment manifests define named services, optional local OCI images, commands, existing Boxr container options, and `dependsOn` services. Boxr rejects missing dependencies, duplicate edges, invalid run options and cycles, then produces a stable dependency-first order. Use `boxr deploy up FILE.json` for attached, fail-fast startup; `boxr deploy ps STACK` for stack-scoped status; and `boxr deploy down STACK` for reverse-order graceful shutdown. `deploy down --remove` also removes stopped records and logs. Service dependencies gate startup order, not application readiness; health checks, service DNS, bridge networking and detached daemon operation remain future work.
 
 ## Run configuration
 

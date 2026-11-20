@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 567 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 580 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -573,3 +573,16 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 565. deployment plan service resource summaries
 566. secret-redacted JSON deployment plans
 567. deployment plan example and validation commands
+568. local OCI image references in deployment services
+569. stable stack-scoped service container names
+570. reserved deployment identity labels
+571. attached multi-service deployment supervisor
+572. dependency-ordered service process startup
+573. service running-state startup gates
+574. fail-fast service exit handling
+575. reverse-order graceful supervisor shutdown
+576. stack-scoped deployment process status
+577. reverse-dependency-order deployment shutdown
+578. deployment stop timeout escalation
+579. safe optional deployment record and log removal
+580. deployment lifecycle dry-run planning

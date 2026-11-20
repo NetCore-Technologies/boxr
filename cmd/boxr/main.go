@@ -11,12 +11,14 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"syscall"
 
 	"github.com/manit6752025/boxr/internal/config"
 	"github.com/manit6752025/boxr/internal/container"
@@ -1450,6 +1452,9 @@ Usage:
   boxr config example
   boxr deploy validate FILE.json
   boxr deploy plan [--json] FILE.json
+  boxr deploy up [--dry-run] FILE.json
+  boxr deploy ps [--json] STACK
+  boxr deploy down [--time 10s] [--remove] STACK
   boxr deploy example
   boxr features [--json]
   boxr completion bash|zsh|fish|powershell
@@ -2535,6 +2540,19 @@ var implementedFeatures = []string{
 	"deployment plan service resource summaries",
 	"secret-redacted JSON deployment plans",
 	"deployment plan example and validation commands",
+	"local OCI image references in deployment services",
+	"stable stack-scoped service container names",
+	"reserved deployment identity labels",
+	"attached multi-service deployment supervisor",
+	"dependency-ordered service process startup",
+	"service running-state startup gates",
+	"fail-fast service exit handling",
+	"reverse-order graceful supervisor shutdown",
+	"stack-scoped deployment process status",
+	"reverse-dependency-order deployment shutdown",
+	"deployment stop timeout escalation",
+	"safe optional deployment record and log removal",
+	"deployment lifecycle dry-run planning",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -2703,7 +2721,7 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 
 func runDeploy(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "Usage: boxr deploy validate FILE.json | plan [--json] FILE.json | example")
+		fmt.Fprintln(stderr, "Usage: boxr deploy validate FILE.json | plan [--json] FILE.json | up [--dry-run] FILE.json | ps [--json] STACK | down [--time 10s] [--remove] STACK | example")
 		return 2
 	}
 	switch args[0] {
@@ -2745,14 +2763,16 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 			return 0
 		}
 		fmt.Fprintf(stdout, "Deployment: %s\nServices: %d\nExecution order: %s\n\n", plan.Name, len(plan.Services), strings.Join(plan.ExecutionOrder, " -> "))
-		fmt.Fprintln(stdout, "SERVICE\tDEPENDS ON\tNETWORK\tSECURITY\tROOTFS")
+		fmt.Fprintln(stdout, "SERVICE\tCONTAINER\tIMAGE\tDEPENDS ON\tNETWORK\tSECURITY\tROOTFS")
 		for _, service := range plan.Services {
 			rootfsConfigured := "no"
 			if service.RootFSConfigured {
 				rootfsConfigured = "yes"
 			}
-			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				service.Name,
+				service.ContainerName,
+				service.Image,
 				strings.Join(service.DependsOn, ","),
 				service.NetworkMode,
 				service.SecurityProfile,
@@ -2761,10 +2781,463 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintln(stdout, "\nPlan only: no container was created and no process was started.")
 		return 0
+	case "up":
+		flags := flag.NewFlagSet("deploy up", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		dryRun := flags.Bool("dry-run", false, "show the deployment plan without starting services")
+		startTimeout := flags.Duration("start-timeout", 30*time.Second, "maximum time to wait for each service to enter running state")
+		stopTimeout := flags.Duration("stop-timeout", 10*time.Second, "grace period for service shutdown")
+		if err := flags.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if flags.NArg() != 1 || *startTimeout <= 0 || *stopTimeout < 0 {
+			fmt.Fprintln(stderr, "Usage: boxr deploy up [--dry-run] [--start-timeout 30s] [--stop-timeout 10s] FILE.json")
+			return 2
+		}
+		file, plan, code := loadDeploymentPlan(flags.Arg(0), stderr)
+		if code != 0 {
+			return code
+		}
+		if plan.Name == "" {
+			fmt.Fprintln(stderr, "boxr deploy up: deployment manifest must define a name")
+			return 2
+		}
+		if *dryRun {
+			fmt.Fprintf(stdout, "Deployment %s: %d services\n", plan.Name, len(plan.Services))
+			fmt.Fprintf(stdout, "Execution order: %s\n", strings.Join(plan.ExecutionOrder, " -> "))
+			fmt.Fprintln(stdout, "Dry run: no image was unpacked and no service was started.")
+			return 0
+		}
+		return runDeploymentUp(file, plan, *startTimeout, *stopTimeout, stdout, stderr)
+	case "ps":
+		flags := flag.NewFlagSet("deploy ps", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		jsonOutput := flags.Bool("json", false, "write service status as JSON")
+		if err := flags.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if flags.NArg() != 1 || strings.TrimSpace(flags.Arg(0)) == "" {
+			fmt.Fprintln(stderr, "Usage: boxr deploy ps [--json] STACK")
+			return 2
+		}
+		records, err := deploymentRecords(flags.Arg(0))
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr deploy ps: %v\n", err)
+			return 1
+		}
+		statuses := deploymentStatuses(records)
+		if *jsonOutput {
+			return writeJSON(stdout, statuses, stderr, "boxr deploy ps")
+		}
+		fmt.Fprintf(stdout, "Deployment: %s\n", flags.Arg(0))
+		fmt.Fprintln(stdout, "SERVICE\tCONTAINER\tSTATUS\tPID\tEXIT")
+		for _, item := range statuses {
+			exit := "-"
+			if item.ExitCode != nil {
+				exit = strconv.Itoa(*item.ExitCode)
+			}
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%d\t%s\n", item.Service, item.ContainerName, item.Status, item.PID, exit)
+		}
+		if len(statuses) == 0 {
+			fmt.Fprintln(stdout, "No services found.")
+		}
+		return 0
+	case "down":
+		flags := flag.NewFlagSet("deploy down", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		timeout := flags.Duration("time", 10*time.Second, "grace period before SIGKILL")
+		remove := flags.Bool("remove", false, "remove stopped container records and logs")
+		dryRun := flags.Bool("dry-run", false, "show reverse-order shutdown without signaling services")
+		if err := flags.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if flags.NArg() != 1 || strings.TrimSpace(flags.Arg(0)) == "" || *timeout < 0 {
+			fmt.Fprintln(stderr, "Usage: boxr deploy down [--time 10s] [--remove] [--dry-run] STACK")
+			return 2
+		}
+		return runDeploymentDown(flags.Arg(0), *timeout, *remove, *dryRun, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "boxr deploy: unknown action %q\n", args[0])
 		return 2
 	}
+}
+
+func loadDeploymentPlan(path string, stderr io.Writer) (deploy.File, deploy.Plan, int) {
+	file, err := deploy.Load(path)
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr deploy: %v\n", err)
+		return deploy.File{}, deploy.Plan{}, 1
+	}
+	plan, err := deploy.BuildPlan(file)
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr deploy: %v\n", err)
+		return deploy.File{}, deploy.Plan{}, 1
+	}
+	return file, plan, 0
+}
+
+type deploymentProcess struct {
+	service   string
+	name      string
+	configDir string
+	command   *exec.Cmd
+}
+
+type deploymentProcessExit struct {
+	service string
+	err     error
+}
+
+type deploymentStatus struct {
+	Service       string     `json:"service"`
+	ContainerName string     `json:"containerName"`
+	ID            string     `json:"id"`
+	Status        string     `json:"status"`
+	PID           int        `json:"pid,omitempty"`
+	ExitCode      *int       `json:"exitCode,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	StartedAt     *time.Time `json:"startedAt,omitempty"`
+	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
+}
+
+func startDeploymentProcess(executable, stack string, order int, serviceName string, service deploy.Service, stdout, stderr io.Writer) (*deploymentProcess, error) {
+	options := service.Options
+	options.Name = deploy.ContainerName(stack, serviceName)
+	options.AutoRemove = false
+	options.Labels = mergeLabels(options.Labels, map[string]string{
+		deploy.StackLabel:   stack,
+		deploy.ServiceLabel: serviceName,
+		deploy.OrderLabel:   strconv.Itoa(order),
+	})
+	runFile := config.RunFile{
+		Version: 1,
+		Name:    options.Name,
+		Command: append([]string(nil), service.Command...),
+		Options: options,
+	}
+	data, err := json.Marshal(runFile)
+	if err != nil {
+		return nil, fmt.Errorf("encode service %q run config: %w", serviceName, err)
+	}
+	configDir, err := os.MkdirTemp("", "boxr-deploy-*")
+	if err != nil {
+		return nil, fmt.Errorf("create private service config directory: %w", err)
+	}
+	configPath := filepath.Join(configDir, "run.json")
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
+		_ = os.RemoveAll(configDir)
+		return nil, fmt.Errorf("write private service config: %w", err)
+	}
+	args := []string{"run", "--config", configPath}
+	if service.Image != "" {
+		args = append(args, "--image", service.Image)
+	}
+	command := exec.Command(executable, args...)
+	command.Stdout = stdout
+	command.Stderr = stderr
+	if err := command.Start(); err != nil {
+		_ = os.RemoveAll(configDir)
+		return nil, fmt.Errorf("start service %q: %w", serviceName, err)
+	}
+	return &deploymentProcess{
+		service: serviceName,
+		name: options.Name,
+		configDir: configDir,
+		command: command,
+	}, nil
+}
+
+func waitForDeploymentStart(ctx context.Context, name string, timeout time.Duration, exits <-chan deploymentProcessExit) (state.Record, *deploymentProcessExit, error) {
+	var empty state.Record
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case exited := <-exits:
+			return empty, &exited, fmt.Errorf("service %q exited while another service was starting", exited.service)
+		case <-ctx.Done():
+			return empty, nil, ctx.Err()
+		case <-timer.C:
+			return empty, nil, fmt.Errorf("timed out waiting for service %q to start", name)
+		case <-ticker.C:
+			record, err := state.Get(name)
+			if err != nil {
+				continue
+			}
+			switch record.Status {
+			case "running":
+				return record, nil, nil
+			case "exited", "failed":
+				return record, nil, fmt.Errorf("service %q exited before entering the running state", name)
+			}
+		}
+	}
+}
+
+func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeout time.Duration, stdout, stderr io.Writer) int {
+	if runtime.GOOS != "linux" {
+		fmt.Fprintln(stderr, "boxr deploy up: service execution requires Linux")
+		return 2
+	}
+	if file.Name == "" {
+		fmt.Fprintln(stderr, "boxr deploy up: deployment name is required")
+		return 2
+	}
+	existing, err := state.List(true)
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr deploy up: inspect existing containers: %v\n", err)
+		return 1
+	}
+	existingNames := make(map[string]bool, len(existing))
+	for _, record := range existing {
+		existingNames[record.Name] = true
+	}
+	for _, service := range plan.Services {
+		if existingNames[service.ContainerName] {
+			fmt.Fprintf(stderr, "boxr deploy up: container %q already exists; use deploy down --remove %s before retrying\n", service.ContainerName, file.Name)
+			return 1
+		}
+		if service.Image != "" {
+			if err := imageStore.Verify(service.Image); err != nil {
+				fmt.Fprintf(stderr, "boxr deploy up: image %q for service %q is not ready: %v\n", service.Image, service.Name, err)
+				return 1
+			}
+		}
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr deploy up: locate Boxr executable: %v\n", err)
+		return 1
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	exits := make(chan deploymentProcessExit, len(plan.Services))
+	processes := make([]*deploymentProcess, 0, len(plan.Services))
+	exited := make(map[string]deploymentProcessExit, len(plan.Services))
+	defer func() {
+		for _, process := range processes {
+			_ = os.RemoveAll(process.configDir)
+		}
+	}()
+
+	for index, planned := range plan.Services {
+		service := file.Services[planned.Name]
+		process, err := startDeploymentProcess(executable, file.Name, index, planned.Name, service, stdout, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr deploy up: %v\n", err)
+			stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
+			return 1
+		}
+		processes = append(processes, process)
+		go func(serviceName string, command *exec.Cmd) {
+			exits <- deploymentProcessExit{service: serviceName, err: command.Wait()}
+		}(process.service, process.command)
+		fmt.Fprintf(stdout, "starting service %s (%s)\n", process.service, process.name)
+		_, unexpectedExit, err := waitForDeploymentStart(ctx, process.name, startTimeout, exits)
+		if unexpectedExit != nil {
+			exited[unexpectedExit.service] = *unexpectedExit
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr deploy up: %v\n", err)
+			stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
+			return 1
+		}
+		fmt.Fprintf(stdout, "started service %s\n", process.service)
+	}
+	fmt.Fprintf(stdout, "deployment %s is running; press Ctrl+C to stop all services\n", file.Name)
+	var terminalExit *deploymentProcessExit
+	interrupted := false
+	select {
+	case exitedService := <-exits:
+		exited[exitedService.service] = exitedService
+		terminalExit = &exitedService
+		if exitedService.err != nil {
+			fmt.Fprintf(stderr, "boxr deploy up: service %s exited: %v\n", exitedService.service, exitedService.err)
+		} else {
+			fmt.Fprintf(stdout, "boxr deploy up: service %s completed\n", exitedService.service)
+		}
+	case <-ctx.Done():
+		interrupted = true
+		fmt.Fprintln(stdout, "stopping deployment after interrupt")
+	}
+	stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
+	if terminalExit != nil {
+		return deploymentExitCode(terminalExit.err)
+	}
+	if interrupted {
+		return 130
+	}
+	return 0
+}
+
+func stopDeploymentProcesses(processes []*deploymentProcess, exited map[string]deploymentProcessExit, exits <-chan deploymentProcessExit, timeout time.Duration, stdout, stderr io.Writer) {
+	for index := len(processes) - 1; index >= 0; index-- {
+		process := processes[index]
+		if _, finished := exited[process.service]; finished || process.command.Process == nil {
+			continue
+		}
+		if err := process.command.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			fmt.Fprintf(stderr, "boxr deploy: signal service %s: %v\n", process.service, err)
+		}
+	}
+	remaining := len(processes) - len(exited)
+	if remaining <= 0 {
+		return
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for remaining > 0 {
+		select {
+		case exitedService := <-exits:
+			if _, seen := exited[exitedService.service]; !seen {
+				exited[exitedService.service] = exitedService
+				remaining--
+				fmt.Fprintf(stdout, "stopped service %s\n", exitedService.service)
+			}
+		case <-timer.C:
+			for index := len(processes) - 1; index >= 0; index-- {
+				process := processes[index]
+				if _, finished := exited[process.service]; finished || process.command.Process == nil {
+					continue
+				}
+				if err := process.command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+					fmt.Fprintf(stderr, "boxr deploy: kill service %s: %v\n", process.service, err)
+				}
+			}
+			for remaining > 0 {
+				select {
+				case exitedService := <-exits:
+					if _, seen := exited[exitedService.service]; !seen {
+						exited[exitedService.service] = exitedService
+						remaining--
+					}
+				case <-time.After(2 * time.Second):
+					fmt.Fprintln(stderr, "boxr deploy: one or more service supervisors did not exit after SIGKILL")
+					return
+				}
+			}
+			return
+		}
+	}
+}
+
+func deploymentExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() >= 0 {
+		return exitErr.ExitCode()
+	}
+	return 1
+}
+
+func deploymentRecords(stack string) ([]state.Record, error) {
+	records, err := state.List(true)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]state.Record, 0)
+	for _, record := range records {
+		if record.Labels[deploy.StackLabel] == stack {
+			filtered = append(filtered, record)
+		}
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		left, _ := strconv.Atoi(filtered[i].Labels[deploy.OrderLabel])
+		right, _ := strconv.Atoi(filtered[j].Labels[deploy.OrderLabel])
+		if left != right {
+			return left < right
+		}
+		return filtered[i].Labels[deploy.ServiceLabel] < filtered[j].Labels[deploy.ServiceLabel]
+	})
+	return filtered, nil
+}
+
+func deploymentStatuses(records []state.Record) []deploymentStatus {
+	statuses := make([]deploymentStatus, 0, len(records))
+	for _, record := range records {
+		statuses = append(statuses, deploymentStatus{
+			Service: record.Labels[deploy.ServiceLabel],
+			ContainerName: record.Name,
+			ID: record.ID,
+			Status: record.Status,
+			PID: record.PID,
+			ExitCode: record.ExitCode,
+			CreatedAt: record.CreatedAt,
+			StartedAt: record.StartedAt,
+			FinishedAt: record.FinishedAt,
+		})
+	}
+	return statuses
+}
+
+func runDeploymentDown(stack string, timeout time.Duration, remove, dryRun bool, stdout, stderr io.Writer) int {
+	records, err := deploymentRecords(stack)
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr deploy down: %v\n", err)
+		return 1
+	}
+	if len(records) == 0 {
+		fmt.Fprintf(stdout, "deployment %s has no recorded services\n", stack)
+		return 0
+	}
+	for index := len(records) - 1; index >= 0; index-- {
+		record := records[index]
+		service := record.Labels[deploy.ServiceLabel]
+		if dryRun {
+			action := "stop"
+			if remove {
+				action = "stop and remove"
+			}
+			fmt.Fprintf(stdout, "would %s service %s (%s)\n", action, service, record.Name)
+			continue
+		}
+		if record.Status == "running" {
+			if runtime.GOOS != "linux" {
+				fmt.Fprintln(stderr, "boxr deploy down: stopping services requires Linux")
+				return 2
+			}
+			if err := state.Signal(record.ID, "TERM"); err != nil {
+				fmt.Fprintf(stderr, "boxr deploy down: stop service %s: %v\n", service, err)
+				return 1
+			}
+			if !waitForStopped(record.ID, record.PID, time.Now().Add(timeout)) {
+				if err := state.Signal(record.ID, "KILL"); err != nil {
+					fmt.Fprintf(stderr, "boxr deploy down: force-stop service %s: %v\n", service, err)
+					return 1
+				}
+				if !waitForStopped(record.ID, record.PID, time.Now().Add(3*time.Second)) {
+					fmt.Fprintf(stderr, "boxr deploy down: service %s did not stop\n", service)
+					return 1
+				}
+			}
+		}
+		if remove {
+			current, err := state.Get(record.ID)
+			if err != nil {
+				fmt.Fprintf(stderr, "boxr deploy down: refresh service %s: %v\n", service, err)
+				return 1
+			}
+			if current.Status == "created" {
+				err = state.RemoveCreated(current.ID)
+			} else {
+				err = state.Remove(current.ID)
+			}
+			if err != nil {
+				fmt.Fprintf(stderr, "boxr deploy down: remove service %s: %v\n", service, err)
+				return 1
+			}
+		} else {
+			fmt.Fprintf(stdout, "stopped service %s (%s)\n", service, record.Name)
+		}
+	}
+	if remove {
+		fmt.Fprintf(stdout, "removed deployment %s\n", stack)
+	}
+	return 0
 }
 
 func runStop(args []string, stdout, stderr io.Writer) int {

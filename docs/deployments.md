@@ -1,6 +1,6 @@
 # Multi-service deployment manifests
 
-Boxr deployment manifests describe an application as a set of individually isolated services with an explicit dependency graph. The planner is deterministic and validates all services before any workload is started.
+Boxr deployment manifests describe an application as a set of individually isolated services with an explicit dependency graph. The planner is deterministic and validates all services before any workload is started. The runtime supports attached service supervision, stack-scoped status and reverse-order shutdown.
 
 ## Create and inspect a plan
 
@@ -21,7 +21,8 @@ Version 1 is strict JSON. Unknown fields, trailing JSON values, oversized files,
   "name": "sample-app",
   "services": {
     "database": {
-      "command": ["/usr/bin/database", "--foreground"],
+      "image": "postgres:17",
+      "command": ["postgres"],
       "options": {
         "rootfs": "/var/lib/boxr/rootfs/database",
         "readOnlyRootfs": true,
@@ -44,7 +45,22 @@ Version 1 is strict JSON. Unknown fields, trailing JSON values, oversized files,
 }
 ```
 
-Each service uses the existing `container.Options` validation rules. The service command is an argument array, not a shell string. A service can list up to 64 dependencies; a deployment can contain up to 64 services. The manifest and command data are bounded to avoid unbounded input.
+Each service uses the existing `container.Options` validation rules. Define either a local OCI image reference, a command, or both. The command is an argument array, not a shell string. Images must already exist in Boxr's local image store before `deploy up`; image pulling remains an explicit `boxr image pull` operation. A service can list up to 64 dependencies; a deployment can contain up to 64 services. The manifest and command data are bounded to avoid unbounded input.
+
+## Runtime lifecycle
+
+```sh
+boxr deploy up boxr.deploy.json
+boxr deploy ps sample-app
+boxr deploy down sample-app
+boxr deploy down --time 20s --remove sample-app
+```
+
+`deploy up` runs in the foreground, creates a private temporary run config for each service, and starts services in dependency-first order using the existing `boxr run` runtime. It waits for each service to reach the runtime's `running` state before starting the next service. It does not claim that an application-level health check has passed. A service exit is fail-fast: the supervisor stops the remaining services in reverse startup order and exits with the service's status where available. Ctrl+C or SIGTERM requests graceful shutdown; services that exceed the stop timeout are killed.
+
+Each service receives a stable stack-scoped container name and reserved metadata labels so `deploy ps` and `deploy down` only operate on that deployment. `deploy ps --json` omits command text, environment values, labels and host paths. Existing records with the same generated names must be removed with `deploy down --remove` before reusing a stack name. `deploy down` keeps completed records and logs by default; use `--remove` to delete them.
+
+The supervisor is attached and must remain running to monitor unexpected service exits. Detached mode, restart policies, application health checks, service DNS, bridge networking, port publishing, cross-host scheduling and rolling updates are not implemented by this milestone. Dependencies currently guarantee start order only; they do not wait for a TCP port or application readiness.
 
 ## Deterministic ordering
 
@@ -56,4 +72,4 @@ A plan reports the number of command arguments, environment entries and labels w
 
 ## Scope and limitations
 
-This release adds manifest validation and planning only. It does not claim Compose compatibility or perform `up`, `down`, service restart policies, health checks, service DNS, bridge networking, port publishing, secret mounts, rolling updates or cross-host scheduling. A validated plan is not proof that its host resources or rootfs paths exist. Run workloads with `boxr run` after reviewing the plan.
+This release provides validation, planning and an attached single-host lifecycle supervisor. It does not claim Compose compatibility or provide detached mode, restart policies, health checks, service DNS, bridge networking, port publishing, secret mounts, rolling updates or cross-host scheduling. A validated plan is not proof that its host resources or rootfs paths exist. Run workloads with `boxr run` after reviewing the plan.
