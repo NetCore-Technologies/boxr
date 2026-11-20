@@ -312,7 +312,7 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 			}
 			spec.dockerfileSteps = append(spec.dockerfileSteps, dockerfileStep{
 				kind: "run", command: command,
-				env: mergeBuildEnvironment(argEnv, spec.Config.Env),
+				env:  mergeBuildEnvironment(argEnv, spec.Config.Env),
 				user: currentUser,
 			})
 		case "ADD":

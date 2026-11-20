@@ -112,7 +112,6 @@ func TestLoadDockerfileRejectsSymlink(t *testing.T) {
 	}
 }
 
-
 func TestParseDockerfileCapturesRunCommandsAndEnvironment(t *testing.T) {
 	spec, err := ParseDockerfile([]byte("ARG BUILD_FLAVOR=debug\nFROM scratch\nWORKDIR /src\nENV APP_MODE=release\nRUN echo \"$APP_MODE:$BUILD_FLAVOR\"\nRUN [\"/bin/tool\", \"$APP_MODE\"]\n"))
 	if err != nil {
@@ -257,7 +256,6 @@ func containsBuildEnv(values []string, key, want string) bool {
 	}
 	return false
 }
-
 
 func TestBuildDockerfileWithBuildArgsPassesOverridesOnlyToRun(t *testing.T) {
 	useStore(t)

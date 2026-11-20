@@ -63,7 +63,6 @@ func TestExitErrorHasUsefulMessage(t *testing.T) {
 	}
 }
 
-
 func TestChildProcessEnvironmentDropsHostVariablesForBuilds(t *testing.T) {
 	values := childProcessEnvironment(Options{
 		ClearEnv: true,
