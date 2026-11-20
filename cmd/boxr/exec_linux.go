@@ -24,12 +24,12 @@ import (
 const maxExecEnvironmentBytes = 1 << 20
 
 type execHelperConfig struct {
-	RootFS           bool     \`json:"rootFS"\`
-	Workdir          string   \`json:"workdir,omitempty"\`
-	Command          []string \`json:"command"\`
-	DropCapabilities []string \`json:"dropCapabilities,omitempty"\`
-	NoNewPrivileges  bool     \`json:"noNewPrivileges,omitempty"\`
-	SeccompProfile   string   \`json:"seccompProfile,omitempty"\`
+	RootFS           bool     `json:"rootFS"`
+	Workdir          string   `json:"workdir,omitempty"`
+	Command          []string `json:"command"`
+	DropCapabilities []string `json:"dropCapabilities,omitempty"`
+	NoNewPrivileges  bool     `json:"noNewPrivileges,omitempty"`
+	SeccompProfile   string   `json:"seccompProfile,omitempty"`
 }
 
 // runExec starts a command in an existing container. The launcher joins the
@@ -198,10 +198,10 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 		NoNewPrivileges:  record.Options.NoNewPrivileges,
 		SeccompProfile:   record.Options.SeccompProfile,
 	}
-	if config.RootFS && config.Workdir == "" {
-		config.Workdir = record.Options.Workdir
-		if config.Workdir == "" {
-			config.Workdir = "/"
+	if helperConfig.RootFS && helperConfig.Workdir == "" {
+		helperConfig.Workdir = record.Options.Workdir
+		if helperConfig.Workdir == "" {
+			helperConfig.Workdir = "/"
 		}
 	}
 	configJSON, err := json.Marshal(config)
@@ -334,8 +334,8 @@ func runExecLaunch(args []string) int {
 		fmt.Fprintln(os.Stderr, "boxr exec: launch barrier is unavailable")
 		return 125
 	}
-	var signal [1]byte
-	if _, err := io.ReadFull(release, signal[:]); err != nil || signal[0] != 1 {
+	var readySignal [1]byte
+	if _, err := io.ReadFull(release, readySignal[:]); err != nil || readySignal[0] != 1 {
 		_ = release.Close()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "boxr exec: launch barrier failed: %v\n", err)
@@ -399,22 +399,22 @@ func runExecChild(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "boxr exec: decode helper configuration: %v\n", err)
 		return 125
 	}
-	var config execHelperConfig
-	if err := json.Unmarshal(configJSON, &config); err != nil {
+	var helperConfig execHelperConfig
+	if err := json.Unmarshal(configJSON, &helperConfig); err != nil {
 		fmt.Fprintf(stderr, "boxr exec: read helper configuration: %v\n", err)
 		return 125
 	}
-	if len(config.Command) == 0 {
+	if len(helperConfig.Command) == 0 {
 		fmt.Fprintln(stderr, "boxr exec: helper command is missing")
 		return 125
 	}
-	for _, argument := range config.Command {
+	for _, argument := range helperConfig.Command {
 		if argument == "" || strings.ContainsRune(argument, '\x00') {
 			fmt.Fprintln(stderr, "boxr exec: helper command contains an invalid argument")
 			return 125
 		}
 	}
-	if config.Workdir != "" && (!filepath.IsAbs(config.Workdir) || strings.ContainsRune(config.Workdir, '\x00')) {
+	if helperConfig.Workdir != "" && (!filepath.IsAbs(helperConfig.Workdir) || strings.ContainsRune(helperConfig.Workdir, '\x00')) {
 		fmt.Fprintln(stderr, "boxr exec: helper working directory is invalid")
 		return 125
 	}
@@ -446,7 +446,7 @@ func runExecChild(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	if config.RootFS {
+	if helperConfig.RootFS {
 		if err := syscall.Fchdir(4); err != nil {
 			fmt.Fprintf(stderr, "boxr exec: enter container root: %v\n", err)
 			return 125
@@ -456,12 +456,12 @@ func runExecChild(args []string, stdout, stderr io.Writer) int {
 			return 125
 		}
 	}
-	if config.Workdir != "" {
-		if err := os.Chdir(config.Workdir); err != nil {
-			fmt.Fprintf(stderr, "boxr exec: change working directory to %q: %v\n", config.Workdir, err)
+	if helperConfig.Workdir != "" {
+		if err := os.Chdir(helperConfig.Workdir); err != nil {
+			fmt.Fprintf(stderr, "boxr exec: change working directory to %q: %v\n", helperConfig.Workdir, err)
 			return 125
 		}
-	} else if config.RootFS {
+	} else if helperConfig.RootFS {
 		if err := os.Chdir("/"); err != nil {
 			fmt.Fprintf(stderr, "boxr exec: change to container root: %v\n", err)
 			return 125
@@ -475,21 +475,21 @@ func runExecChild(args []string, stdout, stderr io.Writer) int {
 	}
 
 	security := container.Options{
-		DropCapabilities: config.DropCapabilities,
-		NoNewPrivileges:  config.NoNewPrivileges,
-		SeccompProfile:   config.SeccompProfile,
+		DropCapabilities: helperConfig.DropCapabilities,
+		NoNewPrivileges:  helperConfig.NoNewPrivileges,
+		SeccompProfile:   helperConfig.SeccompProfile,
 	}
 	if err := container.ApplyExecSecurity(security); err != nil {
 		fmt.Fprintf(stderr, "boxr exec: apply container security policy: %v\n", err)
 		return 125
 	}
-	resolved, err := findExecPath(config.Command[0], environment)
+	resolved, err := findExecPath(helperConfig.Command[0], environment)
 	if err != nil {
 		fmt.Fprintf(stderr, "boxr exec: %v\n", err)
 		return 127
 	}
-	if err := syscall.Exec(resolved, config.Command, environment); err != nil {
-		fmt.Fprintf(stderr, "boxr exec: execute %q: %v\n", config.Command[0], err)
+	if err := syscall.Exec(resolved, helperConfig.Command, environment); err != nil {
+		fmt.Fprintf(stderr, "boxr exec: execute %q: %v\n", helperConfig.Command[0], err)
 		return 126
 	}
 	return 0
