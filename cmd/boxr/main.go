@@ -3034,14 +3034,14 @@ func runDeploymentPull(file deploy.File, plan deploy.Plan, platform, authFile st
 		localReference, resolveErr := resolveDeploymentImageReference(service.Image)
 		deduplicationKey := ""
 		if resolveErr == nil {
-			deduplicationKey = "local:" + localReference
+			deduplicationKey = localReference
 		} else {
 			parsed, err := registry.ParseReference(service.Image)
 			if err != nil {
 				fmt.Fprintf(stderr, "boxr deploy pull: service %s has an invalid image reference: %v\n", service.Name, err)
 				return 1
 			}
-			deduplicationKey = "registry:" + parsed.LocalReference()
+			deduplicationKey = parsed.LocalReference()
 		}
 		if previous, exists := seen[deduplicationKey]; exists {
 			fmt.Fprintf(stdout, "service %s reuses image %s (already handled for %s)\n", service.Name, service.Image, previous)
