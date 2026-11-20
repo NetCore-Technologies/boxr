@@ -5,9 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"os"
 	"os/exec"
 	"strconv"
@@ -393,3 +395,136 @@ func TestEngineAPIContainerDeleteRejectsUnsupportedForceAndVolumeRemoval(t *test
 	}
 }
 
+
+
+func TestDockerCreateRejectsUnsupportedAndMalformedRequests(t *testing.T) {
+	server := setupEngineAPITest(t)
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{name: "missing image", body: `{"Cmd":["/bin/sh"]}`, want: http.StatusBadRequest},
+		{name: "TTY unsupported", body: `{"Image":"alpine:latest","Tty":true}`, want: http.StatusBadRequest},
+		{name: "privileged unsupported", body: `{"Image":"alpine:latest","HostConfig":{"Privileged":true}}`, want: http.StatusBadRequest},
+		{name: "unknown field rejected", body: `{"Image":"alpine:latest","HostConfig":{"Mystery":true}}`, want: http.StatusBadRequest},
+		{name: "multiple JSON values rejected", body: `{"Image":"alpine:latest"} {}`, want: http.StatusBadRequest},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/v1.45/containers/create", strings.NewReader(test.body))
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			if response.Code != test.want {
+				t.Fatalf("create status=%d body=%s, want %d", response.Code, response.Body.String(), test.want)
+			}
+		})
+	}
+}
+
+func TestDockerOptionsMapsResourcesPortsAndSafeNetworkDefaults(t *testing.T) {
+	options, err := dockerOptions(dockerHostConfig{
+		Memory: 256 << 20, MemoryReservation: 64 << 20, MemorySwap: 512 << 20,
+		NanoCPUs: 1500000000, PidsLimit: 128, ReadonlyRootfs: true,
+		CapDrop: []string{"NET_RAW"},
+		PortBindings: map[string][]dockerPortBinding{
+			"8080/tcp": {{HostIP: "127.0.0.1", HostPort: "18080"}},
+			"5353/udp": {{HostIP: "127.0.0.1", HostPort: "15353"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dockerOptions: %v", err)
+	}
+	if options.NetworkMode != "none" || options.MemoryLimitBytes != 256<<20 ||
+		options.MemoryLowBytes != 64<<20 || options.MemorySwapMaxBytes != 256<<20 ||
+		options.PidsLimit != 128 || math.Abs(options.CPUs-1.5) > 0.0001 || !options.ReadOnlyRootFS {
+		t.Fatalf("translated Docker options = %+v", options)
+	}
+	if len(options.PublishedPorts) != 2 || len(options.DropCapabilities) != 1 {
+		t.Fatalf("ports/capability drops = %+v / %+v", options.PublishedPorts, options.DropCapabilities)
+	}
+}
+
+func TestDockerOptionsRejectsUnsupportedOrImpossibleLimits(t *testing.T) {
+	tests := []struct {
+		name string
+		host dockerHostConfig
+	}{
+		{name: "swap without memory", host: dockerHostConfig{MemorySwap: 1024}},
+		{name: "swap smaller than memory", host: dockerHostConfig{Memory: 2048, MemorySwap: 1024}},
+		{name: "negative limit", host: dockerHostConfig{PidsLimit: -1}},
+		{name: "privileged", host: dockerHostConfig{Privileged: true}},
+		{name: "capability add", host: dockerHostConfig{CapAdd: []string{"SYS_ADMIN"}}},
+		{name: "auto remove with restart", host: dockerHostConfig{AutoRemove: true, RestartPolicy: dockerRestartPolicy{Name: "always"}}},
+		{name: "unknown restart mode", host: dockerHostConfig{RestartPolicy: dockerRestartPolicy{Name: "unless-stopped-and-also-maybe"}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := dockerOptions(test.host); err == nil {
+				t.Fatal("unsupported Docker HostConfig unexpectedly accepted")
+			}
+		})
+	}
+}
+
+func TestParseDockerBindRequiresExistingNonSymlinkSource(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "data")
+	if err := os.Mkdir(source, 0700); err != nil {
+		t.Fatal(err)
+	}
+	mount, err := parseDockerBind(source+":/var/lib/app:ro")
+	if err != nil {
+		t.Fatalf("parseDockerBind: %v", err)
+	}
+	if mount.Source != source || mount.Target != "/var/lib/app" || !mount.ReadOnly {
+		t.Fatalf("parsed bind = %+v", mount)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(source, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseDockerBind(link+":/data"); err == nil {
+		t.Fatal("symlink bind source unexpectedly accepted")
+	}
+	if _, err := parseDockerBind(filepath.Join(root, "missing")+":/data"); err == nil {
+		t.Fatal("missing bind source unexpectedly accepted")
+	}
+	if _, err := parseDockerBind(source+":/data:ro,z"); err == nil {
+		t.Fatal("unsupported bind mount mode unexpectedly accepted")
+	}
+}
+
+func TestDockerPortBindingsRejectEphemeralAndInvalidProtocols(t *testing.T) {
+	for name, input := range map[string]map[string][]dockerPortBinding{
+		"ephemeral host port": {"80/tcp": {{HostIP: "127.0.0.1"}}},
+		"invalid protocol": {"80/sctp": {{HostIP: "127.0.0.1", HostPort: "8080"}}},
+		"invalid host port": {"80/tcp": {{HostIP: "127.0.0.1", HostPort: "70000"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseDockerPortBindings(input); err == nil {
+				t.Fatal("invalid Docker port binding unexpectedly accepted")
+			}
+		})
+	}
+}
+
+func TestDockerContainerStartRequiresARealCreatedEngineRecord(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("not-an-engine-container", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/containers/"+record.ID+"/start", nil)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("start without saved image/config status=%d body=%s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodPost, "/containers/"+record.ID+"/stop", nil)
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusNotModified {
+		t.Fatalf("stop of created container status=%d", response.Code)
+	}
+}
