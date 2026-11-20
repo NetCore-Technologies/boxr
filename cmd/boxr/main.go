@@ -3552,7 +3552,14 @@ func deploymentContainerOptions(service deploy.Service) (container.Options, erro
 			ReadOnly: mount.ReadOnly,
 		})
 	}
-	if err := options.Validate(); err != nil {
+	validationOptions := options
+	if service.Image != "" && validationOptions.RootFS == "" {
+		// Image-backed deployments unpack their rootfs just before boxr run
+		// parses these bind mounts. Validate the deferred rootfs requirement here
+		// without persisting a fake host path in the run configuration.
+		validationOptions.RootFS = "/boxr-image-rootfs-validation"
+	}
+	if err := validationOptions.Validate(); err != nil {
 		return container.Options{}, fmt.Errorf("invalid prepared container options: %w", err)
 	}
 	return options, nil
@@ -3574,6 +3581,22 @@ func startDeploymentProcess(executable, stack string, order int, serviceName str
 		internalLabels[deploy.StopTimeoutLabel] = strconv.Itoa(service.StopTimeoutMS)
 	}
 	options.Labels = mergeLabels(options.Labels, internalLabels)
+	var deferredMountArgs []string
+	if service.Image != "" && len(options.BindMounts) > 0 {
+		for index, mount := range options.BindMounts {
+			if strings.ContainsAny(mount.Source+mount.Target, ":\\\x00") {
+				return nil, fmt.Errorf("image service mount %d paths cannot contain colons, backslashes, or NUL bytes", index+1)
+			}
+			mode := "rw"
+			if mount.ReadOnly {
+				mode = "ro"
+			}
+			deferredMountArgs = append(deferredMountArgs, "--mount", mount.Source+":"+mount.Target+":"+mode)
+		}
+		// config.Load validates options before --image unpacks its rootfs. Pass
+		// mounts as run flags so the CLI applies them after image extraction.
+		options.BindMounts = nil
+	}
 	runFile := config.RunFile{
 		Version: 1,
 		Name:    options.Name,
@@ -3597,6 +3620,7 @@ func startDeploymentProcess(executable, stack string, order int, serviceName str
 	if service.Image != "" {
 		args = append(args, "--image", service.Image)
 	}
+	args = append(args, deferredMountArgs...)
 	command := exec.Command(executable, args...)
 	command.Stdout = stdout
 	command.Stderr = stderr
