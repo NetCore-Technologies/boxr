@@ -255,8 +255,8 @@ func remove(query string, allowCreated bool) error {
 	if err != nil {
 		return err
 	}
-	if record.Status == "running" {
-		return fmt.Errorf("container %s is running; stop it before removal", record.ID)
+	if record.Status == "running" || record.Status == "restarting" {
+		return fmt.Errorf("container %s is %s; stop it before removal", record.ID, record.Status)
 	}
 	if record.Status == "created" && !allowCreated {
 		return fmt.Errorf("container %s has not completed; refusing removal", record.ID)
