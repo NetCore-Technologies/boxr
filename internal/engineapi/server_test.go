@@ -1228,3 +1228,49 @@ func TestEngineAPIContainerDeleteForceUsesNativeSafeRemoval(t *testing.T) {
 		t.Fatal("container record remains after forced Engine API delete")
 	}
 }
+
+
+func TestDockerContainerRenameUsesUniquePersistentNames(t *testing.T) {
+	server := setupEngineAPITest(t)
+	first, err := state.Create("api-rename-before", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := state.Create("api-rename-taken", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response := engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+first.ID+"/rename?name=api-rename-after")
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("rename status=%d body=%s", response.Code, response.Body.String())
+	}
+	renamed, err := state.Get("api-rename-after")
+	if err != nil || renamed.ID != first.ID {
+		t.Fatalf("renamed container lookup = %+v, err=%v", renamed, err)
+	}
+
+	response = engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+first.ID+"/rename?name=api-rename-taken")
+	if response.Code != http.StatusConflict {
+		t.Fatalf("duplicate rename status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+first.ID+"/rename?name=../escape")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid rename status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+first.ID+"/rename")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("missing name status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+first.ID+"/rename?name=a&name=b")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("repeated name parameter status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = engineAPIRequest(server, http.MethodPost, "/v1.45/containers/missing/rename?name=unused")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("missing container rename status=%d body=%s", response.Code, response.Body.String())
+	}
+	if _, err := state.Get(second.ID); err != nil {
+		t.Fatalf("unrelated container changed after rename: %v", err)
+	}
+}
