@@ -304,3 +304,125 @@ func TestBuildPlanRejectsImageAndRootFSTogether(t *testing.T) {
 		t.Fatal("image and explicit rootfs unexpectedly accepted together")
 	}
 }
+
+func TestBuildPlanProfilesSelectServicesAndKeepBaseServices(t *testing.T) {
+	file := File{
+		Version: 1,
+		Name:    "profile-stack",
+		Services: map[string]Service{
+			"database": {Command: []string{"/bin/database"}},
+			"api": {
+				Command:   []string{"/bin/api"},
+				DependsOn: []string{"database"},
+				Profiles:  []string{"frontend"},
+			},
+			"worker": {
+				Command:  []string{"/bin/worker"},
+				Profiles: []string{"background", "diagnostics"},
+			},
+			"debug": {
+				Command:  []string{"/bin/debug"},
+				Profiles: []string{"diagnostics"},
+			},
+		},
+	}
+
+	defaultPlan, err := BuildPlan(file)
+	if err != nil {
+		t.Fatalf("BuildPlan() without profiles: %v", err)
+	}
+	if len(defaultPlan.Services) != 1 || defaultPlan.Services[0].Name != "database" {
+		t.Fatalf("default active services = %+v, want only the unprofiled database", defaultPlan.Services)
+	}
+	if len(defaultPlan.Profiles) != 0 {
+		t.Fatalf("default selected profiles = %v, want none", defaultPlan.Profiles)
+	}
+
+	plan, err := BuildPlanWithProfiles(file, []string{"diagnostics", "frontend"})
+	if err != nil {
+		t.Fatalf("BuildPlanWithProfiles(): %v", err)
+	}
+	wantProfiles := []string{"diagnostics", "frontend"}
+	if !reflect.DeepEqual(plan.Profiles, wantProfiles) {
+		t.Fatalf("selected profiles = %v, want %v", plan.Profiles, wantProfiles)
+	}
+	got := make(map[string]ServicePlan, len(plan.Services))
+	for _, service := range plan.Services {
+		got[service.Name] = service
+	}
+	for _, name := range []string{"database", "api", "worker", "debug"} {
+		if _, exists := got[name]; !exists {
+			t.Errorf("selected plan omitted service %q", name)
+		}
+	}
+	if !reflect.DeepEqual(got["api"].Profiles, []string{"frontend"}) {
+		t.Fatalf("api profile metadata = %v, want [frontend]", got["api"].Profiles)
+	}
+	if !reflect.DeepEqual(got["worker"].Profiles, []string{"background", "diagnostics"}) {
+		t.Fatalf("worker profile metadata = %v", got["worker"].Profiles)
+	}
+}
+
+func TestBuildPlanProfilesRejectInvalidSelectorsAndInactiveDependencies(t *testing.T) {
+	base := File{
+		Version: 1,
+		Services: map[string]Service{
+			"database": {
+				Command:  []string{"/bin/database"},
+				Profiles: []string{"storage"},
+			},
+			"api": {
+				Command:   []string{"/bin/api"},
+				DependsOn: []string{"database"},
+				Profiles:  []string{"frontend"},
+			},
+		},
+	}
+	tests := map[string]struct {
+		file     File
+		profiles []string
+	}{
+		"unknown profile": {
+			file:     base,
+			profiles: []string{"missing"},
+		},
+		"duplicate selector": {
+			file:     base,
+			profiles: []string{"frontend", "frontend"},
+		},
+		"invalid selector": {
+			file:     base,
+			profiles: []string{"../frontend"},
+		},
+		"inactive dependency": {
+			file:     base,
+			profiles: []string{"frontend"},
+		},
+		"duplicate service profile": {
+			file: File{Version: 1, Services: map[string]Service{
+				"api": {Command: []string{"/bin/api"}, Profiles: []string{"frontend", "frontend"}},
+			}},
+			profiles: []string{"frontend"},
+		},
+		"invalid service profile": {
+			file: File{Version: 1, Services: map[string]Service{
+				"api": {Command: []string{"/bin/api"}, Profiles: []string{"../frontend"}},
+			}},
+			profiles: []string{"frontend"},
+		},
+		"no active services": {
+			file: File{Version: 1, Services: map[string]Service{
+				"api": {Command: []string{"/bin/api"}, Profiles: []string{"frontend"}},
+			}},
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := BuildPlanWithProfiles(test.file, test.profiles)
+			if err == nil {
+				t.Fatal("invalid profile selection unexpectedly produced a plan")
+			}
+		})
+	}
+}
+
