@@ -488,3 +488,53 @@ func TestNetworkStoreRejectsTrailingJSONAndUnsafeRecords(t *testing.T) {
 	}
 }
 
+func TestNetworkStoreCreatesOwnerOnlyCrossProcessLockFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "networks")
+	t.Setenv("BOXR_NETWORK_DIR", dir)
+	if _, err := List(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "networks.lock"))
+	if err != nil {
+		t.Fatalf("stat network store lock: %v", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+		t.Fatalf("network store lock mode = %v, want a regular 0600 file", info.Mode())
+	}
+}
+
+func TestLeaveKeepsIPAMReservationUntilPublishedRulesAreRemoved(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	if _, err := CreateWithRunner(context.Background(), "frontend", CreateOptions{Subnet: "172.30.74.0/24"}, &fakeRunner{}); err != nil {
+		t.Fatal(err)
+	}
+	mapping := PortMapping{HostPort: 18080, ContainerPort: 80}
+	if _, err := JoinWithRunner(context.Background(), "frontend", 3326, "container-cleanup", &fakeRunner{}, mapping); err != nil {
+		t.Fatal(err)
+	}
+	failing := &fakeRunner{failAt: 1, failMessage: "firewall backend unavailable"}
+	if err := LeaveWithRunner(context.Background(), "frontend", "container-cleanup", failing); err == nil {
+		t.Fatal("published port cleanup failure unexpectedly succeeded")
+	}
+	summary, err := Inspect("frontend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ContainerCount != 1 {
+		t.Fatalf("failed firewall cleanup released the IPAM reservation: %+v", summary)
+	}
+	blocked := &fakeRunner{}
+	if _, err := JoinWithRunner(context.Background(), "frontend", 3327, "container-blocked", blocked, mapping); err == nil {
+		t.Fatal("host port reservation was released before cleanup succeeded")
+	}
+	if len(blocked.calls) != 0 {
+		t.Fatalf("blocked port reuse changed host network: %v", blocked.calls)
+	}
+	if err := LeaveWithRunner(context.Background(), "frontend", "container-cleanup", &fakeRunner{}); err != nil {
+		t.Fatalf("retry cleanup: %v", err)
+	}
+	if _, err := JoinWithRunner(context.Background(), "frontend", 3327, "container-retry", &fakeRunner{}, mapping); err != nil {
+		t.Fatalf("released port could not be reused after cleanup: %v", err)
+	}
+}
+
