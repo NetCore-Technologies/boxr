@@ -2567,6 +2567,7 @@ var implementedFeatures = []string{
 	"readiness probe intervals timeouts attempts and status codes are bounded",
 	"readiness retries honor supervisor cancellation and startup deadlines",
 	"secret-redacted readiness metadata in deployment plans",
+	"readiness validation accounts for mandatory network-isolating security profiles",
 }
 
 func printFeatures(stdout io.Writer) {
