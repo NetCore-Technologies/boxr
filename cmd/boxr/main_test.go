@@ -1,0 +1,1693 @@
+package main
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/manit6752025/boxr/internal/container"
+	imageStore "github.com/manit6752025/boxr/internal/image"
+	"github.com/manit6752025/boxr/internal/rootfs"
+	"github.com/manit6752025/boxr/internal/state"
+	"github.com/manit6752025/boxr/internal/volume"
+)
+
+func TestImagePushCommandPublishesLocalImage(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "boxr-release"), []byte("local image for push test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var importOut, importErr bytes.Buffer
+	if code := run([]string{"image", "import", root, "demo:latest"}, &importOut, &importErr); code != 0 {
+		t.Fatalf("image import returned %d: %s", code, importErr.String())
+	}
+	uploaded := map[string]bool{}
+	var manifestUploaded bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/blobs/uploads/"):
+			w.Header().Set("Location", "/v2/team/demo/blobs/uploads/session?upload=1")
+			w.WriteHeader(http.StatusAccepted)
+		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/blobs/uploads/session"):
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read pushed blob: %v", err)
+			}
+			digest := r.URL.Query().Get("digest")
+			if got := testSHA256(body); got != digest {
+				t.Errorf("uploaded blob digest = %q, want %q", got, digest)
+			}
+			uploaded[digest] = true
+			w.Header().Set("Docker-Content-Digest", digest)
+			w.WriteHeader(http.StatusCreated)
+		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/manifests/v1"):
+			manifestUploaded = true
+			w.WriteHeader(http.StatusCreated)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	ref := strings.TrimPrefix(server.URL, "http://") + "/team/demo:v1"
+	authFile := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authFile, []byte(`{"auths":{}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"image", "push", "--authfile", authFile, "demo:latest", ref}, &out, &errOut); code != 0 {
+		t.Fatalf("image push returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "pushed "+ref) || !manifestUploaded || len(uploaded) != 2 {
+		t.Fatalf("incomplete image push: output=%q uploaded=%#v manifest=%v", out.String(), uploaded, manifestUploaded)
+	}
+}
+
+func TestImagePushRequiresSource(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"image", "push"}, &out, &errOut); code != 2 {
+		t.Fatalf("image push without source returned %d, want 2", code)
+	}
+	if !strings.Contains(errOut.String(), "Usage: boxr image push") {
+		t.Fatalf("unexpected usage output: %q", errOut.String())
+	}
+}
+
+func TestImagePullCommandImportsVerifiedBoxrRootFS(t *testing.T) {
+	var tarData bytes.Buffer
+	tarWriter := tar.NewWriter(&tarData)
+	content := []byte("pulled from local test registry\n")
+	if err := tarWriter.WriteHeader(&tar.Header{Name: "etc/boxr-release", Mode: 0644, Size: int64(len(content)), Typeflag: tar.TypeReg, ModTime: time.Unix(0, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tarWriter.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var layer bytes.Buffer
+	gzipWriter := gzip.NewWriter(&layer)
+	if _, err := gzipWriter.Write(tarData.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	layerDigest := testSHA256(layer.Bytes())
+	diffSum := sha256.Sum256(tarData.Bytes())
+	diffID := "sha256:" + hex.EncodeToString(diffSum[:])
+	configData, err := json.Marshal(map[string]any{
+		"os": "linux", "architecture": "arm64", "variant": "v8",
+		"rootfs": map[string]any{"type": "layers", "diff_ids": []string{diffID}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configDigest := testSHA256(configData)
+	manifestData, err := json.Marshal(map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.manifest.v1+json",
+		"config":        map[string]any{"mediaType": "application/vnd.oci.image.config.v1+json", "digest": configDigest, "size": len(configData)},
+		"layers":        []any{map[string]any{"mediaType": "application/vnd.boxr.rootfs.v1.tar+gzip", "digest": layerDigest, "size": layer.Len()}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestDigest := testSHA256(manifestData)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v2/team/app/manifests/v1":
+			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			w.Header().Set("Docker-Content-Digest", manifestDigest)
+			_, _ = w.Write(manifestData)
+		case "/v2/team/app/blobs/" + configDigest:
+			_, _ = w.Write(configData)
+		case "/v2/team/app/blobs/" + layerDigest:
+			_, _ = w.Write(layer.Bytes())
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	ref := strings.TrimPrefix(server.URL, "http://") + "/team/app:v1"
+	authFile := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authFile, []byte(`{"auths":{}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"image", "pull", "--platform", "linux/arm64/v8", "--authfile", authFile, ref}, &out, &errOut); code != 0 {
+		t.Fatalf("image pull returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "pulled "+strings.TrimPrefix(server.URL, "http://")+"/team/app:v1") {
+		t.Fatalf("pull output does not show imported image: %q", out.String())
+	}
+	var listOut, listErr bytes.Buffer
+	if code := run([]string{"image", "ls", "--quiet"}, &listOut, &listErr); code != 0 {
+		t.Fatalf("image ls returned %d: %s", code, listErr.String())
+	}
+	if !strings.Contains(listOut.String(), "/team/app:v1") {
+		t.Fatalf("pulled image missing from local store: %q", listOut.String())
+	}
+	var inspectOut, inspectErr bytes.Buffer
+	if code := run([]string{"image", "inspect", strings.TrimPrefix(server.URL, "http://") + "/team/app:v1"}, &inspectOut, &inspectErr); code != 0 {
+		t.Fatalf("image inspect returned %d: %s", code, inspectErr.String())
+	}
+	var stored struct {
+		OS      string `json:"os"`
+		Arch    string `json:"architecture"`
+		Variant string `json:"variant"`
+	}
+	if err := json.Unmarshal(inspectOut.Bytes(), &stored); err != nil {
+		t.Fatalf("decode imported image metadata: %v (%s)", err, inspectOut.String())
+	}
+	if stored.OS != "linux" || stored.Arch != "arm64" || stored.Variant != "v8" {
+		t.Fatalf("cross-platform metadata was not preserved: %#v", stored)
+	}
+}
+
+func TestImagePullRequiresReference(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"image", "pull"}, &out, &errOut); code != 2 {
+		t.Fatalf("image pull without reference returned %d, want 2: %s", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "Usage: boxr image pull") {
+		t.Fatalf("unexpected usage error: %q", errOut.String())
+	}
+}
+
+func testSHA256(data []byte) string {
+	sum := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func TestRunHelp(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"help"}, &out, &errOut); code != 0 {
+		t.Fatalf("run() code = %d, stderr = %q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "boxr run") {
+		t.Fatalf("help output does not contain run usage: %q", out.String())
+	}
+}
+
+func TestRunVersion(t *testing.T) {
+	oldVersion, oldCommit, oldBuildDate := version, commit, buildDate
+	t.Cleanup(func() { version, commit, buildDate = oldVersion, oldCommit, oldBuildDate })
+	version, commit, buildDate = "v1.2.3", "abc123", "2026-11-18"
+
+	var out, errOut bytes.Buffer
+	if code := run([]string{"version"}, &out, &errOut); code != 0 {
+		t.Fatalf("run() code = %d, stderr = %q", code, errOut.String())
+	}
+	for _, want := range []string{"v1.2.3", "abc123", "2026-11-18"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("version output %q does not contain %q", out.String(), want)
+		}
+	}
+}
+
+func TestRunRejectsUnknownCommand(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"not-a-command"}, &out, &errOut); code != 2 {
+		t.Fatalf("run() code = %d, want 2", code)
+	}
+	if !strings.Contains(errOut.String(), "unknown command") {
+		t.Fatalf("unexpected error output: %q", errOut.String())
+	}
+}
+
+func TestRunRequiresContainerCommand(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"run"}, &out, &errOut); code != 2 {
+		t.Fatalf("run() code = %d, want 2", code)
+	}
+	if !strings.Contains(errOut.String(), "a command is required") {
+		t.Fatalf("unexpected error output: %q", errOut.String())
+	}
+}
+
+func TestRunValidatesMemoryBeforeStartingContainer(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"run", "--memory", "0", "/bin/true"}, &out, &errOut); code != 2 {
+		t.Fatalf("run() code = %d, want 2", code)
+	}
+	if !strings.Contains(errOut.String(), "invalid --memory") {
+		t.Fatalf("unexpected error output: %q", errOut.String())
+	}
+}
+
+func TestParseMemoryLimit(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int64
+	}{
+		{"1024", 1024},
+		{"1b", 1},
+		{"1k", 1 << 10},
+		{"2KiB", 2 << 10},
+		{"256m", 256 << 20},
+		{"1GiB", 1 << 30},
+	}
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			got, err := parseMemoryLimit(test.input)
+			if err != nil {
+				t.Fatalf("parseMemoryLimit(%q): %v", test.input, err)
+			}
+			if got != test.want {
+				t.Fatalf("parseMemoryLimit(%q) = %d, want %d", test.input, got, test.want)
+			}
+		})
+	}
+}
+
+func TestParseMemoryLimitRejectsInvalidValues(t *testing.T) {
+	for _, input := range []string{"", "0", "-1", "1.5g", "999999999999999999999g", "12tb"} {
+		t.Run(input, func(t *testing.T) {
+			if _, err := parseMemoryLimit(input); err == nil {
+				t.Fatalf("parseMemoryLimit(%q) unexpectedly succeeded", input)
+			}
+		})
+	}
+}
+
+func TestValidateEnv(t *testing.T) {
+	for _, input := range []string{"A=1", "APP_ENV=dev", "_PRIVATE=value", "VALUE_WITH_DIGIT2=x"} {
+		if err := validateEnv(input); err != nil {
+			t.Errorf("validateEnv(%q): %v", input, err)
+		}
+	}
+	for _, input := range []string{"", "A", "=value", "1BAD=value", "BAD-NAME=value", "A=bad\x00value"} {
+		if err := validateEnv(input); err == nil {
+			t.Errorf("validateEnv(%q) unexpectedly succeeded", input)
+		}
+	}
+}
+
+func TestRunDoctorReportsReadOnlyHostChecks(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"doctor"}, &out, &errOut)
+	if code < 0 || code > 1 {
+		t.Fatalf("run(doctor) code = %d, stderr = %q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "boxr doctor") {
+		t.Fatalf("doctor output is missing its heading: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "Security boundary") {
+		t.Fatalf("doctor output is missing the security warning: %q", out.String())
+	}
+}
+
+func TestRunRejectsInvalidRuntimeOptionsBeforeStarting(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "negative cpu", args: []string{"run", "--cpus", "-1", "/bin/true"}, want: "--cpus"},
+		{name: "nan cpu", args: []string{"run", "--cpus", "NaN", "/bin/true"}, want: "--cpus"},
+		{name: "invalid hostname", args: []string{"run", "--hostname", strings.Repeat("h", 65), "/bin/true"}, want: "--hostname"},
+		{name: "invalid environment", args: []string{"run", "--env", "BAD-NAME=value", "/bin/true"}, want: "--env"},
+		{name: "nul workdir", args: []string{"run", "--workdir", "bad\x00path", "/bin/true"}, want: "--workdir"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			if code := run(test.args, &out, &errOut); code != 2 {
+				t.Fatalf("run() code = %d, want 2; stderr = %q", code, errOut.String())
+			}
+			if !strings.Contains(errOut.String(), test.want) {
+				t.Fatalf("stderr %q does not contain %q", errOut.String(), test.want)
+			}
+		})
+	}
+}
+
+func TestParseBindMount(t *testing.T) {
+	mount, err := parseBindMount("/var/data:/data:ro")
+	if err != nil {
+		t.Fatalf("parseBindMount(): %v", err)
+	}
+	if mount.Source != "/var/data" || mount.Target != "/data" || !mount.ReadOnly {
+		t.Fatalf("unexpected mount: %#v", mount)
+	}
+	mount, err = parseBindMount("/tmp:/tmp")
+	if err != nil || mount.ReadOnly {
+		t.Fatalf("rw default mount = %#v, %v", mount, err)
+	}
+	for _, input := range []string{"", "relative:/data", "/src:relative", "/src:/dst:bad", "/src:/dst:ro:extra"} {
+		if _, err := parseBindMount(input); err == nil {
+			t.Errorf("parseBindMount(%q) unexpectedly succeeded", input)
+		}
+	}
+}
+
+func TestParseTmpfsMount(t *testing.T) {
+	mount, err := parseTmpfsMount("/tmp:64m:1777")
+	if err != nil {
+		t.Fatalf("parseTmpfsMount(): %v", err)
+	}
+	if mount.Target != "/tmp" || mount.SizeBytes != 64<<20 || mount.Mode != 01777 {
+		t.Fatalf("unexpected tmpfs: %#v", mount)
+	}
+	mount, err = parseTmpfsMount("/run")
+	if err != nil || mount.Mode != 01777 || mount.SizeBytes != 0 {
+		t.Fatalf("tmpfs defaults = %#v, %v", mount, err)
+	}
+	for _, input := range []string{"", "relative", "/tmp:0", "/tmp:64m:99999", "/tmp:64m:bad", "/tmp:64m:1777:extra"} {
+		if _, err := parseTmpfsMount(input); err == nil {
+			t.Errorf("parseTmpfsMount(%q) unexpectedly succeeded", input)
+		}
+	}
+}
+
+func TestRunRejectsInvalidRootfsAndNamespaceOptionsBeforeExecution(t *testing.T) {
+	for _, args := range [][]string{
+		{"run", "--read-only-rootfs", "/bin/true"},
+		{"run", "--rootfs", "relative", "/bin/true"},
+		{"run", "--network", "bridge", "/bin/true"},
+		{"run", "--cap-drop", "NOT_REAL", "/bin/true"},
+		{"run", "--rootfs", "/tmp/rootfs", "--workdir", "relative", "/bin/true"},
+	} {
+		var out, errOut bytes.Buffer
+		if code := run(args, &out, &errOut); code != 2 {
+			t.Errorf("run(%v) = %d, want 2 (stderr=%q)", args, code, errOut.String())
+		}
+	}
+}
+
+func TestReadEnvFileParsesCommentsExportsAndQuotes(t *testing.T) {
+	file := t.TempDir() + "/env"
+	contents := "# comment\n\nA=one\nexport B=\"two words\"\nC='three words'\nHASH=a#b\n"
+	if err := os.WriteFile(file, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readEnvFile(file)
+	if err != nil {
+		t.Fatalf("readEnvFile(): %v", err)
+	}
+	want := []string{"A=one", "B=two words", "C=three words", "HASH=a#b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("readEnvFile() = %#v, want %#v", got, want)
+	}
+}
+
+func TestReadEnvFileRejectsMalformedEntries(t *testing.T) {
+	file := t.TempDir() + "/bad-env"
+	for _, contents := range []string{"BAD-NAME=value\n", "NO_EQUALS\n", "=empty\n", "A=bad\x00value\n"} {
+		if err := os.WriteFile(file, []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readEnvFile(file); err == nil {
+			t.Errorf("readEnvFile(%q) unexpectedly succeeded", contents)
+		}
+	}
+}
+
+func TestMergeEnvValuesUsesLastValueAcrossSources(t *testing.T) {
+	got := mergeEnvValues([]string{"A=config", "B=config"}, []string{"A=file", "C=file"}, []string{"A=flag"})
+	want := []string{"A=flag", "B=config", "C=file"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("mergeEnvValues() = %#v, want %#v", got, want)
+	}
+}
+
+func TestConfigExampleCommandAndCompletion(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"config", "example"}, &out, &errOut); code != 0 {
+		t.Fatalf("config example: %d %q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"version": 1`) {
+		t.Fatalf("unexpected example: %q", out.String())
+	}
+	for _, shell := range []string{"bash", "zsh", "fish", "powershell"} {
+		out.Reset()
+		errOut.Reset()
+		if code := run([]string{"completion", shell}, &out, &errOut); code != 0 || out.Len() == 0 {
+			t.Errorf("completion %s: code=%d out=%q err=%q", shell, code, out.String(), errOut.String())
+		}
+	}
+}
+
+func TestVersionJSONOutput(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"version", "--json"}, &out, &errOut); code != 0 {
+		t.Fatalf("version --json: %d %q", code, errOut.String())
+	}
+	for _, field := range []string{`"version"`, `"commit"`, `"buildDate"`, `"goVersion"`} {
+		if !strings.Contains(out.String(), field) {
+			t.Errorf("JSON version missing %s: %s", field, out.String())
+		}
+	}
+}
+
+func TestContainerWorkflowCommands(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	record, err := state.Create("web-api", []string{"/bin/true"}, container.Options{Env: []string{"TOKEN=never-persist"}}, map[string]string{"tier": "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, 201); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	if code := run([]string{"ps", "--all", "--filter", "label=tier=test"}, &out, &errOut); code != 0 {
+		t.Fatalf("ps: %d %q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "web-api") || !strings.Contains(out.String(), record.ID) {
+		t.Fatalf("ps output: %q", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"inspect", "web-api"}, &out, &errOut); code != 0 {
+		t.Fatalf("inspect: %d %q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"status": "exited"`) || strings.Contains(out.String(), "never-persist") {
+		t.Fatalf("inspect leaked or missed state: %q", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"events", "--limit", "2", "--format", "json"}, &out, &errOut); code != 0 {
+		t.Fatalf("events: %d %q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"action": "start"`) || !strings.Contains(out.String(), `"action": "die"`) {
+		t.Fatalf("events output: %q", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"rm", "web-api"}, &out, &errOut); code != 0 {
+		t.Fatalf("rm: %d %q", code, errOut.String())
+	}
+	if _, err := state.Get(record.ID); err == nil {
+		t.Fatal("container record survived rm")
+	}
+}
+
+func TestPruneCommand(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	record, err := state.Create("old-job", []string{"true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, 202); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"prune", "--older-than", "0s"}, &out, &errOut); code != 0 {
+		t.Fatalf("prune: %d %q", code, errOut.String())
+	}
+	if _, err := state.Get(record.ID); err == nil {
+		t.Fatal("prune left completed record")
+	}
+}
+
+func TestRunRejectsInvalidNameAndLabels(t *testing.T) {
+	for _, args := range [][]string{
+		{"run", "--name", "bad name", "/bin/true"},
+		{"run", "--name", "valid", "--label", "missing-value", "/bin/true"},
+		{"run", "--name", "valid", "--label", "=empty", "/bin/true"},
+	} {
+		var out, errOut bytes.Buffer
+		if code := run(args, &out, &errOut); code != 2 {
+			t.Errorf("run(%v) = %d, want 2 (%q)", args, code, errOut.String())
+		}
+	}
+}
+
+func TestInfoJSON(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	var out, errOut bytes.Buffer
+	if code := run([]string{"info", "--json"}, &out, &errOut); code != 0 {
+		t.Fatalf("info: %d %q", code, errOut.String())
+	}
+	for _, field := range []string{`"goVersion"`, `"architecture"`, `"stateDirectory"`, `"runtimeSupported"`} {
+		if !strings.Contains(out.String(), field) {
+			t.Errorf("info JSON missing %s: %q", field, out.String())
+		}
+	}
+}
+
+func TestFeaturesCommandJSONInventory(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"features", "--json"}, &out, &errOut); code != 0 {
+		t.Fatalf("features --json returned %d: %s", code, errOut.String())
+	}
+	var result struct {
+		SchemaVersion int      `json:"schemaVersion"`
+		Count         int      `json:"count"`
+		Features      []string `json:"features"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("decode feature inventory: %v", err)
+	}
+	if result.SchemaVersion != 1 {
+		t.Errorf("schema version = %d, want 1", result.SchemaVersion)
+	}
+	if result.Count != len(result.Features) {
+		t.Errorf("reported count %d does not match feature list length %d", result.Count, len(result.Features))
+	}
+	if result.Count < 100 {
+		t.Errorf("feature inventory has %d entries; want at least 100", result.Count)
+	}
+	matrix, err := os.ReadFile("../../docs/FEATURE_MATRIX.md")
+	if err != nil {
+		t.Fatalf("read feature matrix: %v", err)
+	}
+	for index, feature := range result.Features {
+		want := fmt.Sprintf("%03d. %s", index+1, feature)
+		if !strings.Contains(string(matrix), want) {
+			t.Errorf("feature matrix is missing registry entry %q", want)
+		}
+	}
+}
+
+func TestMergeLabelsPrecedenceAndIsolation(t *testing.T) {
+	metadata := map[string]string{"owner": "metadata", "tier": "edge"}
+	configured := map[string]string{"owner": "config", "team": "runtime"}
+	merged := mergeLabels(metadata, configured)
+	if merged["owner"] != "config" || merged["tier"] != "edge" || merged["team"] != "runtime" {
+		t.Fatalf("unexpected merged labels: %#v", merged)
+	}
+	merged["new"] = "value"
+	if _, exists := metadata["new"]; exists {
+		t.Fatal("mergeLabels mutated metadata input")
+	}
+	if _, exists := configured["new"]; exists {
+		t.Fatal("mergeLabels mutated configured labels input")
+	}
+}
+
+func TestFeaturesRejectsUnexpectedArguments(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"features", "unexpected"}, &out, &errOut); code != 2 {
+		t.Fatalf("features unexpected returned %d, want 2", code)
+	}
+}
+
+func TestLifecycleCommandsLogsWaitAndStop(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	record, err := state.Create("lifecycle", []string{"/bin/sh", "-c", "echo hi"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := state.OpenLog(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := logFile.WriteString("first\nsecond\nthird\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = logFile.Close()
+	if err := state.Start(record.ID, 0x7fffffff); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(record.ID, &container.ExitError{Code: 0}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	if code := run([]string{"logs", "--tail", "2", "lifecycle"}, &out, &errOut); code != 0 || out.String() != "second\nthird\n" {
+		t.Fatalf("logs: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"wait", "lifecycle"}, &out, &errOut); code != 0 || strings.TrimSpace(out.String()) != "0" {
+		t.Fatalf("wait: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"stop", "lifecycle"}, &out, &errOut); code != 0 || !strings.Contains(out.String(), "already exited") {
+		t.Fatalf("stop exited: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"kill", "--signal", "BOGUS", "lifecycle"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "not running") {
+		t.Fatalf("kill exited: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+}
+
+func TestLifecycleCommandsRejectInvalidArguments(t *testing.T) {
+	for _, args := range [][]string{
+		{"stop"}, {"stop", "--time", "-1s", "name"},
+		{"kill"}, {"wait"}, {"wait", "--timeout", "-1s", "name"},
+		{"logs"}, {"logs", "--tail", "-1", "name"},
+	} {
+		var out, errOut bytes.Buffer
+		if code := run(args, &out, &errOut); code != 2 {
+			t.Errorf("run(%v) = %d, want 2 (stderr=%q)", args, code, errOut.String())
+		}
+	}
+}
+
+func TestLogsFollowStreamsAppendedOutputUntilExit(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	record, err := state.Create("follow-log", []string{"worker"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, 987654); err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := state.OpenLog(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := logFile.WriteString("initial\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = logFile.Close()
+
+	var out, errOut bytes.Buffer
+	done := make(chan int, 1)
+	go func() { done <- run([]string{"logs", "--tail", "0", "--follow", "follow-log"}, &out, &errOut) }()
+	time.Sleep(100 * time.Millisecond)
+	logFile, err = state.OpenLog(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := logFile.WriteString("appended\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = logFile.Close()
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("logs --follow returned %d: %q", code, errOut.String())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("logs --follow did not finish after container exit")
+	}
+	if got, want := out.String(), "initial\nappended\n"; got != want {
+		t.Fatalf("follow output = %q, want %q", got, want)
+	}
+}
+
+func TestStopCommandStopsRecordedProcess(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	child := exec.Command("sh", "-c", "exec sleep 30")
+	if err := child.Start(); err != nil {
+		t.Skipf("cannot start signal test process: %v", err)
+	}
+	record, err := state.Create("stop-process", []string{"sleep", "30"}, container.Options{}, nil)
+	if err != nil {
+		_ = child.Process.Kill()
+		_ = child.Wait()
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, child.Process.Pid); err != nil {
+		_ = child.Process.Kill()
+		_ = child.Wait()
+		t.Fatal(err)
+	}
+	waitDone := make(chan error, 1)
+	go func() {
+		waitErr := child.Wait()
+		waitDone <- waitErr
+		_ = state.Finish(record.ID, waitErr)
+	}()
+	var out, errOut bytes.Buffer
+	code := run([]string{"stop", "--time", "2s", "stop-process"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("stop returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	select {
+	case <-waitDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("child process did not exit after stop")
+	}
+	finished, err := state.Get(record.ID)
+	if err != nil || finished.Status != "failed" || finished.ExitCode == nil || *finished.ExitCode != 143 {
+		t.Fatalf("stopped record = %#v, err=%v; expected signal exit 143", finished, err)
+	}
+}
+
+func TestNamedVolumeCLIWorkflowAndActiveProtection(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("BOXR_DATA_DIR", dataDir)
+	t.Setenv("BOXR_STATE_DIR", filepath.Join(dataDir, "state"))
+	var out, errOut bytes.Buffer
+	if code := run([]string{"volume", "create", "--label", "app=cache", "cache"}, &out, &errOut); code != 0 || strings.TrimSpace(out.String()) != "cache" {
+		t.Fatalf("volume create: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	item, err := volume.Get("cache")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(item.Path, "keep.dat"), []byte("persistent"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"volume", "ls", "--quiet"}, &out, &errOut); code != 0 || strings.TrimSpace(out.String()) != "cache" {
+		t.Fatalf("volume ls: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"volume", "inspect", "cache"}, &out, &errOut); code != 0 || !strings.Contains(out.String(), item.Path) {
+		t.Fatalf("volume inspect: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	record, err := state.Create("using-volume", []string{"sleep", "30"}, container.Options{BindMounts: []container.BindMount{{Source: item.Path, Target: "/cache"}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, 123456); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"volume", "rm", "cache"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "active container") {
+		t.Fatalf("active volume removal: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(item.Path, "keep.dat")); err != nil {
+		t.Fatalf("active volume data was removed: %v", err)
+	}
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"volume", "rm", "cache"}, &out, &errOut); code != 0 {
+		t.Fatalf("volume rm after exit: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	if _, err := os.Stat(item.Path); !os.IsNotExist(err) {
+		t.Fatalf("volume data still exists after removal: %v", err)
+	}
+}
+
+func TestNamedVolumeParsingAndRunRequiresExistingVolume(t *testing.T) {
+	name, mount, err := parseVolumeMount("cache:/var/cache:ro")
+	if err != nil || name != "cache" || mount.Target != "/var/cache" || !mount.ReadOnly {
+		t.Fatalf("parseVolumeMount() = %q %#v %v", name, mount, err)
+	}
+	for _, value := range []string{"", "cache:relative", "cache:/", "cache:/data:bad", "../cache:/data", "cache:/data:ro:extra"} {
+		if _, _, err := parseVolumeMount(value); err == nil {
+			t.Errorf("parseVolumeMount(%q) unexpectedly succeeded", value)
+		}
+	}
+	t.Setenv("BOXR_DATA_DIR", t.TempDir())
+	var out, errOut bytes.Buffer
+	if code := run([]string{"run", "--volume", "missing:/cache", "/bin/true"}, &out, &errOut); code != 2 || !strings.Contains(errOut.String(), "volume") {
+		t.Fatalf("run with missing volume: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+}
+
+func TestVolumePruneRequiresExplicitConfirmation(t *testing.T) {
+	t.Setenv("BOXR_DATA_DIR", t.TempDir())
+	if _, err := volume.Create("unused", nil); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"volume", "prune"}, &out, &errOut); code != 2 {
+		t.Fatalf("volume prune without force returned %d", code)
+	}
+	if code := run([]string{"volume", "prune", "--force"}, &out, &errOut); code != 0 || !strings.Contains(out.String(), "removed 1") {
+		t.Fatalf("volume prune force: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+}
+
+func TestVolumeFiltersAndExport(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("BOXR_DATA_DIR", filepath.Join(base, "data"))
+	t.Setenv("BOXR_STATE_DIR", filepath.Join(base, "state"))
+	first, err := volume.Create("frontend", map[string]string{"tier": "web", "region": "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(first.Path, "index.html"), []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := volume.Create("backend", map[string]string{"tier": "api"}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"volume", "ls", "--quiet", "--filter", "label=tier=web"}, &out, &errOut); code != 0 || strings.TrimSpace(out.String()) != "frontend" {
+		t.Fatalf("volume label filter: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"volume", "ls", "--quiet", "--filter", "name=backend"}, &out, &errOut); code != 0 || strings.TrimSpace(out.String()) != "backend" {
+		t.Fatalf("volume name filter: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	archive := filepath.Join(base, "frontend.tar.gz")
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"volume", "export", "frontend", archive}, &out, &errOut); code != 0 || !strings.Contains(out.String(), "exported frontend") {
+		t.Fatalf("volume export: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	extracted := filepath.Join(base, "restored")
+	if _, err := rootfs.ExtractTarGz(archive, extracted, rootfs.Limits{}); err != nil {
+		t.Fatalf("extract volume export: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(extracted, "index.html"))
+	if err != nil || string(data) != "hello" {
+		t.Fatalf("exported content = %q, %v", data, err)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"volume", "prune", "--force", "--filter", "label=tier=web"}, &out, &errOut); code != 0 || !strings.Contains(out.String(), "removed 1") {
+		t.Fatalf("filtered volume prune: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	if _, err := volume.Get("frontend"); err == nil {
+		t.Fatal("filtered volume prune kept the matching volume")
+	}
+	if _, err := volume.Get("backend"); err != nil {
+		t.Fatalf("filtered volume prune removed a non-matching volume: %v", err)
+	}
+}
+
+func TestVolumeCloneCopiesDataAndLabels(t *testing.T) {
+	t.Setenv("BOXR_DATA_DIR", t.TempDir())
+	source, err := volume.Create("original", map[string]string{"origin": "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source.Path, "state.db"), []byte("snapshot-data"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"volume", "clone", "--label", "copy=one", "original", "copy"}, &out, &errOut); code != 0 {
+		t.Fatalf("clone: %s", errOut.String())
+	}
+	cloned, err := volume.Get("copy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(cloned.Path, "state.db"))
+	if err != nil || string(data) != "snapshot-data" {
+		t.Fatalf("cloned file = %q, %v", data, err)
+	}
+	if cloned.Labels["copy"] != "one" {
+		t.Fatalf("clone labels = %#v", cloned.Labels)
+	}
+}
+
+func TestVolumeCloneRefusesActiveSource(t *testing.T) {
+	data := t.TempDir()
+	t.Setenv("BOXR_DATA_DIR", data)
+	t.Setenv("BOXR_STATE_DIR", filepath.Join(data, "state"))
+	source, err := volume.Create("busy", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := state.Create("busy-run", []string{"/bin/sh"}, container.Options{BindMounts: []container.BindMount{{Source: source.Path, Target: "/data"}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, 424242); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"volume", "clone", "busy", "copy"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "mounted by active container") {
+		t.Fatalf("clone active source: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	if _, err := volume.Get("copy"); err == nil {
+		t.Fatal("active source clone unexpectedly created target")
+	}
+}
+
+func TestVolumeUsageDoesNotFollowSymlinks(t *testing.T) {
+	t.Setenv("BOXR_DATA_DIR", t.TempDir())
+	item, err := volume.Create("usage", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(item.Path, "nested"), 0750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(item.Path, "nested", "file"), []byte("12345"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(target, "outside"), []byte("do not count"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(item.Path, "external")); err != nil {
+		t.Fatal(err)
+	}
+	usage, err := volume.Measure("usage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Files != 1 || usage.Directories != 1 || usage.Symlinks != 1 || usage.FileBytes != 5 || usage.SymlinkBytes != int64(len(target)) || usage.TotalBytes != 5+int64(len(target)) || !usage.Snapshot {
+		t.Fatalf("unexpected volume usage: %+v", usage)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"volume", "du", "--json", "usage"}, &out, &errOut); code != 0 {
+		t.Fatalf("volume du: %s", errOut.String())
+	}
+	if !strings.Contains(out.String(), `"snapshot": true`) {
+		t.Fatalf("JSON usage omitted snapshot warning: %s", out.String())
+	}
+}
+
+func TestVolumeImportRestoresPortableExport(t *testing.T) {
+	t.Setenv("BOXR_DATA_DIR", t.TempDir())
+	created, err := volume.Create("source", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(created.Path, "payload.txt"), []byte("portable volume"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(t.TempDir(), "volume.tar.gz")
+	var out, errOut bytes.Buffer
+	if code := run([]string{"volume", "export", "source", archive}, &out, &errOut); code != 0 {
+		t.Fatalf("export: %s", errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"volume", "import", "--label", "restored=yes", archive, "restored"}, &out, &errOut); code != 0 {
+		t.Fatalf("import: %s", errOut.String())
+	}
+	imported, err := volume.Get("restored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imported.Labels["restored"] != "yes" {
+		t.Fatalf("import metadata labels = %#v", imported.Labels)
+	}
+	data, err := os.ReadFile(filepath.Join(imported.Path, "payload.txt"))
+	if err != nil || string(data) != "portable volume" {
+		t.Fatalf("restored payload = %q, %v", data, err)
+	}
+}
+
+func TestVolumeImportRejectsInvalidArchiveWithoutLeavingVolume(t *testing.T) {
+	t.Setenv("BOXR_DATA_DIR", t.TempDir())
+	invalid := filepath.Join(t.TempDir(), "invalid.tar.gz")
+	if err := os.WriteFile(invalid, []byte("not gzip"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"volume", "import", invalid, "bad"}, &out, &errOut); code != 1 {
+		t.Fatalf("volume import returned %d, want 1: %s", code, errOut.String())
+	}
+	if _, err := volume.Get("bad"); err == nil {
+		t.Fatal("failed import left an accessible volume")
+	}
+}
+
+func TestVolumeListRejectsUnknownFilter(t *testing.T) {
+	t.Setenv("BOXR_DATA_DIR", t.TempDir())
+	var out, errOut bytes.Buffer
+	if code := run([]string{"volume", "ls", "--filter", "unknown=value"}, &out, &errOut); code != 2 || !strings.Contains(errOut.String(), "unsupported filter") {
+		t.Fatalf("unknown volume filter: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+}
+
+func TestEventsFiltersBeforeApplyingLimit(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	first, err := state.Create("web-old", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(first.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	second, err := state.Create("web-new", []string{"/bin/false"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(second.ID, fmt.Errorf("failed")); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := run([]string{"events", "--action", "die", "--container", "web-new", "--limit", "1", "--format", "json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("events returned %d: %s", code, errOut.String())
+	}
+	var events []state.Event
+	if err := json.Unmarshal(out.Bytes(), &events); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].ID != second.ID || events[0].Action != "die" {
+		t.Fatalf("unexpected filtered event list: %+v", events)
+	}
+}
+
+func TestParseEventsSince(t *testing.T) {
+	before := time.Now().Add(-time.Hour)
+	parsed, err := parseEventsSince("15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Before(before) || parsed.After(time.Now()) {
+		t.Fatalf("unexpected duration threshold: %s", parsed)
+	}
+	stamp := time.Date(2026, 11, 20, 1, 2, 3, 0, time.UTC)
+	parsed, err = parseEventsSince(stamp.Format(time.RFC3339))
+	if err != nil || !parsed.Equal(stamp) {
+		t.Fatalf("RFC3339 parse = %s, %v", parsed, err)
+	}
+	for _, invalid := range []string{"-1h", "tomorrow", "1x"} {
+		if _, err := parseEventsSince(invalid); err == nil {
+			t.Errorf("invalid since %q unexpectedly accepted", invalid)
+		}
+	}
+}
+
+func TestImageCommandLifecycle(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "image-store")
+	t.Setenv("BOXR_IMAGE_DIR", store)
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bin", "hello"), []byte("hello from image\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"image", "import", root, "demo:test"}, &out, &errOut); code != 0 {
+		t.Fatalf("image import code=%d stderr=%s", code, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "ls", "--format", "json"}, &out, &errOut); code != 0 {
+		t.Fatalf("image ls code=%d stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "demo:test") {
+		t.Fatalf("image list missing tag: %s", out.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "inspect", "demo:test"}, &out, &errOut); code != 0 {
+		t.Fatalf("image inspect code=%d stderr=%s", code, errOut.String())
+	}
+	archive := filepath.Join(t.TempDir(), "image.oci.tar.gz")
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "save", "demo:test", archive}, &out, &errOut); code != 0 {
+		t.Fatalf("image save code=%d stderr=%s", code, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "rm", "demo:test"}, &out, &errOut); code != 0 {
+		t.Fatalf("image rm code=%d stderr=%s", code, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "load", archive}, &out, &errOut); code != 0 {
+		t.Fatalf("image load code=%d stderr=%s", code, errOut.String())
+	}
+	destination := filepath.Join(t.TempDir(), "unpacked")
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "unpack", "demo:test", destination}, &out, &errOut); code != 0 {
+		t.Fatalf("image unpack code=%d stderr=%s", code, errOut.String())
+	}
+	contents, err := os.ReadFile(filepath.Join(destination, "bin", "hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "hello from image\n" {
+		t.Fatalf("unexpected unpacked content %q", contents)
+	}
+}
+
+func TestPSQuietLastAndNoTrunc(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	older, err := state.Create("older", []string{"/bin/echo", strings.Repeat("x", 80)}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	newer, err := state.Create("newer", []string{"/bin/echo", strings.Repeat("y", 80)}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"ps", "--last", "1", "--quiet"}, &out, &errOut); code != 0 {
+		t.Fatalf("ps quiet: %s", errOut.String())
+	}
+	if strings.TrimSpace(out.String()) != newer.ID || strings.Contains(out.String(), older.ID) {
+		t.Fatalf("unexpected quiet last output: %q", out.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"ps", "--all", "--no-trunc"}, &out, &errOut); code != 0 {
+		t.Fatalf("ps no-trunc: %s", errOut.String())
+	}
+	if !strings.Contains(out.String(), strings.Repeat("x", 80)) || !strings.Contains(out.String(), strings.Repeat("y", 80)) {
+		t.Fatalf("command was truncated: %s", out.String())
+	}
+}
+
+func TestImageListFiltersAreCombined(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	for _, spec := range []struct{ name, body string }{{"alpha", "a"}, {"beta", "b"}} {
+		root := filepath.Join(t.TempDir(), spec.name)
+		if err := os.MkdirAll(root, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "item"), []byte(spec.body), 0644); err != nil {
+			t.Fatal(err)
+		}
+		var out, errOut bytes.Buffer
+		if code := run([]string{"image", "import", root, "demo:" + spec.name}, &out, &errOut); code != 0 {
+			t.Fatalf("import %s: %s", spec.name, errOut.String())
+		}
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"image", "ls", "--quiet", "--filter", "reference=demo:a"}, &out, &errOut); code != 0 {
+		t.Fatalf("image ls filter: %s", errOut.String())
+	}
+	if strings.TrimSpace(out.String()) != "demo:alpha" {
+		t.Fatalf("unexpected filtered image list: %q", out.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "ls", "--filter", "unknown=x"}, &out, &errOut); code != 2 {
+		t.Fatalf("unknown image filter returned %d: %s", code, errOut.String())
+	}
+}
+
+func TestImageVerifyAndUsageCommands(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "data"), []byte("content-addressed"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"image", "import", root, "demo:verify"}, &out, &errOut); code != 0 {
+		t.Fatalf("import: %s", errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "verify", "demo:verify"}, &out, &errOut); code != 0 || !strings.Contains(out.String(), "verified demo:verify") {
+		t.Fatalf("verify: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "du", "--json"}, &out, &errOut); code != 0 {
+		t.Fatalf("image du: %s", errOut.String())
+	}
+	var usage struct {
+		Images           int   `json:"images"`
+		UniqueBlobs      int   `json:"uniqueBlobs"`
+		ReachableBytes   int64 `json:"reachableBytes"`
+		ReclaimableBytes int64 `json:"reclaimableBytes"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &usage); err != nil {
+		t.Fatal(err)
+	}
+	if usage.Images != 1 || usage.UniqueBlobs != 3 || usage.ReachableBytes <= 0 || usage.ReclaimableBytes != 0 {
+		t.Fatalf("unexpected image usage: %+v", usage)
+	}
+}
+
+func TestImagePruneRequiresExplicitMode(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	var out, errOut bytes.Buffer
+	if code := run([]string{"image", "prune"}, &out, &errOut); code != 2 {
+		t.Fatalf("image prune default code=%d want 2", code)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "prune", "--dry-run"}, &out, &errOut); code != 0 {
+		t.Fatalf("image prune dry-run code=%d stderr=%s", code, errOut.String())
+	}
+}
+
+func TestRunDryRunDoesNotStartOrPersistSecrets(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("BOXR_DATA_DIR", dataDir)
+	t.Setenv("BOXR_STATE_DIR", filepath.Join(dataDir, "state"))
+	const secretEnv = "super-secret-env-token"
+	const secretArg = "sensitive-command-argument"
+	var out, errOut bytes.Buffer
+	code := run([]string{"run", "--dry-run", "--name", "preview", "--env", "API_TOKEN=" + secretEnv, "--label", "owner=platform", "/bin/echo", secretArg}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("dry run returned %d: %s", code, errOut.String())
+	}
+	for _, forbidden := range []string{secretEnv, secretArg, "platform"} {
+		if strings.Contains(out.String(), forbidden) {
+			t.Errorf("dry-run output leaked %q: %s", forbidden, out.String())
+		}
+	}
+	for _, required := range []string{`"mode": "dry-run"`, `"command": "/bin/echo"`, `"argumentCount": 1`, `"API_TOKEN"`, `"redacted"`, `"noContainerStateCreated": true`} {
+		if !strings.Contains(out.String(), required) {
+			t.Errorf("dry-run output missing %q: %s", required, out.String())
+		}
+	}
+	records, err := state.List(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("dry run created %d state record(s)", len(records))
+	}
+}
+
+func TestRunImageDryRunVerifiesAndReportsLocalImage(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "hello"), []byte("container image"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"image", "import", root, "demo:run"}, &out, &errOut); code != 0 {
+		t.Fatalf("image import: %s", errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"run", "--image", "demo:run", "--dry-run", "--", "/bin/sh"}, &out, &errOut); code != 0 {
+		t.Fatalf("image dry-run: %s", errOut.String())
+	}
+	var plan struct {
+		ImageReference   string   `json:"imageReference"`
+		RootFSConfigured bool     `json:"rootfsConfigured"`
+		NoStateCreated   bool     `json:"noContainerStateCreated"`
+		LabelKeys        []string `json:"labelKeys"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatalf("decode dry-run plan: %v (%s)", err, out.String())
+	}
+	if plan.ImageReference != "demo:run" || !plan.RootFSConfigured || !plan.NoStateCreated {
+		t.Fatalf("unexpected image run plan: %+v", plan)
+	}
+	if !strings.Contains(strings.Join(plan.LabelKeys, ","), "io.boxr.image") {
+		t.Fatalf("image provenance label missing: %+v", plan.LabelKeys)
+	}
+	if strings.Contains(out.String(), "container image") {
+		t.Fatal("dry-run unexpectedly exposed image contents")
+	}
+	records, err := state.List(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("image dry-run created %d state records", len(records))
+	}
+}
+
+func TestRunImageRejectsMissingImageAndRootFSConflict(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	var out, errOut bytes.Buffer
+	if code := run([]string{"run", "--image", "missing:latest", "--dry-run", "/bin/true"}, &out, &errOut); code != 1 {
+		t.Fatalf("missing image returned %d, want 1: %s", code, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"run", "--image", "demo:latest", "--rootfs", "/tmp/rootfs", "--dry-run", "/bin/true"}, &out, &errOut); code != 2 {
+		t.Fatalf("image/rootfs conflict returned %d, want 2: %s", code, errOut.String())
+	}
+}
+
+func TestRunDryRunStillValidatesOptions(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"run", "--dry-run", "--memory", "0", "/bin/true"}, &out, &errOut); code != 2 {
+		t.Fatalf("invalid dry-run options returned %d, want 2: %s", code, errOut.String())
+	}
+}
+
+func TestRunRejectsUnknownSeccompProfileBeforeStarting(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"run", "--seccomp-profile", "unrestricted", "/bin/true"}, &out, &errOut); code != 2 {
+		t.Fatalf("run with unknown seccomp profile returned %d, want 2; stderr=%s", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "seccomp profile") {
+		t.Fatalf("unexpected error: %s", errOut.String())
+	}
+}
+
+func TestImageTagCommandSharesImage(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "hello"), []byte("tagged"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"image", "import", root, "demo:source"}, &out, &errOut); code != 0 {
+		t.Fatalf("import: %s", errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "tag", "demo:source", "demo:alias"}, &out, &errOut); code != 0 {
+		t.Fatalf("tag: %s", errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "inspect", "demo:alias"}, &out, &errOut); code != 0 {
+		t.Fatalf("inspect alias: %s", errOut.String())
+	}
+	if !strings.Contains(out.String(), "demo:alias") {
+		t.Fatalf("alias not shown: %s", out.String())
+	}
+}
+
+func TestRootFSAuditJSONAndStrictMode(t *testing.T) {
+	root := t.TempDir()
+	unsafeFile := filepath.Join(root, "shared.txt")
+	if err := os.WriteFile(unsafeFile, []byte("shared"), 0666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(unsafeFile, 0666); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"rootfs", "audit", "--json", root}, &out, &errOut); code != 0 {
+		t.Fatalf("rootfs audit JSON returned %d: %s", code, errOut.String())
+	}
+	var report struct {
+		EntriesScanned int64 `json:"entriesScanned"`
+		WarningCount   int   `json:"warningCount"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("decode rootfs audit report: %v", err)
+	}
+	if report.EntriesScanned != 1 || report.WarningCount != 1 {
+		t.Fatalf("unexpected audit report: %+v", report)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"rootfs", "audit", "--strict", root}, &out, &errOut); code != 1 {
+		t.Fatalf("strict audit returned %d, want 1: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+}
+
+func TestRootFSAuditCleanTreePassesStrictMode(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "clean.txt"), []byte("clean"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"rootfs", "audit", "--strict", root}, &out, &errOut); code != 0 {
+		t.Fatalf("strict audit rejected clean tree: %s", errOut.String())
+	}
+}
+
+func TestImageAuditChecksImportedRootfs(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	cleanPath := filepath.Join(root, "image.txt")
+	if err := os.WriteFile(cleanPath, []byte("clean image"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"image", "import", root, "demo:audit"}, &out, &errOut); code != 0 {
+		t.Fatalf("image import: %s", errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "audit", "--json", "demo:audit"}, &out, &errOut); code != 0 {
+		t.Fatalf("image audit: %s", errOut.String())
+	}
+	var report struct {
+		Image struct {
+			Reference string `json:"reference"`
+			OS        string `json:"os"`
+			Arch      string `json:"architecture"`
+		} `json:"image"`
+		IntegrityVerified bool `json:"integrityVerified"`
+		LayerCount        int  `json:"layerCount"`
+		RootFS            struct {
+			Root         string `json:"root"`
+			WarningCount int    `json:"warningCount"`
+		} `json:"rootfs"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("decode image audit: %v (%s)", err, out.String())
+	}
+	if report.Image.Reference != "demo:audit" || report.RootFS.Root != "demo:audit" || report.RootFS.WarningCount != 0 || !report.IntegrityVerified || report.LayerCount != 1 || report.Image.OS != "linux" {
+		t.Fatalf("unexpected image audit report: %+v", report)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "audit", "--strict", "demo:audit"}, &out, &errOut); code != 0 {
+		t.Fatalf("strict image audit rejected clean image: %s", errOut.String())
+	}
+}
+
+func TestImageBuildCommandCreatesVerifiedImage(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	contextDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(contextDir, "bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(contextDir, "bin", "hello"), []byte("built from CLI\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	recipe := `{"version":1,"base":"scratch","copy":[{"source":"bin/hello","destination":"/usr/bin/hello"}],"config":{"WorkingDir":"/srv/app","Env":["MODE=test"]}}`
+	recipePath := filepath.Join(contextDir, "Boxrfile.json")
+	if err := os.WriteFile(recipePath, []byte(recipe), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"image", "build", "--file", recipePath, "--platform", "linux/arm64/v8", "--tag", "demo:cli", "--json", contextDir}, &out, &errOut); code != 0 {
+		t.Fatalf("image build returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	var result struct {
+		Reference string `json:"reference"`
+		Digest    string `json:"digest"`
+		OS        string `json:"os"`
+		Arch      string `json:"architecture"`
+		Variant   string `json:"variant"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("decode image build output: %v (%s)", err, out.String())
+	}
+	if result.Reference != "demo:cli" || !strings.HasPrefix(result.Digest, "sha256:") || result.OS != "linux" || result.Arch != "arm64" || result.Variant != "v8" {
+		t.Fatalf("unexpected image build output: %+v", result)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "verify", "demo:cli"}, &out, &errOut); code != 0 {
+		t.Fatalf("image verify after build returned %d: %s", code, errOut.String())
+	}
+}
+
+func TestImageBuildRequiresTagAndRejectsUnknownRecipeFields(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"image", "build"}, &out, &errOut); code != 2 {
+		t.Fatalf("image build without tag returned %d, want 2: %s", code, errOut.String())
+	}
+	contextDir := t.TempDir()
+	recipePath := filepath.Join(contextDir, "Boxrfile.json")
+	if err := os.WriteFile(recipePath, []byte(`{"version":1,"base":"scratch","run":"echo unsafe"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	if code := run([]string{"image", "build", "--file", recipePath, "--tag", "demo:unsafe", contextDir}, &out, &errOut); code != 1 {
+		t.Fatalf("image build with unknown RUN field returned %d, want 1: %s", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "unknown field") {
+		t.Fatalf("unexpected unsafe build error: %s", errOut.String())
+	}
+	validRecipe := `{"version":1,"base":"scratch"}`
+	if err := os.WriteFile(recipePath, []byte(validRecipe), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "build", "--platform", "windows/amd64", "--file", recipePath, "--tag", "demo:wrong-platform", contextDir}, &out, &errOut); code != 1 {
+		t.Fatalf("image build with non-Linux target returned %d, want 1: %s", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "platform must be linux/ARCH") {
+		t.Fatalf("unexpected target-platform error: %s", errOut.String())
+	}
+}
+
+func TestRunImageAppliesRuntimeDefaultsAndOverrides(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "entrypoint"), []byte("not executed during dry-run"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := imageStore.ImportRootFSWithConfig(root, "demo:defaults", "linux", runtime.GOARCH, "", imageStore.ImageRuntimeConfig{
+		Env:        []string{"MODE=image", "KEEP=from-image"},
+		Entrypoint: []string{"/entrypoint"},
+		Cmd:        []string{"--serve"},
+		WorkingDir: "/srv/app",
+		Labels:     map[string]string{"tier": "image", "component": "api"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"run", "--image", "demo:defaults", "--env", "MODE=cli", "--label", "tier=cli", "--dry-run"}, &out, &errOut); code != 0 {
+		t.Fatalf("image runtime dry-run returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	var plan runPlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatalf("decode image runtime plan: %v (%s)", err, out.String())
+	}
+	if plan.Command != "/entrypoint" || plan.ArgumentCount != 1 || plan.WorkingDirectory != "/srv/app" {
+		t.Fatalf("image defaults not applied to command/workdir: %+v", plan)
+	}
+	if !reflect.DeepEqual(plan.EnvironmentKeys, []string{"KEEP", "MODE"}) {
+		t.Fatalf("image environment defaults/overrides missing: %+v", plan.EnvironmentKeys)
+	}
+	for _, key := range []string{"component", "io.boxr.image", "tier"} {
+		if !containsString(plan.LabelKeys, key) {
+			t.Errorf("image/runtime label %q missing: %+v", key, plan.LabelKeys)
+		}
+	}
+	if strings.Contains(out.String(), "from-image") || strings.Contains(out.String(), "MODE=image") || strings.Contains(out.String(), "MODE=cli") {
+		t.Fatal("dry-run exposed image or environment values")
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestImageDiffCommandReportsChangesAsJSON(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	before := t.TempDir()
+	if err := os.WriteFile(filepath.Join(before, "version"), []byte("one"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := imageStore.ImportRootFS(before, "demo:one"); err != nil {
+		t.Fatal(err)
+	}
+	after := t.TempDir()
+	if err := os.WriteFile(filepath.Join(after, "version"), []byte("two"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(after, "new-file"), []byte("new"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := imageStore.ImportRootFS(after, "demo:two"); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"image", "diff", "--json", "demo:one", "demo:two"}, &out, &errOut); code != 0 {
+		t.Fatalf("image diff returned %d: %s", code, errOut.String())
+	}
+	var changes []struct {
+		Path   string `json:"path"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &changes); err != nil {
+		t.Fatalf("decode image diff JSON: %v (%s)", err, out.String())
+	}
+	got := make(map[string]string, len(changes))
+	for _, change := range changes {
+		got[change.Path] = change.Status
+	}
+	if got["version"] != "modified" || got["new-file"] != "added" {
+		t.Fatalf("unexpected image diff: %#v", changes)
+	}
+}
+
+func TestImageLockAndVerifyLockCommands(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "release"), []byte("immutable build"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := imageStore.ImportRootFSWithConfig(root, "demo:pinned", "linux", "arm64", "v8", imageStore.ImageRuntimeConfig{Labels: map[string]string{"org.example.build": "42"}}); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(t.TempDir(), "boxr.lock.json")
+	var out, errOut bytes.Buffer
+	if code := run([]string{"image", "lock", "--json", "demo:pinned", lockPath}, &out, &errOut); code != 0 {
+		t.Fatalf("image lock returned %d: %s", code, errOut.String())
+	}
+	var lock struct {
+		Reference    string `json:"reference"`
+		Digest       string `json:"digest"`
+		Architecture string `json:"architecture"`
+		Variant      string `json:"variant"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &lock); err != nil {
+		t.Fatalf("decode image lock: %v (%s)", err, out.String())
+	}
+	if lock.Reference != "demo:pinned" || !strings.HasPrefix(lock.Digest, "sha256:") || lock.Architecture != "arm64" || lock.Variant != "v8" {
+		t.Fatalf("unexpected image lock: %+v", lock)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "verify-lock", "--json", lockPath}, &out, &errOut); code != 0 {
+		t.Fatalf("image verify-lock returned %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), lock.Digest) {
+		t.Fatalf("verified lock output does not include pinned digest: %s", out.String())
+	}
+}
+
+func TestImageSBOMCommandReportsFileHashesAndPlatform(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	root := t.TempDir()
+	content := []byte("SBOM CLI test\n")
+	if err := os.WriteFile(filepath.Join(root, "hello"), content, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := imageStore.ImportRootFSWithConfig(root, "demo:sbom-cli", "linux", "arm64", "v8", imageStore.ImageRuntimeConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"image", "sbom", "--max-entries", "20", "demo:sbom-cli"}, &out, &errOut); code != 0 {
+		t.Fatalf("image sbom returned %d: %s", code, errOut.String())
+	}
+	var report struct {
+		Kind         string `json:"kind"`
+		Reference    string `json:"reference"`
+		Architecture string `json:"architecture"`
+		Entries      []struct {
+			Path   string `json:"path"`
+			SHA256 string `json:"sha256"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("decode SBOM: %v (%s)", err, out.String())
+	}
+	if report.Kind != "boxr.filesystem-inventory" || report.Reference != "demo:sbom-cli" || report.Architecture != "arm64" || len(report.Entries) != 1 || report.Entries[0].Path != "hello" || report.Entries[0].SHA256 == "" {
+		t.Fatalf("unexpected SBOM result: %+v", report)
+	}
+}
