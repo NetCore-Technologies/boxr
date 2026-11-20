@@ -196,11 +196,7 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 }
 
 func runCreate(args []string, stdout, stderr io.Writer) int {
-	normalized, err := normalizeCreateArguments(args)
-	if err != nil {
-		fmt.Fprintf(stderr, "boxr create: %v\n", err)
-		return 2
-	}
+	normalized := normalizeCreateArguments(args)
 	return runContainerMode(normalized, stdout, stderr, true)
 }
 
