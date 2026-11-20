@@ -2738,6 +2738,12 @@ var implementedFeatures = []string{
 	"published port setup checks exact PREROUTING OUTPUT and FORWARD rules before insertion",
 	"published port rollback removes only firewall rules inserted by the current attachment attempt",
 	"failed firewall cleanup retains the IPAM lease and host-port reservation until cleanup can be retried",
+	"bounded parallel OCI and Docker registry layer downloads",
+	"registry layer download worker count capped at four",
+	"parallel registry layer verification preserves manifest order",
+	"registry pull cancels outstanding layer downloads after the first failure",
+	"parallel registry pull removes every partial temporary layer on failure",
+	"concurrent registry requests share a synchronized Bearer token refresh",
 }
 
 func printFeatures(stdout io.Writer) {

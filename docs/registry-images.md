@@ -21,6 +21,12 @@ The puller accepts these layer media types:
 
 Zstandard-compressed and foreign/non-distributable layers are not currently supported. Unsupported media types fail before the layer is downloaded; Boxr never guesses the compression format from a filename.
 
+## Download performance
+
+Independent image layers are downloaded and integrity-checked with a bounded pool of up to four workers. This reduces pull latency for multi-layer images without creating one goroutine or network request per layer. Results are retained by manifest index, so filesystem application remains strictly ordered. A failed download or digest check cancels outstanding requests and removes all temporary layer files created by the pull.
+
+Concurrent requests share a synchronized Bearer-token cache. A group of requests that receives an authentication challenge performs a single token refresh instead of racing to issue duplicate token requests.
+
 ## Verification and extraction
 
 Before a pull is returned, Boxr validates manifest and config descriptors, selects the requested Linux platform, and checks that the config has one valid `rootfs.diff_ids` entry per manifest layer. Each layer download is checked against its descriptor SHA-256 digest and declared size. The uncompressed tar stream is then hashed and compared with the matching config diff ID.

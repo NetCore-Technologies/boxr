@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 708 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 714 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -714,3 +714,9 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 706. published port setup checks exact PREROUTING OUTPUT and FORWARD rules before insertion
 707. published port rollback removes only firewall rules inserted by the current attachment attempt
 708. failed firewall cleanup retains the IPAM lease and host-port reservation until cleanup can be retried
+709. bounded parallel OCI and Docker registry layer downloads
+710. registry layer download worker count capped at four
+711. parallel registry layer verification preserves manifest order
+712. registry pull cancels outstanding layer downloads after the first failure
+713. parallel registry pull removes every partial temporary layer on failure
+714. concurrent registry requests share a synchronized Bearer token refresh
