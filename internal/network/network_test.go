@@ -726,13 +726,20 @@ func TestLeaveRefusesVethWithMismatchedOwnershipAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &fakeRunner{}
-	if _, err := JoinWithRunner(context.Background(), "frontend", 4303, "container-mismatch", runner); err != nil {
+	if _, err := JoinWithRunner(context.Background(), "frontend", 4303, "container-mismatch", runner,
+		PortMapping{HostPort: 18445, ContainerPort: 445}); err != nil {
 		t.Fatal(err)
 	}
 	hostVeth, _ := vethNames("container-mismatch")
 	runner.aliases[hostVeth] = "boxr:another-network:container-mismatch"
+	callsBeforeDetach := len(runner.calls)
 	if err := LeaveWithRunner(context.Background(), "frontend", "container-mismatch", runner); err == nil {
 		t.Fatal("LeaveWithRunner deleted a veth with a mismatched ownership alias")
+	}
+	for _, call := range runner.calls[callsBeforeDetach:] {
+		if strings.Contains(call, "iptables -D") || strings.Contains(call, "iptables -t nat -D") {
+			t.Fatalf("ownership mismatch removed published port firewall rules: %v", runner.calls[callsBeforeDetach:])
+		}
 	}
 	summary, err := Inspect("frontend")
 	if err != nil {
