@@ -16,11 +16,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/manit6752025/boxr/internal/container"
+	"github.com/manit6752025/boxr/internal/deploy"
 	imageStore "github.com/manit6752025/boxr/internal/image"
 	"github.com/manit6752025/boxr/internal/rootfs"
 	"github.com/manit6752025/boxr/internal/state"
@@ -525,7 +527,6 @@ func TestDeployStatusDryRunDownAndRemoval(t *testing.T) {
 	}
 	database := create("database", deploy.ContainerName("test-stack", "database"), 0)
 	api := create("api", deploy.ContainerName("test-stack", "api"), 1)
-	other := state.Record{}
 	other, err := state.Create("other-stack-api", []string{"/bin/true"}, container.Options{}, map[string]string{
 		deploy.StackLabel: "other-stack",
 		deploy.ServiceLabel: "api",

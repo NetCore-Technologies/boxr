@@ -21,11 +21,9 @@ Version 1 is strict JSON. Unknown fields, trailing JSON values, oversized files,
   "name": "sample-app",
   "services": {
     "database": {
-      "image": "postgres:17",
-      "command": ["postgres"],
+      "image": "alpine:3.21",
+      "command": ["/bin/sh", "-c", "while true; do sleep 3600; done"],
       "options": {
-        "rootfs": "/var/lib/boxr/rootfs/database",
-        "readOnlyRootfs": true,
         "securityProfile": "baseline",
         "memoryLimitBytes": 536870912,
         "pidsLimit": 128
