@@ -3298,7 +3298,6 @@ func TestRunKillTermCancelsContainerPendingRestart(t *testing.T) {
 	}
 }
 
-
 func TestDeferImageServiceBindMountsUsesRunFlagsAfterImageUnpack(t *testing.T) {
 	options := container.Options{
 		BindMounts: []container.BindMount{
