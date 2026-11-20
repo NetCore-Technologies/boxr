@@ -13,6 +13,7 @@ func TestCreateProducesPrivateSanitizedArchive(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "support.zip")
 	result, err := Create(output, false, Metadata{
 		Version: "1.2.3", Commit: "abc123", BuildDate: "2026-11-20",
+		Kernel: "6.12.1", CgroupV2: true,
 		Diagnostics: []Diagnostic{{Name: "cgroup v2", Status: "ok"}, {Name: "pid namespace", Status: "warn"}},
 	})
 	if err != nil {
