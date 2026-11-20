@@ -461,7 +461,7 @@ func TestEngineAPIImageDeleteRejectsInUseImagesAndUntagsUnusedImages(t *testing.
 
 func TestEngineAPIImageRoutesValidateReferencesMethodsAndQuery(t *testing.T) {
 	server := setupEngineAPITest(t)
-	response := engineAPIRequest(server, http.MethodGet, "/images/not-a-tag/json")
+	response := engineAPIRequest(server, http.MethodGet, "/images/not%20a%20valid/json")
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("invalid image inspect reference status=%d body=%s", response.Code, response.Body.String())
 	}
