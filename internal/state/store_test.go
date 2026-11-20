@@ -374,3 +374,73 @@ func TestRemoveRefusesContainerDuringRestartBackoff(t *testing.T) {
 		t.Fatalf("Remove() after restart cancellation: %v", err)
 	}
 }
+
+
+func TestEngineConfigIsStoredPrivatelyAndRemovedWithContainer(t *testing.T) {
+	directory := useTempState(t)
+	record, err := Create("engine-config-test", []string{"/bin/true"}, container.Options{
+		Env: []string{"TOKEN=secret"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte(`{"version":1,"options":{"env":["TOKEN=secret"]}}`)
+	if err := SaveEngineConfig(record.ID, payload); err != nil {
+		t.Fatalf("SaveEngineConfig: %v", err)
+	}
+	loaded, err := ReadEngineConfig(record.ID)
+	if err != nil {
+		t.Fatalf("ReadEngineConfig: %v", err)
+	}
+	if string(loaded) != string(payload) {
+		t.Fatalf("loaded config = %q, want %q", loaded, payload)
+	}
+	info, err := os.Stat(filepath.Join(directory, "engine-config", record.ID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("Engine API config mode = %o, want 0600", info.Mode().Perm())
+	}
+	configDirectory, err := os.Stat(filepath.Join(directory, "engine-config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configDirectory.Mode().Perm() != 0700 {
+		t.Fatalf("Engine API config directory mode = %o, want 0700", configDirectory.Mode().Perm())
+	}
+	if err := RemoveCreated(record.ID); err != nil {
+		t.Fatalf("RemoveCreated: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "engine-config", record.ID+".json")); !os.IsNotExist(err) {
+		t.Fatalf("Engine API config survived container removal: %v", err)
+	}
+}
+
+func TestEngineConfigRejectsOversizedAndUnsafeFiles(t *testing.T) {
+	directory := useTempState(t)
+	record, err := Create("engine-config-unsafe", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveEngineConfig(record.ID, make([]byte, maxEngineConfigBytes+1)); err == nil {
+		t.Fatal("oversized Engine API configuration was accepted")
+	}
+	configDirectory := filepath.Join(directory, "engine-config")
+	if err := os.Mkdir(configDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDirectory, record.ID+".json")
+	if err := os.Symlink(filepath.Join(directory, "target"), configPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadEngineConfig(record.ID); err == nil {
+		t.Fatal("symlinked Engine API configuration was read")
+	}
+	if err := RemoveCreated(record.ID); err == nil {
+		t.Fatal("container removal accepted a symlinked Engine API config")
+	}
+	if _, err := os.Lstat(configPath); err != nil {
+		t.Fatalf("failed removal unexpectedly deleted symlink: %v", err)
+	}
+}
