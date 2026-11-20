@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 699 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 702 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -705,3 +705,6 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 697. run config JSON schema describes strict published port mapping objects
 698. dry-run plans show normalized published port mapping values without starting container
 699. published ports are accepted only with a named managed bridge network
+700. deployment manifests validate service published port mappings through container option rules
+701. deployment service plans expose normalized TCP and UDP published port bindings
+702. deployment subprocess runs apply and release published port rules through the container lifecycle
