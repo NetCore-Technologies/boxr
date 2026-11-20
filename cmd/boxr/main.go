@@ -1451,10 +1451,10 @@ Usage:
   boxr image prune [--dry-run|--force] [--json]
   boxr config validate FILE.json
   boxr config example
-  boxr deploy validate FILE.json
-  boxr deploy plan [--json] FILE.json
-  boxr deploy pull [--platform linux/ARCH[/VARIANT]] [--authfile PATH] FILE.json
-  boxr deploy up [--dry-run] FILE.json
+  boxr deploy validate [--profile NAME] FILE.json
+  boxr deploy plan [--profile NAME] [--json] FILE.json
+  boxr deploy pull [--profile NAME] [--platform linux/ARCH[/VARIANT]] [--authfile PATH] FILE.json
+  boxr deploy up [--profile NAME] [--dry-run] FILE.json
   boxr deploy ps [--json] STACK
   boxr deploy logs [--tail 100] [--follow] STACK [SERVICE]
   boxr deploy wait [--condition running|stopped] [--timeout 30s] [--interval 100ms] [--json] STACK
@@ -1656,6 +1656,11 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 		flags := flag.NewFlagSet("image push", flag.ContinueOnError)
 		flags.SetOutput(stderr)
 		authFile := flags.String("authfile", "", "registry auth file (Docker config.json or Podman auth.json)")
+		profiles := []string{}
+		flags.Func("profile", "activate a deployment service profile (repeatable)", func(value string) error {
+			profiles = append(profiles, value)
+			return nil
+		})
 		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}
@@ -2595,6 +2600,16 @@ var implementedFeatures = []string{
 	"volume archive exports never overwrite an existing destination",
 	"volume archive exports publish atomically from a same-directory staging file",
 	"volume export JSON includes SHA-256 integrity and filesystem manifest metadata",
+	"versioned deployment service profiles",
+	"validated lowercase service profile identifiers and duplicate rejection",
+	"unprofiled baseline services remain enabled by default",
+	"repeatable command-line service profile selection",
+	"additive activation of services matching any selected profile",
+	"profile-disabled services are omitted from deployment plans",
+	"full manifest validation occurs before profile filtering",
+	"unknown deployment profiles are rejected",
+	"profile-filtered dependency graphs reject inactive dependencies",
+	"deployment image prefetch and startup are limited to selected profiles",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -2763,7 +2778,7 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 
 func runDeploy(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "Usage: boxr deploy validate FILE.json | plan [--json] FILE.json | pull [--platform ...] [--authfile PATH] FILE.json | up [--dry-run] FILE.json | ps [--json] STACK | logs [--tail N] [--follow] STACK [SERVICE] | wait [--condition running|stopped] STACK | down [--time 10s] [--remove] STACK | example")
+		fmt.Fprintln(stderr, "Usage: boxr deploy validate [--profile NAME] FILE.json | plan [--profile NAME] [--json] FILE.json | pull [--profile NAME] [--platform ...] [--authfile PATH] FILE.json | up [--profile NAME] [--dry-run] FILE.json | ps [--json] STACK | logs [--tail N] [--follow] STACK [SERVICE] | wait [--condition running|stopped] STACK | down [--time 10s] [--remove] STACK | example")
 		return 2
 	}
 	switch args[0] {
@@ -2779,11 +2794,16 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 		flags := flag.NewFlagSet("deploy "+action, flag.ContinueOnError)
 		flags.SetOutput(stderr)
 		jsonOutput := flags.Bool("json", false, "write a secret-redacted JSON plan")
+		profiles := []string{}
+		flags.Func("profile", "activate a deployment service profile (repeatable)", func(value string) error {
+			profiles = append(profiles, value)
+			return nil
+		})
 		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}
 		if flags.NArg() != 1 {
-			fmt.Fprintf(stderr, "Usage: boxr deploy %s [--json] FILE.json\n", action)
+			fmt.Fprintf(stderr, "Usage: boxr deploy %s [--profile NAME] [--json] FILE.json\n", action)
 			return 2
 		}
 		file, err := deploy.Load(flags.Arg(0))
@@ -2791,7 +2811,7 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "boxr deploy: %v\n", err)
 			return 1
 		}
-		plan, err := deploy.BuildPlan(file)
+		plan, err := deploy.BuildPlanWithProfiles(file, profiles)
 		if err != nil {
 			fmt.Fprintf(stderr, "boxr deploy: %v\n", err)
 			return 1
@@ -2843,10 +2863,10 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		if flags.NArg() != 1 {
-			fmt.Fprintln(stderr, "Usage: boxr deploy pull [--platform linux/ARCH[/VARIANT]] [--authfile PATH] FILE.json")
+			fmt.Fprintln(stderr, "Usage: boxr deploy pull [--profile NAME] [--platform linux/ARCH[/VARIANT]] [--authfile PATH] FILE.json")
 			return 2
 		}
-		file, plan, code := loadDeploymentPlan(flags.Arg(0), stderr)
+		file, plan, code := loadDeploymentPlan(flags.Arg(0), profiles, stderr)
 		if code != 0 {
 			return code
 		}
@@ -2857,14 +2877,19 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 		dryRun := flags.Bool("dry-run", false, "show the deployment plan without starting services")
 		startTimeout := flags.Duration("start-timeout", 30*time.Second, "maximum time to wait for each service to enter running state")
 		stopTimeout := flags.Duration("stop-timeout", 10*time.Second, "grace period for service shutdown")
+		profiles := []string{}
+		flags.Func("profile", "activate a deployment service profile (repeatable)", func(value string) error {
+			profiles = append(profiles, value)
+			return nil
+		})
 		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}
 		if flags.NArg() != 1 || *startTimeout <= 0 || *stopTimeout < 0 {
-			fmt.Fprintln(stderr, "Usage: boxr deploy up [--dry-run] [--start-timeout 30s] [--stop-timeout 10s] FILE.json")
+			fmt.Fprintln(stderr, "Usage: boxr deploy up [--profile NAME] [--dry-run] [--start-timeout 30s] [--stop-timeout 10s] FILE.json")
 			return 2
 		}
-		file, plan, code := loadDeploymentPlan(flags.Arg(0), stderr)
+		file, plan, code := loadDeploymentPlan(flags.Arg(0), profiles, stderr)
 		if code != 0 {
 			return code
 		}
@@ -2984,13 +3009,13 @@ func formatDeploymentStartGroups(groups [][]string) string {
 	return strings.Join(labels, " | ")
 }
 
-func loadDeploymentPlan(path string, stderr io.Writer) (deploy.File, deploy.Plan, int) {
+func loadDeploymentPlan(path string, profiles []string, stderr io.Writer) (deploy.File, deploy.Plan, int) {
 	file, err := deploy.Load(path)
 	if err != nil {
 		fmt.Fprintf(stderr, "boxr deploy: %v\n", err)
 		return deploy.File{}, deploy.Plan{}, 1
 	}
-	plan, err := deploy.BuildPlan(file)
+	plan, err := deploy.BuildPlanWithProfiles(file, profiles)
 	if err != nil {
 		fmt.Fprintf(stderr, "boxr deploy: %v\n", err)
 		return deploy.File{}, deploy.Plan{}, 1
