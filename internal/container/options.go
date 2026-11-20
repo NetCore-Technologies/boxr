@@ -137,10 +137,11 @@ func (o Options) Validate() error {
 		if len(o.NetworkName) == 0 || len(o.NetworkName) > 31 {
 			return fmt.Errorf("network mode bridge requires --network-name")
 		}
-		for _, character := range o.NetworkName {
-			if !(character >= 'a' && character <= 'z' || character >= '0' && character <= '9' ||
-				character == '.' || character == '_' || character == '-') {
-				return fmt.Errorf("network name must contain only lowercase letters, digits, '.', '_' or '-'")
+		for index, character := range o.NetworkName {
+			valid := character >= 'a' && character <= 'z' || character >= '0' && character <= '9' ||
+				index > 0 && (character == '.' || character == '_' || character == '-')
+			if !valid {
+				return fmt.Errorf("network name must start with a lowercase letter or digit and contain only lowercase letters, digits, '.', '_' or '-'")
 			}
 		}
 	default:
