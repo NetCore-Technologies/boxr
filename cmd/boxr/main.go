@@ -1656,11 +1656,6 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 		flags := flag.NewFlagSet("image push", flag.ContinueOnError)
 		flags.SetOutput(stderr)
 		authFile := flags.String("authfile", "", "registry auth file (Docker config.json or Podman auth.json)")
-		profiles := []string{}
-		flags.Func("profile", "activate a deployment service profile (repeatable)", func(value string) error {
-			profiles = append(profiles, value)
-			return nil
-		})
 		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}
@@ -2857,6 +2852,11 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 	case "pull":
 		flags := flag.NewFlagSet("deploy pull", flag.ContinueOnError)
 		flags.SetOutput(stderr)
+		profiles := []string{}
+		flags.Func("profile", "activate a deployment service profile (repeatable)", func(value string) error {
+			profiles = append(profiles, value)
+			return nil
+		})
 		platform := flags.String("platform", "", "target image platform (default: linux/<host architecture>)")
 		authFile := flags.String("authfile", "", "registry auth file (Docker config.json or Podman auth.json)")
 		if err := flags.Parse(args[1:]); err != nil {

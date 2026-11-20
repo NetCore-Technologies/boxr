@@ -2561,5 +2561,20 @@ func TestDeployProfileFlagsFilterPlanAndDryRun(t *testing.T) {
 	if code := run([]string{"deploy", "plan", "--profile", "missing", path}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "unknown deployment profile") {
 		t.Fatalf("unknown profile result: code=%d stderr=%q", code, errOut.String())
 	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"deploy", "pull", "--profile", "observability", path}, &out, &errOut); code != 0 {
+		t.Fatalf("profile deploy pull: code=%d stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "deployment profile-stack: all 0 image reference(s)") {
+		t.Fatalf("profile deploy pull did not use its selected service set: %q", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "push", "--profile", "frontend", "unused:tag"}, &out, &errOut); code != 2 {
+		t.Fatalf("image push unexpectedly accepted a deployment-only profile flag: code=%d stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
 }
 
