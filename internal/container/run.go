@@ -174,6 +174,11 @@ func RunWithHooks(command string, args []string, options Options, hooks Hooks) e
 		return runErr
 	}
 	_ = readyWriter.Close()
+	if hooks.OnReady != nil {
+		// The namespace helper has passed cgroup setup and its startup barrier
+		// has been released. Detached callers can now report a real start.
+		hooks.OnReady(cmd.Process.Pid)
+	}
 
 	waitErr := cmd.Wait()
 	stopForwarder()
