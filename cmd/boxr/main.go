@@ -563,7 +563,7 @@ func buildRunPlan(command []string, opts container.Options) runPlan {
 				return "host"
 			}
 			return opts.NetworkMode
-		}(), MemoryLimitBytes: opts.MemoryLimitBytes,
+		}(), NetworkName: opts.NetworkName, MemoryLimitBytes: opts.MemoryLimitBytes,
 		MemoryHighBytes: opts.MemoryHighBytes, CPUs: opts.CPUs, CPUWeight: opts.CPUWeight,
 		IOWeight: opts.IOWeight, PIDsLimit: opts.PidsLimit, BindMountCount: len(opts.BindMounts),
 		TmpfsMountCount: len(opts.TmpfsMounts), EnvironmentKeys: envKeys, EnvironmentValues: "redacted",
