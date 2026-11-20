@@ -77,6 +77,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		s.handleInfo(writer)
+	case path == "/containers/create":
+		if !requireMethod(writer, request, http.MethodPost) {
+			return
+		}
+		s.handleContainerCreate(writer, request)
 	case path == "/containers/json":
 		if !requireMethod(writer, request, http.MethodGet) {
 			return
@@ -89,6 +94,20 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 				return
 			}
 			s.handleContainerKill(writer, request, strings.TrimSuffix(remainder, "/kill"))
+			return
+		}
+		if strings.HasSuffix(remainder, "/start") {
+			if !requireMethod(writer, request, http.MethodPost) {
+				return
+			}
+			s.handleContainerStart(writer, request, strings.TrimSuffix(remainder, "/start"))
+			return
+		}
+		if strings.HasSuffix(remainder, "/stop") {
+			if !requireMethod(writer, request, http.MethodPost) {
+				return
+			}
+			s.handleContainerStop(writer, request, strings.TrimSuffix(remainder, "/stop"))
 			return
 		}
 		if !strings.Contains(remainder, "/") && request.Method == http.MethodDelete {
