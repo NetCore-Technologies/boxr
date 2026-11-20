@@ -1301,6 +1301,10 @@ func runRemove(args []string, stdout, stderr io.Writer) int {
 			}
 			record, err = state.Get(record.ID)
 			if err != nil {
+				if strings.Contains(err.Error(), "no container matches") {
+					fmt.Fprintf(stdout, "removed %s\n", query)
+					continue
+				}
 				fmt.Fprintf(stderr, "boxr rm: reload stopped container: %v\n", err)
 				return 1
 			}
