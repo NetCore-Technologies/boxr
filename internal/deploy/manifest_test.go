@@ -684,3 +684,41 @@ func TestBuildPlanRejectsUnsafeHealthcheckConfigurations(t *testing.T) {
 	}
 }
 
+func TestBuildPlanIncludesNormalizedPublishedPorts(t *testing.T) {
+	file := File{
+		Version: 1,
+		Services: map[string]Service{
+			"api": {
+				Command: []string{"/bin/api"},
+				Options: container.Options{
+					NetworkMode: "bridge",
+					NetworkName: "frontend",
+					PublishedPorts: []container.PortMapping{
+						{HostPort: 8080, ContainerPort: 80},
+						{HostIP: "127.0.0.1", HostPort: 5353, ContainerPort: 53, Protocol: "udp"},
+					},
+				},
+			},
+		},
+	}
+	plan, err := BuildPlan(file)
+	if err != nil {
+		t.Fatalf("BuildPlan(): %v", err)
+	}
+	got := plan.Services[0].PublishedPorts
+	want := []container.PortMapping{
+		{HostIP: "0.0.0.0", HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
+		{HostIP: "127.0.0.1", HostPort: 5353, ContainerPort: 53, Protocol: "udp"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("planned published ports = %+v, want %+v", got, want)
+	}
+	encoded, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "/bin/api") {
+		t.Fatalf("deployment plan exposed command contents: %s", encoded)
+	}
+}
+
