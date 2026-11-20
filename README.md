@@ -26,7 +26,7 @@ It is an early-stage runtime and **not a hardened security boundary or Docker re
 - **Security controls:** capability drops, `no_new_privileges`, and an opt-in architecture-guarded seccomp baseline denylist. These are defense-in-depth controls, not a sandbox guarantee.
 - **cgroup v2:** memory max/high/low/min/swap, CPU quota/weight, I/O weight, PID limits and group OOM policy. The blocked helper is attached before workload execution.
 - **Configuration and deployment:** versioned JSON run files, strict multi-service manifests, dependency-aware parallel startup, bounded TCP/HTTP loopback readiness gates, service-specific resource and lifecycle budgets, published TCP/UDP ports, and secret-redacted plans.
-- **Local lifecycle:** persistent records, foreground and detached per-container supervisors, `ps`, `inspect`, `stats`, `events`, `logs` (tail/follow), `stop` (graceful TERM then KILL), `kill`, `wait`, `rm`, automatic record removal and age-based pruning.
+- **Local lifecycle:** persistent records, foreground and detached per-container supervisors, bounded detached restart policies, `ps`, `inspect`, `stats`, `events`, `logs` (tail/follow), `stop` (graceful TERM then KILL), `kill`, `wait`, `rm`, automatic record removal and age-based pruning.
 - **Persistent storage:** named, owner-private volumes with labels, name/label filtering, inspection, listing, safe removal, usage protection, filtered pruning, SHA-256-described gzip-tar export/import, and `--volume NAME:/PATH[:ro|rw]` mounts (requires `--rootfs`). Export archives are atomically published and never overwrite an existing backup. OverlayFS upper/work data can also persist between runs.
 - **Rootfs workflows:** pack/unpack gzip-tar archives, inspect and verify rootfs, deterministic SHA-256 tree digest and directory diff.
 - **Tooling:** host diagnostics, JSON output (including `boxr features --json`), shell completions, cross-platform CLI builds, CI, vulnerability scanning, CodeQL, release checksums and GitHub Pages.
@@ -141,7 +141,19 @@ sudo boxr stop --time 10s worker
 sudo boxr rm worker
 ```
 
-Detached mode is a per-container supervisor, not a system daemon. It does not yet provide automatic restart policies, reboot recovery, daemon-wide health monitoring or a service manager integration. If the supervisor or host is terminated, the container is not automatically restarted. Linux namespace permissions and the same runtime security limitations still apply.
+Detached mode is a per-container supervisor, not a system daemon. It supports bounded restart policies while that supervisor remains alive:
+
+```bash
+sudo boxr run -d --restart on-failure --restart-max-retries 5 --restart-delay 2s \
+  --name worker -- /usr/local/bin/worker
+```
+
+- `no` is the default and never restarts.
+- `on-failure` restarts non-zero exits. `--restart-max-retries 0` means unlimited retries; positive values cap the number of attempts after the initial run.
+- `always` and `unless-stopped` restart after clean or failed exits while the supervisor is active, unless the container has an explicit stop request.
+- `--restart-delay` accepts 100ms through 5m; the default is 1s.
+
+Restart policies require detached mode and cannot be combined with `--rm`. Each attempt uses the same container ID and log stream; the record exposes a `restarting` state and attempt count. `boxr stop` and terminating `boxr kill` signals cancel restart backoff and suppress future attempts. This is not reboot recovery: there is no daemon or service-manager to relaunch a supervisor after it exits or the host restarts. Linux namespace permissions and the same runtime security limitations still apply.
 
 ## Container workflow
 
