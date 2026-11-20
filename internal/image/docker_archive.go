@@ -784,6 +784,28 @@ func applyDockerLayer(root, layerPath string) error {
 	return nil
 }
 
+// ApplyLayerArchive safely applies one OCI/Docker-compatible tar or gzip-tar
+// layer to an existing private rootfs directory. Layer ordering is the caller's
+// responsibility; path traversal, escaping symlinks, unsafe hard links, special
+// files, duplicate entries and archive size limits are enforced here.
+func ApplyLayerArchive(root, archivePath string) error {
+	rootInfo, err := os.Lstat(root)
+	if err != nil {
+		return fmt.Errorf("inspect layer rootfs: %w", err)
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
+		return fmt.Errorf("layer rootfs must be a real directory, not a symlink")
+	}
+	layerInfo, err := os.Lstat(archivePath)
+	if err != nil {
+		return fmt.Errorf("inspect layer archive: %w", err)
+	}
+	if layerInfo.Mode()&os.ModeSymlink != 0 || !layerInfo.Mode().IsRegular() || layerInfo.Size() < 0 || layerInfo.Size() > maxBlobBytes {
+		return fmt.Errorf("layer archive must be a regular file no larger than %d bytes", maxBlobBytes)
+	}
+	return applyDockerLayer(root, archivePath)
+}
+
 func readDockerJSON(pathname string) ([]byte, error) {
 	info, err := os.Lstat(pathname)
 	if err != nil {

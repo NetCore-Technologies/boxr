@@ -1,6 +1,7 @@
-// Package registry implements the OCI Distribution pull protocol for Boxr's
-// single-rootfs image format. It intentionally rejects arbitrary multi-layer
-// Docker images until safe overlay-layer application is implemented.
+// Package registry implements OCI Distribution pulls and pushes. Pulls accept
+// common OCI and Docker tar layers and verify every descriptor and diff ID;
+// the image package safely applies the verified layer stack. Pushes publish
+// Boxr's canonical single-rootfs-layer representation.
 package registry
 
 import (
@@ -8,6 +9,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -20,13 +22,21 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	imageStore "github.com/manit6752025/boxr/internal/image"
 )
 
 const (
-	boxrLayerMediaType = "application/vnd.boxr.rootfs.v1.tar+gzip"
-	maxManifestBytes   = 4 << 20
-	maxConfigBytes     = 4 << 20
-	maxLayerBytes      = int64(8 << 30)
+	boxrLayerMediaType       = "application/vnd.boxr.rootfs.v1.tar+gzip"
+	ociGzipLayerMediaType    = "application/vnd.oci.image.layer.v1.tar+gzip"
+	ociTarLayerMediaType     = "application/vnd.oci.image.layer.v1.tar"
+	dockerGzipLayerMediaType = "application/vnd.docker.image.rootfs.diff.tar.gzip"
+	dockerTarLayerMediaType  = "application/vnd.docker.image.rootfs.diff.tar"
+	maxManifestBytes         = 4 << 20
+	maxConfigBytes           = 4 << 20
+	maxLayerBytes            = int64(8 << 30)
+	maxTotalLayerBytes       = int64(16 << 30)
+	maxRegistryLayerCount    = 128
 )
 
 var (
@@ -140,6 +150,14 @@ type RuntimeConfig struct {
 	Labels     map[string]string `json:"Labels,omitempty"`
 }
 
+type LayerArtifact struct {
+	MediaType string
+	Digest    string
+	DiffID    string
+	Path      string
+	Size      int64
+}
+
 type Artifact struct {
 	Reference      string
 	RuntimeConfig  RuntimeConfig
@@ -150,8 +168,9 @@ type Artifact struct {
 	ConfigDigest   string
 	LayerDigest    string
 	DiffID         string
-	LayerPath      string
-	LayerBytes     int64
+	LayerPath      string // First layer path retained for single-layer API compatibility.
+	Layers         []LayerArtifact
+	LayerBytes     int64 // Total compressed bytes downloaded across all layers.
 }
 
 type PushBundle struct {
@@ -161,10 +180,23 @@ type PushBundle struct {
 }
 
 func (a Artifact) Cleanup() error {
-	if a.LayerPath == "" {
-		return nil
+	paths := make([]string, 0, len(a.Layers)+1)
+	for _, layer := range a.Layers {
+		paths = append(paths, layer.Path)
 	}
-	return os.Remove(a.LayerPath)
+	paths = append(paths, a.LayerPath)
+	seen := make(map[string]bool, len(paths))
+	var cleanupErr error
+	for _, path := range paths {
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			cleanupErr = errors.Join(cleanupErr, err)
+		}
+	}
+	return cleanupErr
 }
 
 func ParseReference(value string) (Reference, error) {
@@ -243,7 +275,7 @@ func Pull(ctx context.Context, reference, platform string, credentials Credentia
 	if len(parts) == 3 {
 		requestedVariant = parts[2]
 	}
-	if strings.ContainsAny(platform, "\\\x00\r\n") {
+	if strings.ContainsAny(platform, "\\ \r\n") {
 		return result, fmt.Errorf("invalid platform")
 	}
 	baseURL := "https://" + parsed.Registry
@@ -264,20 +296,10 @@ func Pull(ctx context.Context, reference, platform string, credentials Credentia
 		if idx.SchemaVersion != 2 {
 			return result, fmt.Errorf("unsupported registry manifest index schema %d", idx.SchemaVersion)
 		}
-		matches := make([]struct {
-			manifestBytes []byte
-			mediaType     string
-			digest        string
-			variant       string
-		}, 0, 2)
+		matches := make([]struct{ variant string }, 0, 2)
 		for _, candidate := range idx.Manifests {
 			if candidate.Platform.OS == osName && candidate.Platform.Architecture == arch && (requestedVariant == "" || candidate.Platform.Variant == requestedVariant) {
-				matches = append(matches, struct {
-					manifestBytes []byte
-					mediaType     string
-					digest        string
-					variant       string
-				}{digest: candidate.Digest, variant: candidate.Platform.Variant})
+				matches = append(matches, struct{ variant string }{variant: candidate.Platform.Variant})
 			}
 		}
 		if requestedVariant == "" && len(matches) > 1 {
@@ -287,6 +309,7 @@ func Pull(ctx context.Context, reference, platform string, credentials Credentia
 			return result, fmt.Errorf("registry image has no %s/%s manifest", osName, arch)
 		}
 		selectedVariant := matches[0].variant
+		selected := false
 		for _, candidate := range idx.Manifests {
 			if candidate.Platform.OS == osName && candidate.Platform.Architecture == arch && candidate.Platform.Variant == selectedVariant {
 				if candidate.MediaType != "application/vnd.oci.image.manifest.v1+json" && candidate.MediaType != "application/vnd.docker.distribution.manifest.v2+json" {
@@ -299,8 +322,15 @@ func Pull(ctx context.Context, reference, platform string, credentials Credentia
 				if err != nil {
 					return result, err
 				}
+				if int64(len(manifestBytes)) != candidate.Size {
+					return result, fmt.Errorf("platform manifest size mismatch: expected %d, received %d", candidate.Size, len(manifestBytes))
+				}
+				selected = true
 				break
 			}
+		}
+		if !selected {
+			return result, fmt.Errorf("registry image has no usable %s/%s manifest", osName, arch)
 		}
 		requestedVariant = selectedVariant
 	}
@@ -311,21 +341,33 @@ func Pull(ctx context.Context, reference, platform string, credentials Credentia
 	if err := json.Unmarshal(manifestBytes, &remote); err != nil {
 		return result, fmt.Errorf("decode registry manifest: %w", err)
 	}
-	if remote.SchemaVersion != 2 || (remote.MediaType != "" && remote.MediaType != mediaType) || len(remote.Layers) != 1 {
-		return result, fmt.Errorf("unsupported image manifest: Boxr currently requires a schema-2 manifest with exactly one rootfs layer")
+	if remote.SchemaVersion != 2 || (remote.MediaType != "" && remote.MediaType != mediaType) {
+		return result, fmt.Errorf("unsupported registry image manifest schema or media type")
+	}
+	if len(remote.Layers) == 0 || len(remote.Layers) > maxRegistryLayerCount {
+		return result, fmt.Errorf("registry image must contain between 1 and %d layers", maxRegistryLayerCount)
 	}
 	if remote.Config.MediaType != "application/vnd.oci.image.config.v1+json" && remote.Config.MediaType != "application/vnd.docker.container.image.v1+json" {
 		return result, fmt.Errorf("unsupported image config media type %q", remote.Config.MediaType)
 	}
-	if remote.Layers[0].MediaType != boxrLayerMediaType {
-		return result, fmt.Errorf("unsupported layer media type %q; this registry pull currently supports Boxr rootfs layers only", remote.Layers[0].MediaType)
-	}
 	if err := validateDescriptor(remote.Config, maxConfigBytes); err != nil {
 		return result, fmt.Errorf("invalid image config descriptor: %w", err)
 	}
-	if err := validateDescriptor(remote.Layers[0], maxLayerBytes); err != nil {
-		return result, fmt.Errorf("invalid rootfs layer descriptor: %w", err)
+
+	var totalLayerBytes int64
+	for index, layer := range remote.Layers {
+		if !supportedLayerMediaType(layer.MediaType) {
+			return result, fmt.Errorf("unsupported image layer media type %q at index %d; supported formats are OCI/Docker tar and tar+gzip", layer.MediaType, index)
+		}
+		if err := validateDescriptor(layer, maxLayerBytes); err != nil {
+			return result, fmt.Errorf("invalid image layer %d descriptor: %w", index, err)
+		}
+		if layer.Size > maxTotalLayerBytes-totalLayerBytes {
+			return result, fmt.Errorf("registry image layers exceed the %d-byte aggregate download limit", maxTotalLayerBytes)
+		}
+		totalLayerBytes += layer.Size
 	}
+
 	configBytes, _, _, err := fetcher.blob(ctx, remote.Config, maxConfigBytes)
 	if err != nil {
 		return result, fmt.Errorf("download image config: %w", err)
@@ -340,23 +382,73 @@ func Pull(ctx context.Context, reference, platform string, credentials Credentia
 	if config.Variant == "" {
 		config.Variant = requestedVariant
 	}
-	if config.RootFS.Type != "layers" || len(config.RootFS.DiffIDs) != 1 || !digestPattern.MatchString(config.RootFS.DiffIDs[0]) {
-		return result, fmt.Errorf("unsupported image config rootfs descriptor")
+	if config.RootFS.Type != "layers" || len(config.RootFS.DiffIDs) != len(remote.Layers) {
+		return result, fmt.Errorf("image config rootfs diff_ids count does not match the manifest layers")
 	}
-	layerPath, _, _, err := fetcher.blobToTemp(ctx, remote.Layers[0], maxLayerBytes)
-	if err != nil {
-		return result, fmt.Errorf("download rootfs layer: %w", err)
+	for index, diffID := range config.RootFS.DiffIDs {
+		if !digestPattern.MatchString(diffID) {
+			return result, fmt.Errorf("image config layer %d has an invalid diff_id", index)
+		}
 	}
-	diffID, err := uncompressedDigest(layerPath)
-	if err != nil {
-		_ = os.Remove(layerPath)
-		return result, fmt.Errorf("verify uncompressed rootfs layer: %w", err)
+
+	layers := make([]LayerArtifact, 0, len(remote.Layers))
+	keepLayers := false
+	defer func() {
+		if !keepLayers {
+			for _, layer := range layers {
+				_ = os.Remove(layer.Path)
+			}
+		}
+	}()
+	for index, descriptor := range remote.Layers {
+		layerPath, actualDigest, written, err := fetcher.blobToTemp(ctx, descriptor, maxLayerBytes)
+		if err != nil {
+			return result, fmt.Errorf("download image layer %d: %w", index, err)
+		}
+		diffID, err := uncompressedDigestForMediaType(layerPath, descriptor.MediaType)
+		if err != nil {
+			_ = os.Remove(layerPath)
+			return result, fmt.Errorf("verify uncompressed image layer %d: %w", index, err)
+		}
+		if diffID != config.RootFS.DiffIDs[index] {
+			_ = os.Remove(layerPath)
+			return result, fmt.Errorf("image layer %d diff_id mismatch: expected %s, received %s", index, config.RootFS.DiffIDs[index], diffID)
+		}
+		layers = append(layers, LayerArtifact{MediaType: descriptor.MediaType, Digest: actualDigest, DiffID: diffID, Path: layerPath, Size: written})
 	}
-	if diffID != config.RootFS.DiffIDs[0] {
-		_ = os.Remove(layerPath)
-		return result, fmt.Errorf("rootfs layer diff_id mismatch: expected %s, received %s", config.RootFS.DiffIDs[0], diffID)
+	artifact := Artifact{
+		Reference: parsed.LocalReference(), RuntimeConfig: config.Config,
+		OS: config.OS, Architecture: config.Architecture, Variant: config.Variant,
+		ManifestDigest: digest, ConfigDigest: remote.Config.Digest,
+		LayerPath: layers[0].Path, Layers: layers, LayerBytes: totalLayerBytes,
 	}
-	return Artifact{Reference: parsed.LocalReference(), RuntimeConfig: config.Config, OS: config.OS, Architecture: config.Architecture, Variant: config.Variant, ManifestDigest: digest, ConfigDigest: remote.Config.Digest, LayerDigest: remote.Layers[0].Digest, DiffID: diffID, LayerPath: layerPath, LayerBytes: remote.Layers[0].Size}, nil
+	if len(layers) == 1 {
+		artifact.LayerDigest = layers[0].Digest
+		artifact.DiffID = layers[0].DiffID
+	}
+	keepLayers = true
+	return artifact, nil
+}
+
+func supportedLayerMediaType(mediaType string) bool {
+	switch mediaType {
+	case boxrLayerMediaType, ociGzipLayerMediaType, ociTarLayerMediaType, dockerGzipLayerMediaType, dockerTarLayerMediaType:
+		return true
+	default:
+		return false
+	}
+}
+
+func uncompressedDigestForMediaType(path, mediaType string) (string, error) {
+	switch mediaType {
+	case boxrLayerMediaType, ociGzipLayerMediaType, dockerGzipLayerMediaType:
+		return uncompressedDigest(path)
+	case ociTarLayerMediaType, dockerTarLayerMediaType:
+		digest, _, err := digestFile(path, maxLayerBytes)
+		return digest, err
+	default:
+		return "", fmt.Errorf("unsupported image layer media type %q", mediaType)
+	}
 }
 
 type registryClient struct {
@@ -876,8 +968,12 @@ func uncompressedDigest(path string) (string, error) {
 	}
 	defer compressed.Close()
 	hash := sha256.New()
-	if _, err := io.Copy(hash, compressed); err != nil {
+	written, err := io.Copy(hash, io.LimitReader(compressed, maxLayerBytes+1))
+	if err != nil {
 		return "", err
+	}
+	if written > maxLayerBytes {
+		return "", fmt.Errorf("uncompressed layer exceeds %d bytes", maxLayerBytes)
 	}
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }

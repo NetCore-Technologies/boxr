@@ -17,6 +17,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	imageStore "github.com/manit6752025/boxr/internal/image"
 )
 
 func TestParseReference(t *testing.T) {
@@ -141,25 +143,150 @@ func TestPullUsesBearerTokenAndSelectsRequestedPlatform(t *testing.T) {
 	}
 }
 
-func TestPullRejectsOrdinaryOCIImageLayers(t *testing.T) {
-	layer, diffID := testLayer(t)
-	configData := testConfig(t, "amd64", diffID)
+func TestPullAcceptsMultiLayerOCIImageWithWhiteouts(t *testing.T) {
+	firstLayer, firstDiffID := testRegistryLayer(t, true,
+		registryLayerEntry{name: "etc/old", data: []byte("remove me\n")},
+		registryLayerEntry{name: "opt/app", data: []byte("preserve me\n")},
+		registryLayerEntry{name: "var/cache/old", data: []byte("remove cache\n")},
+	)
+	secondLayer, secondDiffID := testRegistryLayer(t, false,
+		registryLayerEntry{name: "etc/.wh.old"},
+		registryLayerEntry{name: "etc/new", data: []byte("new config\n")},
+		registryLayerEntry{name: "var/cache/.wh..wh..opq"},
+		registryLayerEntry{name: "var/cache/new", data: []byte("new cache\n")},
+	)
+	configData := testConfigWithDiffIDs(t, "amd64", []string{firstDiffID, secondDiffID}, RuntimeConfig{
+		Entrypoint: []string{"/usr/bin/app"},
+		WorkingDir: "/opt",
+		Labels: map[string]string{"org.example.component": "web"},
+	})
 	configDescriptor := Descriptor{MediaType: "application/vnd.oci.image.config.v1+json", Digest: digestBytes(configData), Size: int64(len(configData))}
-	layerDescriptor := Descriptor{MediaType: "application/vnd.oci.image.layer.v1.tar+gzip", Digest: digestBytes(layer), Size: int64(len(layer))}
-	manifestData, _ := json.Marshal(manifest{SchemaVersion: 2, MediaType: "application/vnd.oci.image.manifest.v1+json", Config: configDescriptor, Layers: []Descriptor{layerDescriptor}})
+	layerDescriptors := []Descriptor{
+		{MediaType: ociGzipLayerMediaType, Digest: digestBytes(firstLayer), Size: int64(len(firstLayer))},
+		{MediaType: ociTarLayerMediaType, Digest: digestBytes(secondLayer), Size: int64(len(secondLayer))},
+	}
+	manifestData, err := json.Marshal(manifest{
+		SchemaVersion: 2, MediaType: "application/vnd.oci.image.manifest.v1+json",
+		Config: configDescriptor, Layers: layerDescriptors,
+	})
+	if err != nil { t.Fatal(err) }
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.Contains(r.URL.Path, "/manifests/"):
+		switch r.URL.Path {
+		case "/v2/team/app/manifests/latest":
 			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 			_, _ = w.Write(manifestData)
+		case "/v2/team/app/blobs/" + configDescriptor.Digest:
+			w.Header().Set("Content-Type", configDescriptor.MediaType)
+			_, _ = w.Write(configData)
+		case "/v2/team/app/blobs/" + layerDescriptors[0].Digest:
+			_, _ = w.Write(firstLayer)
+		case "/v2/team/app/blobs/" + layerDescriptors[1].Digest:
+			_, _ = w.Write(secondLayer)
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer server.Close()
+	reference := strings.TrimPrefix(server.URL, "http://") + "/team/app:latest"
+	artifact, err := Pull(context.Background(), reference, "linux/amd64", Credentials{})
+	if err != nil { t.Fatalf("pull standard OCI image: %v", err) }
+	defer artifact.Cleanup()
+	if len(artifact.Layers) != 2 || artifact.LayerBytes != int64(len(firstLayer)+len(secondLayer)) {
+		t.Fatalf("unexpected pulled layer set: %+v", artifact)
+	}
+	if artifact.Layers[0].MediaType != ociGzipLayerMediaType || artifact.Layers[1].MediaType != ociTarLayerMediaType {
+		t.Fatalf("layer media types not preserved: %+v", artifact.Layers)
+	}
+	if artifact.RuntimeConfig.WorkingDir != "/opt" || artifact.RuntimeConfig.Labels["org.example.component"] != "web" {
+		t.Fatalf("runtime config not preserved: %+v", artifact.RuntimeConfig)
+	}
+	root := t.TempDir()
+	for index, layer := range artifact.Layers {
+		if err := imageStore.ApplyLayerArchive(root, layer.Path); err != nil {
+			t.Fatalf("apply layer %d: %v", index+1, err)
+		}
+	}
+	for _, removed := range []string{"etc/old", "var/cache/old"} {
+		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(removed))); !os.IsNotExist(err) {
+			t.Errorf("whiteout did not remove %s (error %v)", removed, err)
+		}
+	}
+	for name, want := range map[string]string{
+		"opt/app": "preserve me\n",
+		"etc/new": "new config\n",
+		"var/cache/new": "new cache\n",
+	} {
+		got, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil { t.Errorf("read %s: %v", name, err); continue }
+		if string(got) != want { t.Errorf("%s = %q, want %q", name, got, want) }
+	}
+}
+
+func TestPullAcceptsDockerDistributionLayerMediaTypes(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		mediaType string
+		compressed bool
+	}{
+		{name: "gzip", mediaType: dockerGzipLayerMediaType, compressed: true},
+		{name: "plain-tar", mediaType: dockerTarLayerMediaType},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			layer, diffID := testRegistryLayer(t, test.compressed, registryLayerEntry{name: "usr/bin/app", data: []byte("docker image layer\n")})
+			configData := testConfig(t, "amd64", diffID)
+			configDescriptor := Descriptor{MediaType: "application/vnd.docker.container.image.v1+json", Digest: digestBytes(configData), Size: int64(len(configData))}
+			layerDescriptor := Descriptor{MediaType: test.mediaType, Digest: digestBytes(layer), Size: int64(len(layer))}
+			manifestData, err := json.Marshal(manifest{
+				SchemaVersion: 2, MediaType: "application/vnd.docker.distribution.manifest.v2+json",
+				Config: configDescriptor, Layers: []Descriptor{layerDescriptor},
+			})
+			if err != nil { t.Fatal(err) }
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/v2/team/app/manifests/latest":
+					w.Header().Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+					_, _ = w.Write(manifestData)
+				case "/v2/team/app/blobs/" + configDescriptor.Digest:
+					_, _ = w.Write(configData)
+				case "/v2/team/app/blobs/" + layerDescriptor.Digest:
+					_, _ = w.Write(layer)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			ref := strings.TrimPrefix(server.URL, "http://") + "/team/app:latest"
+			artifact, err := Pull(context.Background(), ref, "linux/amd64", Credentials{})
+			if err != nil { t.Fatalf("pull Docker layer: %v", err) }
+			defer artifact.Cleanup()
+			if len(artifact.Layers) != 1 || artifact.Layers[0].MediaType != test.mediaType {
+				t.Fatalf("unexpected Docker layer artifact: %+v", artifact.Layers)
+			}
+			if artifact.LayerDigest != layerDescriptor.Digest || artifact.DiffID != diffID {
+				t.Fatalf("single-layer compatibility metadata missing: %+v", artifact)
+			}
+		})
+	}
+}
+
+func TestPullRejectsUnsupportedZstdOCIImageLayers(t *testing.T) {
+	layer, diffID := testLayer(t)
+	configData := testConfig(t, "amd64", diffID)
+	configDescriptor := Descriptor{MediaType: "application/vnd.oci.image.config.v1+json", Digest: digestBytes(configData), Size: int64(len(configData))}
+	layerDescriptor := Descriptor{MediaType: "application/vnd.oci.image.layer.v1.tar+zstd", Digest: digestBytes(layer), Size: int64(len(layer))}
+	manifestData, _ := json.Marshal(manifest{SchemaVersion: 2, MediaType: "application/vnd.oci.image.manifest.v1+json", Config: configDescriptor, Layers: []Descriptor{layerDescriptor}})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/manifests/") {
+			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			_, _ = w.Write(manifestData)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
 	ref := strings.TrimPrefix(server.URL, "http://") + "/team/app:latest"
-	if _, err := Pull(context.Background(), ref, "linux/amd64", Credentials{}); err == nil || !strings.Contains(err.Error(), "Boxr rootfs layers only") {
-		t.Fatalf("expected clear unsupported-layer error, got %v", err)
+	if _, err := Pull(context.Background(), ref, "linux/amd64", Credentials{}); err == nil || !strings.Contains(err.Error(), "unsupported image layer media type") {
+		t.Fatalf("expected explicit unsupported zstd media type error, got %v", err)
 	}
 }
 
@@ -243,6 +370,47 @@ func testConfig(t *testing.T, arch, diffID string, runtimeConfigs ...RuntimeConf
 	if err != nil {
 		t.Fatal(err)
 	}
+	return data
+}
+
+type registryLayerEntry struct {
+	name string
+	data []byte
+	kind byte
+}
+
+func testRegistryLayer(t *testing.T, compressed bool, entries ...registryLayerEntry) ([]byte, string) {
+	t.Helper()
+	var plain bytes.Buffer
+	writer := tar.NewWriter(&plain)
+	for _, entry := range entries {
+		kind := entry.kind
+		if kind == 0 { kind = tar.TypeReg }
+		header := &tar.Header{Name: entry.name, Mode: 0644, Typeflag: kind, Size: int64(len(entry.data)), ModTime: time.Unix(0, 0)}
+		if kind == tar.TypeDir { header.Mode, header.Size = 0755, 0 }
+		if kind == tar.TypeSymlink || kind == tar.TypeLink { header.Size = 0 }
+		if err := writer.WriteHeader(header); err != nil { t.Fatal(err) }
+		if len(entry.data) > 0 {
+			if _, err := writer.Write(entry.data); err != nil { t.Fatal(err) }
+		}
+	}
+	if err := writer.Close(); err != nil { t.Fatal(err) }
+	diffID := digestBytes(plain.Bytes())
+	if !compressed { return plain.Bytes(), diffID }
+	var result bytes.Buffer
+	gz := gzip.NewWriter(&result)
+	if _, err := gz.Write(plain.Bytes()); err != nil { t.Fatal(err) }
+	if err := gz.Close(); err != nil { t.Fatal(err) }
+	return result.Bytes(), diffID
+}
+
+func testConfigWithDiffIDs(t *testing.T, arch string, diffIDs []string, runtimeConfig RuntimeConfig) []byte {
+	t.Helper()
+	config := imageConfig{OS: "linux", Architecture: arch, Config: runtimeConfig}
+	config.RootFS.Type = "layers"
+	config.RootFS.DiffIDs = append([]string(nil), diffIDs...)
+	data, err := json.Marshal(config)
+	if err != nil { t.Fatal(err) }
 	return data
 }
 

@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 547 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 556 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -553,3 +553,12 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 545. deduplicate shared rootfs layers across Docker image exports
 546. deterministic ordering of Docker manifest config and layer entries
 547. enforce Docker export image-count and duplicate-reference limits
+548. standard OCI gzip layer media type support
+549. standard OCI uncompressed tar layer media type support
+550. Docker distribution gzip layer media type support
+551. Docker distribution uncompressed tar layer media type support
+552. bounded multi-layer registry manifest validation
+553. per-layer compressed registry blob digest verification
+554. per-layer uncompressed rootfs diff_id verification
+555. ordered multi-layer registry filesystem application
+556. registry layer whiteout and opaque-directory semantics

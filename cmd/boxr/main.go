@@ -1709,9 +1709,15 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 		}
 		defer os.RemoveAll(staging)
 		rootPath := filepath.Join(staging, "rootfs")
-		if _, err := rootfs.ExtractTarGz(artifact.LayerPath, rootPath, rootfs.Limits{}); err != nil {
-			fmt.Fprintf(stderr, "boxr image pull: extract rootfs: %v\n", err)
+		if err := os.Mkdir(rootPath, 0700); err != nil {
+			fmt.Fprintf(stderr, "boxr image pull: create rootfs: %v\n", err)
 			return 1
+		}
+		for index, layer := range artifact.Layers {
+			if err := imageStore.ApplyLayerArchive(rootPath, layer.Path); err != nil {
+				fmt.Fprintf(stderr, "boxr image pull: apply layer %d: %v\n", index+1, err)
+				return 1
+			}
 		}
 		image, err := imageStore.ImportRootFSWithConfig(rootPath, artifact.Reference, artifact.OS, artifact.Architecture, artifact.Variant, imageStore.ImageRuntimeConfig{
 			Env: artifact.RuntimeConfig.Env, Entrypoint: artifact.RuntimeConfig.Entrypoint, Cmd: artifact.RuntimeConfig.Cmd,
@@ -2503,6 +2509,15 @@ var implementedFeatures = []string{
 	"deduplicate shared rootfs layers across Docker image exports",
 	"deterministic ordering of Docker manifest config and layer entries",
 	"enforce Docker export image-count and duplicate-reference limits",
+	"standard OCI gzip layer media type support",
+	"standard OCI uncompressed tar layer media type support",
+	"Docker distribution gzip layer media type support",
+	"Docker distribution uncompressed tar layer media type support",
+	"bounded multi-layer registry manifest validation",
+	"per-layer compressed registry blob digest verification",
+	"per-layer uncompressed rootfs diff_id verification",
+	"ordered multi-layer registry filesystem application",
+	"registry layer whiteout and opaque-directory semantics",
 }
 
 func printFeatures(stdout io.Writer) {
