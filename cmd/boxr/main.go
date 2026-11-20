@@ -3116,7 +3116,10 @@ var implementedFeatures = []string{
 	"Engine API streams bounded tail and follow container logs in Docker multiplexed stdout frames",
 	"Engine API exposes cgroup v2 CPU memory and PID stats with snapshot and streaming responses",
 	"Engine API streams persisted container lifecycle events and lists OCI image tags",
-	"unsupported Docker Engine mutations and TCP listeners are explicitly outside the API contract",
+	"unsupported Docker Engine restart attach image volume network mutation and TCP listener operations are explicitly outside the API contract",
+	"Engine API creates containers from verified local images using a strict supported Docker create subset",
+	"Engine API starts created containers through the native Boxr detached supervisor",
+	"Engine API gracefully stops containers with a bounded timeout and SIGKILL fallback",
 	"Engine API sends validated Docker kill signals only to process-identity-verified running containers",
 	"Engine API removes created and stopped containers through Docker DELETE with safe conflict handling",
 }

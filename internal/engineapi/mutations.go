@@ -510,7 +510,15 @@ func (s *Server) handleContainerStop(writer http.ResponseWriter, request *http.R
 		writeError(writer, http.StatusNotFound, err)
 		return
 	}
-	if record.Status != "running" && record.Status != "restarting" {
+	if record.Status == "restarting" {
+		if err := state.RequestStop(record.ID); err != nil {
+			writeError(writer, http.StatusConflict, err)
+			return
+		}
+		writer.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if record.Status != "running" {
 		writer.WriteHeader(http.StatusNotModified)
 		return
 	}
@@ -523,6 +531,10 @@ func (s *Server) handleContainerStop(writer http.ResponseWriter, request *http.R
 		signal = "KILL"
 	}
 	if err := state.Signal(record.ID, signal); err != nil {
+		if rollbackErr := state.CancelStopRequest(record.ID); rollbackErr != nil {
+			writeError(writer, http.StatusConflict, fmt.Errorf("send stop signal: %v; roll back stop request: %w", err, rollbackErr))
+			return
+		}
 		writeError(writer, http.StatusConflict, err)
 		return
 	}

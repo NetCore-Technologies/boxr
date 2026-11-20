@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 831 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 834 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -834,6 +834,9 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 826. Engine API streams bounded tail and follow container logs in Docker multiplexed stdout frames
 827. Engine API exposes cgroup v2 CPU memory and PID stats with snapshot and streaming responses
 828. Engine API streams persisted container lifecycle events and lists OCI image tags
-829. unsupported Docker Engine mutations and TCP listeners are explicitly outside the API contract
+829. unsupported Docker Engine restart attach image volume network mutation and TCP listener operations are explicitly outside the API contract
+830. Engine API creates containers from verified local images using a strict supported Docker create subset
+831. Engine API starts created containers through the native Boxr detached supervisor
+832. Engine API gracefully stops containers with a bounded timeout and SIGKILL fallback
 830. Engine API sends validated Docker kill signals only to process-identity-verified running containers
 831. Engine API removes created and stopped containers through Docker DELETE with safe conflict handling

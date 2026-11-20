@@ -422,6 +422,11 @@ func (s *Server) handleContainerKill(writer http.ResponseWriter, request *http.R
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
+	signal, err := dockerSignalName(request.URL.Query().Get("signal"))
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
 	record, err := state.Get(query)
 	if err != nil {
 		writeError(writer, http.StatusNotFound, err)
@@ -429,11 +434,6 @@ func (s *Server) handleContainerKill(writer http.ResponseWriter, request *http.R
 	}
 	if record.Status != "running" {
 		writeError(writer, http.StatusConflict, fmt.Errorf("container %s is %s, not running", record.ID, record.Status))
-		return
-	}
-	signal, err := dockerSignalName(request.URL.Query().Get("signal"))
-	if err != nil {
-		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
 	if err := state.Signal(record.ID, signal); err != nil {

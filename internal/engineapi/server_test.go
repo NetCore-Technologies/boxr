@@ -506,6 +506,59 @@ func TestDockerPortBindingsRejectEphemeralAndInvalidProtocols(t *testing.T) {
 	}
 }
 
+
+func TestEngineAPIContainerStopRollsBackFailedSignal(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("failed-stop-signal-test", []string{"/bin/sleep", "30"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A PID outside the host PID range makes signal delivery fail without
+	// involving another process or relying on a race with process exit.
+	if err := state.Start(record.ID, 99999999); err != nil {
+		t.Fatal(err)
+	}
+	response := engineAPIRequest(server, http.MethodPost, "/containers/"+record.ID+"/stop?t=0")
+	if response.Code != http.StatusConflict {
+		t.Fatalf("stop with stale PID status=%d body=%s", response.Code, response.Body.String())
+	}
+	updated, err := state.Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "running" || updated.StopRequested {
+		t.Fatalf("failed signal left stale stop state: status=%q stopRequested=%t", updated.Status, updated.StopRequested)
+	}
+}
+
+func TestEngineAPIContainerStopCancelsRestartWithoutSignalingPID(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("restart-stop-test", []string{"/bin/sleep", "30"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.PrepareRestart(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	response := engineAPIRequest(server, http.MethodPost, "/containers/"+record.ID+"/stop")
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("stop restarting container status=%d body=%s", response.Code, response.Body.String())
+	}
+	updated, err := state.Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "exited" || !updated.StopRequested || updated.PID != 0 {
+		t.Fatalf("restart was not cancelled safely: %+v", updated)
+	}
+}
+
 func TestDockerContainerStartRequiresARealCreatedEngineRecord(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record, err := state.Create("not-an-engine-container", []string{"/bin/true"}, container.Options{}, nil)
