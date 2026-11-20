@@ -877,15 +877,15 @@ func leaveFromStore(ctx context.Context, runner Runner, current *store, dir stri
 	if !exists {
 		return fmt.Errorf("container %q has no allocation on network %q", containerID, network.Name)
 	}
+	hostVeth, _ := vethNames(containerID)
+	if err := verifyVethOwnership(ctx, runner, network.ID, containerID); err != nil {
+		return fmt.Errorf("refusing to remove veth %s: %w", hostVeth, err)
+	}
 	mappings := append([]PortMapping(nil), network.Published[containerID]...)
 	for _, mapping := range mappings {
 		if err := removePortMappingRules(ctx, runner, *network, address, mapping); err != nil {
 			return fmt.Errorf("disconnect published port %s:%d/%s: %w", mapping.HostIP, mapping.HostPort, mapping.Protocol, err)
 		}
-	}
-	hostVeth, _ := vethNames(containerID)
-	if err := verifyVethOwnership(ctx, runner, network.ID, containerID); err != nil {
-		return fmt.Errorf("refusing to remove veth %s: %w", hostVeth, err)
 	}
 	if err := runner.Run(ctx, "ip", "link", "del", "dev", hostVeth); err != nil && !missingNetworkInterface(err) {
 		return fmt.Errorf("disconnect container from network %q: %w", network.Name, err)
