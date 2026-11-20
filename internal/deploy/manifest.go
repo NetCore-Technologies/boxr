@@ -59,8 +59,9 @@ type Service struct {
 	DependsOn []string          `json:"dependsOn,omitempty"`
 	Volumes   []VolumeMount     `json:"volumes,omitempty"`
 	Profiles  []string          `json:"profiles,omitempty"`
-	EnvFiles  []string          `json:"envFiles,omitempty"`
-	Readiness *ReadinessProbe   `json:"readiness,omitempty"`
+	EnvFiles      []string          `json:"envFiles,omitempty"`
+	StartTimeoutMS int               `json:"startTimeoutMs,omitempty"`
+	Readiness     *ReadinessProbe   `json:"readiness,omitempty"`
 }
 
 // ServicePlan contains only safe-to-display metadata. It deliberately excludes
@@ -84,6 +85,7 @@ type ServicePlan struct {
 	CommandArgumentCount  int           `json:"commandArgumentCount"`
 	EnvironmentEntryCount int           `json:"environmentEntryCount"`
 	EnvironmentFileCount  int           `json:"environmentFileCount"`
+	StartTimeoutMS        int           `json:"startTimeoutMs,omitempty"`
 	LabelCount            int           `json:"labelCount"`
 }
 
@@ -300,6 +302,9 @@ func buildPlan(file File) (Plan, error) {
 				return plan, fmt.Errorf("service %q cannot combine an image with an explicit rootfs", name)
 			}
 		}
+		if service.StartTimeoutMS < 0 || service.StartTimeoutMS > 600000 || (service.StartTimeoutMS > 0 && service.StartTimeoutMS < 10) {
+			return plan, fmt.Errorf("service %q startTimeoutMs must be 0 (default) or between 10 and 600000", name)
+		}
 		if len(service.EnvFiles) > 16 {
 			return plan, fmt.Errorf("service %q has more than 16 environment files", name)
 		}
@@ -438,6 +443,7 @@ func buildPlan(file File) (Plan, error) {
 			CommandArgumentCount:  len(service.Command),
 			EnvironmentEntryCount: len(service.Options.Env),
 			EnvironmentFileCount:  len(service.EnvFiles),
+			StartTimeoutMS:        service.StartTimeoutMS,
 			LabelCount:            len(service.Options.Labels),
 		}
 	}
