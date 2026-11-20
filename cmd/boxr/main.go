@@ -1437,7 +1437,7 @@ Usage:
   boxr kill [--signal KILL] ID|NAME [...]
   boxr wait [--condition running|stopped] [--timeout 30s] [--interval 100ms] [--json] ID|NAME [...]
   boxr logs [--tail 100] [--follow] ID|NAME
-  boxr network create --subnet CIDR [--gateway IP] [--internal] NAME
+  boxr network create --subnet CIDR [--gateway IP] [--no-nat] NAME
   boxr network ls [--json]
   boxr network inspect [--json] NAME
   boxr network rm NAME
@@ -4369,7 +4369,7 @@ func parseVolumeMount(value string) (string, container.BindMount, error) {
 
 func runNetwork(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "Usage: boxr network create --subnet CIDR [--gateway IP] [--bridge IFACE] [--internal] NAME | ls [--json] | inspect [--json] NAME | rm NAME")
+		fmt.Fprintln(stderr, "Usage: boxr network create --subnet CIDR [--gateway IP] [--bridge IFACE] [--no-nat] NAME | ls [--json] | inspect [--json] NAME | rm NAME")
 		return 2
 	}
 	switch args[0] {
@@ -4379,16 +4379,16 @@ func runNetwork(args []string, stdout, stderr io.Writer) int {
 		subnet := flags.String("subnet", "", "non-overlapping IPv4 subnet in canonical CIDR form (/16 to /29)")
 		gateway := flags.String("gateway", "", "IPv4 gateway address (default: first usable address)")
 		bridge := flags.String("bridge", "", "host bridge interface name (default: generated)")
-		internal := flags.Bool("internal", false, "disable outbound IPv4 forwarding and NAT")
+		noNAT := flags.Bool("no-nat", false, "disable outbound NAT (host routing policy still applies)")
 		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}
 		if flags.NArg() != 1 || *subnet == "" {
-			fmt.Fprintln(stderr, "Usage: boxr network create --subnet CIDR [--gateway IP] [--bridge IFACE] [--internal] NAME")
+			fmt.Fprintln(stderr, "Usage: boxr network create --subnet CIDR [--gateway IP] [--bridge IFACE] [--no-nat] NAME")
 			return 2
 		}
 		created, err := boxrnetwork.Create(flags.Arg(0), boxrnetwork.CreateOptions{
-			Subnet: *subnet, Gateway: *gateway, Bridge: *bridge, NAT: !*internal,
+			Subnet: *subnet, Gateway: *gateway, Bridge: *bridge, NAT: !*noNAT,
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "boxr network create: %v\n", err)
