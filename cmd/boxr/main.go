@@ -1438,7 +1438,7 @@ Usage:
   boxr image audit [--json] [--strict] NAME:TAG
   boxr image du [--json]
   boxr image du --all [--json] [--filter KEY=VALUE]
-  boxr image save NAME:TAG ARCHIVE.tar.gz
+  boxr image save [--format oci|docker] NAME:TAG ARCHIVE.tar[.gz]
   boxr image load ARCHIVE.tar.gz
   boxr image unpack NAME:TAG PATH
   boxr image rm NAME:TAG [...]
@@ -1986,15 +1986,27 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "verified %s at %s\n", lock.Reference, lock.Digest)
 		return 0
 	case "save":
-		if len(args) != 3 {
-			fmt.Fprintln(stderr, "Usage: boxr image save NAME:TAG ARCHIVE.tar.gz")
+		flags := flag.NewFlagSet("image save", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		format := flags.String("format", "oci", "archive format: oci or docker")
+		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}
-		if err := imageStore.Save(args[1], args[2]); err != nil {
+		if flags.NArg() != 2 || (*format != "oci" && *format != "docker") {
+			fmt.Fprintln(stderr, "Usage: boxr image save [--format oci|docker] NAME:TAG ARCHIVE.tar[.gz]")
+			return 2
+		}
+		var err error
+		if *format == "docker" {
+			err = imageStore.SaveDocker(flags.Arg(0), flags.Arg(1))
+		} else {
+			err = imageStore.Save(flags.Arg(0), flags.Arg(1))
+		}
+		if err != nil {
 			fmt.Fprintf(stderr, "boxr image save: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "saved %s to %s\n", args[1], args[2])
+		fmt.Fprintf(stdout, "saved %s to %s\n", flags.Arg(0), flags.Arg(1))
 		return 0
 	case "load":
 		if len(args) != 2 {
@@ -2472,6 +2484,13 @@ var implementedFeatures = []string{
 	"Docker opaque-directory whiteout semantics",
 	"Docker image environment entrypoint command working-directory user and label preservation",
 	"Docker archive multi-tag import with complete preflight validation",
+		"Docker-save-compatible image archive export",
+	"plain uncompressed tar output compatible with Docker load",
+	"Docker image config filenames derived from SHA-256 config identities",
+	"Docker archive repositories tag map for legacy-compatible consumers",
+	"Docker export preserves rootfs diff IDs platform and runtime config",
+	"Docker image layer is rehashed while expanding it for export",
+	"format-selectable image save with the existing OCI format as default",
 	"Docker layer safe symlink and hard-link handling with special-file rejection",
 }
 

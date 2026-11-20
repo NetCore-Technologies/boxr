@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 535 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 542 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -541,3 +541,10 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 533. Docker image environment entrypoint command working-directory user and label preservation
 534. Docker archive multi-tag import with complete preflight validation
 535. Docker layer safe symlink and hard-link handling with special-file rejection
+536. Docker-save-compatible image archive export
+537. plain uncompressed tar output compatible with Docker load
+538. Docker image config filenames derived from SHA-256 config identities
+539. Docker archive repositories tag map for legacy-compatible consumers
+540. Docker export preserves rootfs diff IDs platform and runtime config
+541. Docker image layer is rehashed while expanding it for export
+542. format-selectable image save with the existing OCI format as default

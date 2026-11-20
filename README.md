@@ -236,6 +236,8 @@ boxr image verify alpine:local       # verifies manifest, config, layer and diff
 boxr image du --json                 # unique, reachable and reclaimable bytes
 boxr image tag alpine:local alpine:stable
 boxr image save alpine:local alpine-local.oci.tar.gz
+boxr image save --format docker alpine:local alpine-local.docker.tar
+docker load --input alpine-local.docker.tar
 boxr image rm alpine:local
 boxr image load alpine-local.oci.tar.gz
 docker save -o alpine.docker.tar alpine:latest

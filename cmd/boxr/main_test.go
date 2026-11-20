@@ -1112,10 +1112,26 @@ func TestImageCommandLifecycle(t *testing.T) {
 	if code := run([]string{"image", "save", "demo:test", archive}, &out, &errOut); code != 0 {
 		t.Fatalf("image save code=%d stderr=%s", code, errOut.String())
 	}
+	dockerArchive := filepath.Join(t.TempDir(), "image.docker.tar")
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "save", "--format", "docker", "demo:test", dockerArchive}, &out, &errOut); code != 0 {
+		t.Fatalf("Docker image save code=%d stderr=%s", code, errOut.String())
+	}
 	out.Reset()
 	errOut.Reset()
 	if code := run([]string{"image", "rm", "demo:test"}, &out, &errOut); code != 0 {
 		t.Fatalf("image rm code=%d stderr=%s", code, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "load", dockerArchive}, &out, &errOut); code != 0 {
+		t.Fatalf("Docker image load code=%d stderr=%s", code, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "rm", "demo:test"}, &out, &errOut); code != 0 {
+		t.Fatalf("image rm after Docker load code=%d stderr=%s", code, errOut.String())
 	}
 	out.Reset()
 	errOut.Reset()

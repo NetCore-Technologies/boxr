@@ -480,3 +480,118 @@ func TestPruneDetailedReportsBlobSizesAndHonorsDryRun(t *testing.T) {
 		t.Fatalf("destructive prune left unreferenced blob: %v", err)
 	}
 }
+
+
+func TestSaveDockerArchiveRoundTrip(t *testing.T) {
+	store := useStore(t)
+	root := newRoot(t)
+	runtimeConfig := ImageRuntimeConfig{
+		Env:        []string{"APP_MODE=production"},
+		Entrypoint: []string{"/bin/hello"},
+		Cmd:        []string{"--serve"},
+		WorkingDir: "/srv/app",
+		User:       "1000:1000",
+		Labels:     map[string]string{"org.example.component": "api"},
+	}
+	if _, err := ImportRootFSWithConfig(root, "example.com/demo:stable", "linux", "amd64", "", runtimeConfig); err != nil {
+		t.Fatal(err)
+	}
+
+	archive := filepath.Join(store, "docker-save.tar")
+	if err := SaveDocker("example.com/demo:stable", archive); err != nil {
+		t.Fatalf("SaveDocker: %v", err)
+	}
+	if !isDockerSaveArchive(archive) {
+		t.Fatal("Docker export was not recognized as a Docker save archive")
+	}
+
+	stage := filepath.Join(t.TempDir(), "archive")
+	if err := os.Mkdir(stage, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractDockerArchive(archive, stage); err != nil {
+		t.Fatalf("extract exported Docker archive: %v", err)
+	}
+	manifestBytes, err := os.ReadFile(filepath.Join(stage, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []dockerManifestEntry
+	if err := json.Unmarshal(manifestBytes, &entries); err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Config == "" || len(entries[0].Layers) != 1 ||
+		len(entries[0].RepoTags) != 1 || entries[0].RepoTags[0] != "example.com/demo:stable" {
+		t.Fatalf("unexpected Docker save manifest: %+v", entries)
+	}
+	configBytes, err := os.ReadFile(filepath.Join(stage, filepath.FromSlash(entries[0].Config)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var savedConfig dockerSaveConfig
+	if err := json.Unmarshal(configBytes, &savedConfig); err != nil {
+		t.Fatal(err)
+	}
+	if savedConfig.OS != "linux" || savedConfig.Architecture != "amd64" ||
+		len(savedConfig.RootFS.DiffIDs) != 1 ||
+		savedConfig.Config.WorkingDir != "/srv/app" ||
+		savedConfig.Config.User != "1000:1000" ||
+		len(savedConfig.History) != 1 {
+		t.Fatalf("Docker image config did not preserve metadata: %+v", savedConfig)
+	}
+	diffID := strings.TrimPrefix(savedConfig.RootFS.DiffIDs[0], "sha256:")
+	repositoriesBytes, err := os.ReadFile(filepath.Join(stage, "repositories"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var repositories map[string]map[string]string
+	if err := json.Unmarshal(repositoriesBytes, &repositories); err != nil {
+		t.Fatal(err)
+	}
+	if repositories["example.com/demo"]["stable"] != diffID {
+		t.Fatalf("legacy repository map does not reference the exported layer: %+v", repositories)
+	}
+	layerInfo, err := os.Stat(filepath.Join(stage, filepath.FromSlash(entries[0].Layers[0])))
+	if err != nil || !layerInfo.Mode().IsRegular() {
+		t.Fatalf("Docker layer archive missing: %v", err)
+	}
+
+	if err := SaveDocker("example.com/demo:stable", filepath.Join(os.Getenv("BOXR_IMAGE_DIR"), "unsafe.tar")); err == nil {
+		t.Fatal("Docker export allowed a destination inside the image store")
+	}
+	storeAlias := filepath.Join(t.TempDir(), "store-link")
+	if err := os.Symlink(os.Getenv("BOXR_IMAGE_DIR"), storeAlias); err != nil {
+		t.Fatalf("create store alias: %v", err)
+	}
+	if err := SaveDocker("example.com/demo:stable", filepath.Join(storeAlias, "symlink-escape.tar")); err == nil {
+		t.Fatal("Docker export followed a symlinked destination directory into the image store")
+	}
+	loaded, err := Load(archive)
+	if err != nil {
+		t.Fatalf("Load exported Docker archive: %v", err)
+	}
+	if len(loaded) != 1 || loaded[0].Reference != "example.com/demo:stable" {
+		t.Fatalf("unexpected images after Docker archive round trip: %+v", loaded)
+	}
+	inspected, err := Inspect("example.com/demo:stable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspected.RuntimeConfig.WorkingDir != runtimeConfig.WorkingDir ||
+		inspected.RuntimeConfig.User != runtimeConfig.User ||
+		len(inspected.RuntimeConfig.Env) != 1 ||
+		inspected.RuntimeConfig.Env[0] != runtimeConfig.Env[0] {
+		t.Fatalf("runtime config changed during Docker save/load: %+v", inspected.RuntimeConfig)
+	}
+	unpacked := filepath.Join(t.TempDir(), "unpacked")
+	if _, err := Unpack("example.com/demo:stable", unpacked); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(unpacked, "bin", "hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "hello image\n" {
+		t.Fatalf("unexpected rootfs content after round trip: %q", contents)
+	}
+}
