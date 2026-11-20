@@ -46,6 +46,7 @@ func JSONSchema() string {
         "tmpfsMounts": {"type": "array", "items": {"type": "object", "required": ["target"], "additionalProperties": false, "properties": {"target": {"type": "string"}, "sizeBytes": {"type": "integer", "minimum": 0}, "mode": {"type": "integer", "minimum": 0, "maximum": 4095}}}},
         "networkMode": {"enum": ["host", "none", "bridge"]},
         "networkName": {"type": "string", "minLength": 1, "maxLength": 31, "pattern": "^[a-z0-9][a-z0-9_.-]*$"},
+        "publishedPorts": {"type": "array", "maxItems": 128, "items": {"type": "object", "additionalProperties": false, "required": ["hostPort", "containerPort"], "properties": {"hostIp": {"type": "string", "format": "ipv4"}, "hostPort": {"type": "integer", "minimum": 1, "maximum": 65535}, "containerPort": {"type": "integer", "minimum": 1, "maximum": 65535}, "protocol": {"enum": ["tcp", "udp"]}}}},
         "userNamespace": {"type": "boolean"},
         "noNewPrivileges": {"type": "boolean"},
         "seccompProfile": {"enum": ["", "baseline"]},
