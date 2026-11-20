@@ -4,7 +4,7 @@
 
 **Linux containers, down to the kernel.**
 
-A local, read-only Docker Engine API is available through an owner-only Unix socket: run `boxr daemon` and point a compatible client at the printed `unix://` socket. The API surface includes ping, version, info, container list/inspect/logs/stats/events and image list, plus validated kill signals and removal of created/stopped containers. Container create/start/stop/restart, image mutation, TCP listeners and full Docker API compatibility are still missing. See the [Engine API compatibility guide](docs/engine-api.md) for the endpoint list and current limitations.
+A local, limited Docker Engine API is available through an owner-only Unix socket: run `boxr daemon` and point a compatible client at the printed `unix://` socket. The API surface includes ping, version, info, container list/inspect/logs/stats/events and image list, plus validated kill signals and removal of created/stopped containers. Container create/start/stop/restart, image mutation, TCP listeners and full Docker API compatibility are still missing. See the [Engine API compatibility guide](docs/engine-api.md) for the endpoint list and current limitations.
 
 [![CI](https://github.com/NetCore-Technologies/boxr/actions/workflows/ci.yml/badge.svg)](https://github.com/NetCore-Technologies/boxr/actions/workflows/ci.yml)
 [![Security](https://github.com/NetCore-Technologies/boxr/actions/workflows/security.yml/badge.svg)](https://github.com/NetCore-Technologies/boxr/actions/workflows/security.yml)
