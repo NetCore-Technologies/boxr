@@ -349,7 +349,14 @@ sudo boxr network connect --publish 127.0.0.1:8081:80/tcp app-net live-api
 sudo boxr network disconnect app-net live-api
 ```
 
-Live attachment verifies that the recorded PID is the Boxr namespace helper before entering its network namespace. A container can be attached to one managed bridge at a time; Boxr rejects host-network and user-namespace containers for this operation. Dynamic attachments and their published ports are automatically detached when the container exits.
+Live attachment verifies that the recorded PID is the Boxr namespace helper before entering its network namespace. A container can be attached to one managed bridge at a time; Boxr rejects host-network and user-namespace containers for this operation. Dynamic attachments and their published ports are automatically detached when the container exits. When Boxr or the host exits unexpectedly, stale network leases can be reviewed and reclaimed safely:
+
+```bash
+sudo boxr network prune              # read-only report by default
+sudo boxr network prune --force      # remove verified Boxr-owned stale links and leases
+```
+
+Managed veth interfaces carry a network/container ownership alias. Pruning refuses to delete an unmarked or mismatched host interface and retains its IPAM reservation for manual investigation. Live container helpers are excluded from the stale set.
 
 Bridge networking currently provides host-local IPv4 connectivity only. It does not yet configure DNS inside containers, support IPv6 or multi-host overlays. The `--no-nat` option only omits Boxr's NAT rules; host routing and firewall policy still govern any other forwarding path. Treat this as an early runtime feature, not a hardened multi-tenant network boundary.
 
