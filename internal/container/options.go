@@ -38,6 +38,7 @@ type Options struct {
 	BindMounts         []BindMount       `json:"bindMounts,omitempty"`
 	TmpfsMounts        []TmpfsMount      `json:"tmpfsMounts,omitempty"`
 	NetworkMode        string            `json:"networkMode,omitempty"`
+	NetworkName        string            `json:"networkName,omitempty"`
 	UserNamespace      bool              `json:"userNamespace,omitempty"`
 	NoNewPrivileges    bool              `json:"noNewPrivileges,omitempty"`
 	SeccompProfile     string            `json:"seccompProfile,omitempty"`
@@ -127,8 +128,23 @@ func (o Options) Validate() error {
 	if o.NetworkMode == "" {
 		o.NetworkMode = "host"
 	}
-	if o.NetworkMode != "host" && o.NetworkMode != "none" {
-		return fmt.Errorf("network mode must be host or none")
+	switch o.NetworkMode {
+	case "host", "none":
+		if o.NetworkName != "" {
+			return fmt.Errorf("a named network can only be used with network mode bridge")
+		}
+	case "bridge":
+		if len(o.NetworkName) == 0 || len(o.NetworkName) > 31 {
+			return fmt.Errorf("network mode bridge requires --network-name")
+		}
+		for _, character := range o.NetworkName {
+			if !(character >= 'a' && character <= 'z' || character >= '0' && character <= '9' ||
+				character == '.' || character == '_' || character == '-') {
+				return fmt.Errorf("network name must contain only lowercase letters, digits, '.', '_' or '-'")
+			}
+		}
+	default:
+		return fmt.Errorf("network mode must be host, none, or bridge")
 	}
 	needsRootFS := o.ReadOnlyRootFS || o.MountProc || len(o.BindMounts) > 0 || len(o.TmpfsMounts) > 0 || o.OverlayDir != ""
 	if needsRootFS && o.RootFS == "" {
