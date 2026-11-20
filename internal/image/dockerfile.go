@@ -260,7 +260,7 @@ func ParseDockerfile(data []byte) (BuildSpec, error) {
 			if currentUser != "" && currentUser != "root" && currentUser != "0" && currentUser != "0:0" {
 				return fmt.Errorf("line %d: RUN after USER %q is not supported yet; build commands currently execute as root inside a user namespace", lineNumber, currentUser)
 			}
-			command, err := dockerfileCommand(expanded)
+			command, err := dockerfileCommand(rest)
 			if err != nil {
 				return fmt.Errorf("line %d: RUN: %w", lineNumber, err)
 			}

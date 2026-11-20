@@ -26,7 +26,7 @@ func (runner *fakeRunner) Run(_ context.Context, executable string, args ...stri
 		}
 		return errors.New(message)
 	}
-	if strings.Contains(call, "iptables -C ") {
+	if strings.Contains(call, "iptables -C ") || strings.Contains(call, "iptables -t nat -C ") {
 		return errors.New("Bad rule (does a matching rule exist in that chain?)")
 	}
 	if executable == "ip" && len(args) >= 6 && args[0] == "link" && args[1] == "set" && args[2] == "dev" && args[4] == "alias" {
@@ -184,7 +184,7 @@ func TestCreateBridgeNATInstallsScopedFirewallRules(t *testing.T) {
 	for _, expected := range []string{
 		"sysctl -w net.ipv4.ip_forward=1",
 		"iptables -N " + filterChain,
-		"iptables -N " + natChain,
+		"iptables -t nat -N " + natChain,
 		"iptables -I FORWARD 1 -j " + filterChain,
 		"iptables -t nat -I POSTROUTING 1 -j " + natChain,
 		"iptables -t nat -A " + natChain + " -s 172.30.30.0/24 ! -o " + network.Bridge + " -j MASQUERADE",

@@ -114,7 +114,7 @@ func TestLoadDockerfileRejectsSymlink(t *testing.T) {
 
 
 func TestParseDockerfileCapturesRunCommandsAndEnvironment(t *testing.T) {
-	spec, err := ParseDockerfile([]byte("ARG BUILD_FLAVOR=debug\nFROM scratch\nWORKDIR /src\nENV APP_MODE=release\nRUN echo \"$APP_MODE:$BUILD_FLAVOR\"\nRUN [\"/bin/tool\", \"--compile\"]\n"))
+	spec, err := ParseDockerfile([]byte("ARG BUILD_FLAVOR=debug\nFROM scratch\nWORKDIR /src\nENV APP_MODE=release\nRUN echo \"$APP_MODE:$BUILD_FLAVOR\"\nRUN [\"/bin/tool\", \"$APP_MODE\"]\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,13 +130,13 @@ func TestParseDockerfileCapturesRunCommandsAndEnvironment(t *testing.T) {
 	if len(runs) != 2 {
 		t.Fatalf("captured %d RUN steps, want 2", len(runs))
 	}
-	if len(runs[0].command) != 3 || runs[0].command[0] != "/bin/sh" || runs[0].command[1] != "-c" || !strings.Contains(runs[0].command[2], "release:debug") {
+	if len(runs[0].command) != 3 || runs[0].command[0] != "/bin/sh" || runs[0].command[1] != "-c" || !strings.Contains(runs[0].command[2], "$APP_MODE:$BUILD_FLAVOR") {
 		t.Errorf("shell RUN = %#v", runs[0].command)
 	}
 	if !containsBuildEnv(runs[0].env, "APP_MODE", "release") || !containsBuildEnv(runs[0].env, "BUILD_FLAVOR", "debug") {
 		t.Errorf("RUN environment did not capture ARG and ENV values: %#v", runs[0].env)
 	}
-	if strings.Join(runs[1].command, "|") != "/bin/tool|--compile" {
+	if strings.Join(runs[1].command, "|") != "/bin/tool|$APP_MODE" {
 		t.Errorf("exec-form RUN = %#v", runs[1].command)
 	}
 }
