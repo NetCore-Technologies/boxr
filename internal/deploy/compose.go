@@ -509,7 +509,7 @@ func parseComposeEnvironment(node *yaml.Node) ([]string, error) {
 			if item.Kind != yaml.ScalarNode || item.Value == "" {
 				return nil, fmt.Errorf("environment entries must be KEY or KEY=VALUE strings")
 			}
-			key, value, hasValue := strings.Cut(item.Value, "=")
+			key, _, hasValue := strings.Cut(item.Value, "=")
 			if key == "" || strings.ContainsAny(key, "\x00\r\n") {
 				return nil, fmt.Errorf("environment entries must use valid non-empty keys")
 			}
