@@ -84,7 +84,8 @@ func (p ReadinessProbe) Validate() error {
 		if parsed.Scheme != "http" && parsed.Scheme != "https" {
 			return fmt.Errorf("httpUrl scheme must be http or https")
 		}
-		if parsed.Opaque != "" || parsed.User != nil || parsed.Hostname() == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		if parsed.Opaque != "" || parsed.User != nil || parsed.Hostname() == "" ||
+			parsed.RawQuery != "" || parsed.ForceQuery || strings.Contains(httpURL, "#") {
 			return fmt.Errorf("httpUrl must not contain credentials, a query, or a fragment")
 		}
 		if err := validateLoopbackHost(parsed.Hostname()); err != nil {
@@ -125,6 +126,14 @@ func validateLoopbackHost(host string) error {
 }
 
 func validatePort(value string) error {
+	if value == "" {
+		return fmt.Errorf("port must be an integer between 1 and 65535")
+	}
+	for _, digit := range value {
+		if digit < '0' || digit > '9' {
+			return fmt.Errorf("port must be an integer between 1 and 65535")
+		}
+	}
 	port, err := strconv.Atoi(value)
 	if err != nil || port < 1 || port > 65535 {
 		return fmt.Errorf("port must be an integer between 1 and 65535")
