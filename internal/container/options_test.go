@@ -398,3 +398,35 @@ func TestOptionsValidatePublishedPortsOnlyForBridgeAndRejectConflicts(t *testing
 	}
 }
 
+func TestOptionsValidateRestartPoliciesAndBudgets(t *testing.T) {
+	valid := []Options{
+		{RestartPolicy: "no"},
+		{RestartPolicy: "always"},
+		{RestartPolicy: "unless-stopped", RestartDelayMS: 5000},
+		{RestartPolicy: "on-failure", RestartMaxRetries: 3, RestartDelayMS: 250},
+		{RestartPolicy: "on-failure", RestartMaxRetries: 0},
+	}
+	for _, options := range valid {
+		if err := options.Validate(); err != nil {
+			t.Errorf("Validate(%+v): %v", options, err)
+		}
+	}
+	invalid := map[string]Options{
+		"unknown policy":          {RestartPolicy: "sometimes"},
+		"negative retries":        {RestartPolicy: "on-failure", RestartMaxRetries: -1},
+		"too many retries":        {RestartPolicy: "on-failure", RestartMaxRetries: 1001},
+		"retries with always":     {RestartPolicy: "always", RestartMaxRetries: 1},
+		"delay below minimum":    {RestartPolicy: "always", RestartDelayMS: 99},
+		"delay above maximum":    {RestartPolicy: "always", RestartDelayMS: 300001},
+		"delay without policy":   {RestartPolicy: "no", RestartDelayMS: 1000},
+		"retries without policy": {RestartPolicy: "no", RestartMaxRetries: 2},
+	}
+	for name, options := range invalid {
+		t.Run(name, func(t *testing.T) {
+			if err := options.Validate(); err == nil {
+				t.Fatalf("invalid restart settings unexpectedly validated: %+v", options)
+			}
+		})
+	}
+}
+
