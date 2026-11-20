@@ -162,7 +162,7 @@ func (s *Server) handleInfo(writer http.ResponseWriter) {
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"ID": hostname, "Containers": len(records), "ContainersRunning": running,
 		"ContainersPaused": 0, "ContainersStopped": stopped, "Images": len(images),
-		"Driver": "boxr-rootfs", "DriverStatus": [][]string{}, "DockerRootDir": stateDir,
+		"Driver": "boxr-rootfs", "DriverStatus": [][]string{}, "BoxrStateDir": stateDir,
 		"OperatingSystem": "Boxr", "OSType": "linux", "Architecture": runtime.GOARCH,
 		"KernelVersion": strings.TrimSpace(string(kernelVersion)), "NCPU": runtime.NumCPU(),
 		"ServerVersion": s.version, "SecurityOptions": []string{"namespaces", "seccomp"},
@@ -194,6 +194,13 @@ func portsForOptions(options container.Options) []dockerPort {
 		})
 	}
 	return result
+}
+
+func dockerImageID(digest string) string {
+	if strings.HasPrefix(digest, "sha256:") {
+		return digest
+	}
+	return "sha256:" + digest
 }
 
 func containerState(record state.Record) string {
@@ -262,7 +269,7 @@ func (s *Server) handleContainers(writer http.ResponseWriter, request *http.Requ
 		imageID := ""
 		if image != "" {
 			if inspected, inspectErr := imageStore.Inspect(image); inspectErr == nil {
-				imageID = "sha256:" + inspected.Digest
+				imageID = dockerImageID(inspected.Digest)
 			}
 		}
 		command := strings.Join(record.Command, " ")
@@ -521,6 +528,11 @@ func (s *Server) handleContainerLogs(writer http.ResponseWriter, request *http.R
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
+	follow, err := boolQuery(request, "follow")
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
 	if !stdout && !stderr {
 		write(writer, http.StatusOK, "application/vnd.docker.raw-stream", nil)
 		return
@@ -546,8 +558,7 @@ func (s *Server) handleContainerLogs(writer http.ResponseWriter, request *http.R
 			return
 		}
 	}
-	follow, err := boolQuery(request, "follow")
-	if err != nil || !follow {
+	if !follow {
 		return
 	}
 	flusher, ok := writer.(http.Flusher)
@@ -710,7 +721,7 @@ func (s *Server) handleImages(writer http.ResponseWriter) {
 	result := make([]map[string]any, 0, len(images))
 	for _, image := range images {
 		result = append(result, map[string]any{
-			"Id": "sha256:" + image.Digest, "ParentId": "", "RepoTags": []string{image.Reference},
+			"Id": dockerImageID(image.Digest), "ParentId": "", "RepoTags": []string{image.Reference},
 			"RepoDigests": []string{}, "Created": image.Created.Unix(), "Size": image.LayerBytes,
 			"SharedSize": -1, "Containers": containersByImage[image.Reference], "Labels": map[string]string{},
 			"Architecture": image.Arch, "Os": image.OS, "Variant": image.Variant,
@@ -720,15 +731,29 @@ func (s *Server) handleImages(writer http.ResponseWriter) {
 }
 
 func (s *Server) handleEvents(writer http.ResponseWriter, request *http.Request) {
+	since, err := parseTimeQuery(request.URL.Query().Get("since"))
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("invalid since timestamp: %w", err))
+		return
+	}
+	until, err := parseTimeQuery(request.URL.Query().Get("until"))
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("invalid until timestamp: %w", err))
+		return
+	}
+	filters, err := parseFilters(request.URL.Query().Get("filters"))
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	events, err := state.Events(0)
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err)
+		return
+	}
 	flusher, canFlush := writer.(http.Flusher)
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(http.StatusOK)
-	events, err := state.Events(0)
-	if err != nil {
-		return
-	}
-	since, _ := parseTimeQuery(request.URL.Query().Get("since"))
-	until, _ := parseTimeQuery(request.URL.Query().Get("until"))
 	offset := 0
 	send := func() bool {
 		if offset > len(events) {
@@ -742,6 +767,9 @@ func (s *Server) handleEvents(writer http.ResponseWriter, request *http.Request)
 			}
 			if !until.IsZero() && event.Time.After(until) {
 				return false
+			}
+			if !matchesEventFilters(event, filters) {
+				continue
 			}
 			payload := map[string]any{
 				"Type": "container", "Action": dockerEventAction(event.Action),
@@ -775,6 +803,31 @@ func (s *Server) handleEvents(writer http.ResponseWriter, request *http.Request)
 			}
 		}
 	}
+}
+
+func matchesEventFilters(event state.Event, filters map[string][]string) bool {
+	for key, values := range filters {
+		matched := false
+		for _, value := range values {
+			switch key {
+			case "type":
+				matched = value == "container"
+			case "event", "action":
+				matched = value == dockerEventAction(event.Action) || value == event.Action
+			case "container":
+				matched = strings.HasPrefix(event.ID, value) || event.Name == value
+			default:
+				return false
+			}
+			if matched {
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 func dockerEventAction(value string) string {
