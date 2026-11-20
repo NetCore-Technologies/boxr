@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/manit6752025/boxr/internal/container"
+	"github.com/manit6752025/boxr/internal/container"\n\t"gopkg.in/yaml.v3"
 )
 
 func TestLoadComposeYAMLTranslatesSupportedServices(t *testing.T) {
@@ -205,4 +205,121 @@ func containsComposeEnv(values []string, key, want string) bool {
 		}
 	}
 	return false
+}
+
+
+func TestLoadComposeTranslatesExternalVolumesAndExistingBindMounts(t *testing.T) {
+	dir := t.TempDir()
+	bindDir := filepath.Join(dir, "config")
+	if err := os.Mkdir(bindDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bindDir, "app.conf"), []byte("mode=production\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "compose.yaml")
+	contents := `services:
+  api:
+    image: alpine:3.21
+    network_mode: none
+    volumes:
+      - data:/var/lib/data:ro
+      - ./config:/etc/app:ro
+volumes:
+  data:
+    external:
+      name: boxr-data
+`
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load Compose with external volume and bind mount: %v", err)
+	}
+	service := file.Services["api"]
+	if !reflect.DeepEqual(service.Volumes, []VolumeMount{{Name: "boxr-data", Target: "/var/lib/data", ReadOnly: true}}) {
+		t.Fatalf("external volume mounts = %#v", service.Volumes)
+	}
+	if !reflect.DeepEqual(service.Options.BindMounts, []container.BindMount{{
+		Source: bindDir, Target: "/etc/app", ReadOnly: true,
+	}}) {
+		t.Fatalf("host bind mounts = %#v", service.Options.BindMounts)
+	}
+	plan, err := BuildPlan(file)
+	if err != nil {
+		t.Fatalf("BuildPlan(image mounts): %v", err)
+	}
+	if len(plan.Services) != 1 || plan.Services[0].Name != "api" {
+		t.Fatalf("service plan = %#v", plan.Services)
+	}
+}
+
+func TestLoadComposeRejectsUnsafeOrImplicitVolumeSemantics(t *testing.T) {
+	dir := t.TempDir()
+	missingBind := filepath.Join(dir, "does-not-exist")
+	cases := []struct {
+		name     string
+		volumes  string
+		topLevel string
+	}{
+		{
+			name:    "implicit named volume creation",
+			volumes: "volumes: [data:/data]",
+			topLevel: "volumes:\n  data: {}\n",
+		},
+		{
+			name:    "undeclared named volume",
+			volumes: "volumes: [data:/data]",
+		},
+		{
+			name:    "unsupported propagation mode",
+			volumes: "volumes: [./config:/data:ro,z]",
+		},
+		{
+			name:    "long syntax",
+			volumes: "volumes:\n      - type: volume\n        source: data\n        target: /data\n",
+			topLevel: "volumes:\n  data:\n    external: true\n",
+		},
+		{
+			name:    "missing bind source",
+			volumes: "volumes: [" + missingBind + ":/data]",
+		},
+		{
+			name:    "external volume mapping without name",
+			volumes: "volumes: [data:/data]",
+			topLevel: "volumes:\n  data:\n    external: {}\n",
+		},
+		{
+			name:    "external name conflicts with declared name",
+			volumes: "volumes: [data:/data]",
+			topLevel: "volumes:\n  data:\n    name: boxr-data\n    external:\n      name: another-volume\n",
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			network := "    network_mode: none\n"
+			service := "    image: alpine:3.21\n" + network
+			if test.volumes != "" {
+				service += "    " + strings.ReplaceAll(test.volumes, "\n", "\n    ") + "\n"
+			}
+			contents := "services:\n  api:\n" + service + test.topLevel
+			path := filepath.Join(t.TempDir(), "compose.yaml")
+			if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatal("unsupported volume configuration was accepted")
+			}
+		})
+	}
+}
+
+func TestParseComposeExternalVolumesRejectsInvalidBoxrNames(t *testing.T) {
+	_, err := parseComposeExternalVolumes(map[string]composeVolume{
+		"data": {External: yaml.Node{Kind: yaml.ScalarNode, Value: "true"}, Name: "../host"},
+	})
+	if err == nil {
+		t.Fatal("invalid external Boxr volume name was accepted")
+	}
 }
