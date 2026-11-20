@@ -133,6 +133,13 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.handleImages(writer)
 	case strings.HasPrefix(path, "/images/"):
 		remainder := strings.TrimPrefix(path, "/images/")
+		if strings.HasSuffix(remainder, "/push") {
+			if !requireMethod(writer, request, http.MethodPost) {
+				return
+			}
+			s.handleImagePush(writer, request, strings.TrimSuffix(remainder, "/push"))
+			return
+		}
 		if strings.HasSuffix(remainder, "/json") {
 			if !requireMethod(writer, request, http.MethodGet) {
 				return

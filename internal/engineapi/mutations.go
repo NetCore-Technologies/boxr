@@ -232,6 +232,83 @@ func writeImagePullStreamError(encoder *json.Encoder, err error) {
 	})
 }
 
+func dockerPushReference(rawReference string, query url.Values) (string, error) {
+	reference, err := decodeDockerImageReference(rawReference)
+	if err != nil {
+		return "", err
+	}
+	tag, err := singleQueryValue(query, "tag")
+	if err != nil {
+		return "", err
+	}
+	if _, present := query["tag"]; present && strings.TrimSpace(tag) == "" {
+		return "", fmt.Errorf("tag query parameter must not be empty")
+	}
+	if tag != "" {
+		lastSlash := strings.LastIndex(reference, "/")
+		lastColon := strings.LastIndex(reference, ":")
+		if lastColon > lastSlash {
+			reference = reference[:lastColon]
+		}
+		reference += ":" + tag
+	}
+	if err := imageStore.ValidateReference(reference); err != nil {
+		return "", err
+	}
+	if _, err := registry.ParseReference(reference); err != nil {
+		return "", err
+	}
+	return reference, nil
+}
+
+func (s *Server) handleImagePush(writer http.ResponseWriter, request *http.Request, rawReference string) {
+	reference, err := dockerPushReference(rawReference, request.URL.Query())
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	fallbackCredentials, err := decodeDockerRegistryCredentials(request)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	credentials, err := registry.ResolveCredentials(reference, "", fallbackCredentials)
+	if err != nil {
+		writeError(writer, http.StatusUnauthorized, fmt.Errorf("registry credentials: %w", err))
+		return
+	}
+	bundle, err := imageStore.ExportRegistryBundle(reference)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(writer, http.StatusNotFound, err)
+		} else {
+			writeError(writer, http.StatusConflict, fmt.Errorf("export image for registry push: %w", err))
+		}
+		return
+	}
+	defer bundle.Cleanup()
+
+	writer.Header().Set("Content-Type", "application/json")
+	writer.Header().Set("Cache-Control", "no-cache")
+	writer.WriteHeader(http.StatusOK)
+	encoder := json.NewEncoder(writer)
+	_ = encoder.Encode(map[string]string{"status": "Preparing", "id": reference})
+	if flusher, ok := writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	_ = encoder.Encode(map[string]string{"status": "Pushing", "id": reference})
+	if flusher, ok := writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	if err := registry.Push(request.Context(), reference, registry.PushBundle{
+		Manifest: bundle.Manifest, Config: bundle.Config, LayerPath: bundle.LayerPath,
+	}, credentials); err != nil {
+		writeImagePullStreamError(encoder, fmt.Errorf("push image %s: %w", reference, err))
+		return
+	}
+	_ = encoder.Encode(map[string]string{"status": "Push complete", "id": reference})
+}
+
 func (s *Server) handleImageCreate(writer http.ResponseWriter, request *http.Request) {
 	remoteReference, localReference, platform, err := dockerPullReference(request.URL.Query())
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -308,6 +309,122 @@ func newEngineAPITestRegistry(t *testing.T) (*httptest.Server, string) {
 	t.Cleanup(server.Close)
 	registryHost := strings.TrimPrefix(server.URL, "http://")
 	return server, registryHost + "/team/app"
+}
+
+func newEngineAPITestPushRegistry(t *testing.T) (*httptest.Server, string, func() (int, bool)) {
+	t.Helper()
+	username, password := "boxr-push", "registry-push-secret"
+	uploaded := make(map[string][]byte)
+	var publishedManifest []byte
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		expectedAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+password))
+		if request.Header.Get("Authorization") != expectedAuth {
+			writer.Header().Set("WWW-Authenticate", fmt.Sprintf("Basic realm=%q", "boxr-push"))
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/v2/team/app/blobs/uploads/":
+			writer.Header().Set("Location", "/v2/team/app/blobs/uploads/session?upload=1")
+			writer.WriteHeader(http.StatusAccepted)
+		case request.Method == http.MethodPut && request.URL.Path == "/v2/team/app/blobs/uploads/session":
+			digest := request.URL.Query().Get("digest")
+			data, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Errorf("read uploaded blob: %v", err)
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			sum := sha256.Sum256(data)
+			actualDigest := "sha256:" + hex.EncodeToString(sum[:])
+			if digest != actualDigest {
+				t.Errorf("uploaded blob digest=%q, want %q", digest, actualDigest)
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			uploaded[digest] = append([]byte(nil), data...)
+			writer.Header().Set("Docker-Content-Digest", digest)
+			writer.WriteHeader(http.StatusCreated)
+		case request.Method == http.MethodPut && request.URL.Path == "/v2/team/app/manifests/v1":
+			data, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Errorf("read published manifest: %v", err)
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			var manifest map[string]any
+			if err := json.Unmarshal(data, &manifest); err != nil {
+				t.Errorf("decode published manifest: %v", err)
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			layers, _ := manifest["layers"].([]any)
+			if len(layers) != 1 {
+				t.Errorf("published manifest layers=%d, want one", len(layers))
+			} else if layer, ok := layers[0].(map[string]any); !ok || layer["mediaType"] != "application/vnd.oci.image.layer.v1.tar+gzip" {
+				t.Errorf("published layer descriptor=%#v", layers[0])
+			}
+			publishedManifest = append([]byte(nil), data...)
+			sum := sha256.Sum256(data)
+			writer.Header().Set("Docker-Content-Digest", "sha256:"+hex.EncodeToString(sum[:]))
+			writer.WriteHeader(http.StatusCreated)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	host := strings.TrimPrefix(server.URL, "http://")
+	check := func() (int, bool) { return len(uploaded), len(publishedManifest) > 0 }
+	return server, host, check
+}
+
+func TestEngineAPIImagePushPublishesVerifiedOCIImageWithDockerAuth(t *testing.T) {
+	server := setupEngineAPITest(t)
+	registryServer, registryHost, check := newEngineAPITestPushRegistry(t)
+	reference := registryHost + "/team/app:v1"
+	importEngineAPITestImage(t, reference)
+
+	authConfig, err := json.Marshal(map[string]string{
+		"username": "boxr-push", "password": "registry-push-secret",
+		"serveraddress": registryServer.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost,
+		"/v1.45/images/"+registryHost+"/team/app/push?tag=v1", nil)
+	request.Header.Set("X-Registry-Auth", base64.RawURLEncoding.EncodeToString(authConfig))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("image push status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "Push complete") {
+		t.Fatalf("image push progress stream = %s", response.Body.String())
+	}
+	uploadedCount, manifestPublished := check()
+	if uploadedCount != 2 || !manifestPublished {
+		t.Fatalf("registry received %d blobs and manifestPublished=%t; want 2 blobs and a manifest", uploadedCount, manifestPublished)
+	}
+}
+
+func TestEngineAPIImagePushRejectsMissingImagesAndMalformedQueries(t *testing.T) {
+	server := setupEngineAPITest(t)
+	response := engineAPIRequest(server, http.MethodPost, "/images/registry.example/team/app/push")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("push missing image status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = engineAPIRequest(server, http.MethodPost, "/images/registry.example/team/app/push?tag=")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("push empty tag status=%d body=%s", response.Code, response.Body.String())
+	}
+	request := httptest.NewRequest(http.MethodPost, "/images/registry.example/team/app/push", nil)
+	request.Header.Set("X-Registry-Auth", "not-base64!")
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("push invalid registry auth status=%d body=%s", response.Code, response.Body.String())
+	}
 }
 
 func TestEngineAPIImageCreatePullsAuthenticatedOCIImage(t *testing.T) {
