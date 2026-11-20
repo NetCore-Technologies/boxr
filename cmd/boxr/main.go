@@ -1131,12 +1131,12 @@ type pruneCandidate struct {
 }
 
 type pruneReport struct {
-	DryRun    bool             `json:"dryRun"`
-	OlderThan time.Duration    `json:"olderThan"`
-	Before    time.Time        `json:"before"`
-	Count     int              `json:"count"`
+	DryRun     bool             `json:"dryRun"`
+	OlderThan  time.Duration    `json:"olderThan"`
+	Before     time.Time        `json:"before"`
+	Count      int              `json:"count"`
 	Candidates []pruneCandidate `json:"candidates"`
-	Removed   int              `json:"removed,omitempty"`
+	Removed    int              `json:"removed,omitempty"`
 }
 
 func runPrune(args []string, stdout, stderr io.Writer) int {
@@ -2943,10 +2943,10 @@ func runVolume(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		report := volumePruneReport{
-			DryRun: *dryRun,
+			DryRun:     *dryRun,
 			Candidates: make([]volumePruneCandidate, 0),
-			InUse: make([]volumePruneBlocked, 0),
-			Removed: make([]string, 0),
+			InUse:      make([]volumePruneBlocked, 0),
+			Removed:    make([]string, 0),
 		}
 		for _, item := range items {
 			if err := ensureVolumeUnused(item.Path); err != nil {
@@ -2994,11 +2994,11 @@ type volumePruneBlocked struct {
 }
 
 type volumePruneReport struct {
-	DryRun      bool                  `json:"dryRun"`
-	Candidates  []volumePruneCandidate `json:"candidates"`
-	InUse       []volumePruneBlocked  `json:"inUse"`
-	Removed     []string              `json:"removed,omitempty"`
-	RemovedCount int                  `json:"removedCount"`
+	DryRun       bool                   `json:"dryRun"`
+	Candidates   []volumePruneCandidate `json:"candidates"`
+	InUse        []volumePruneBlocked   `json:"inUse"`
+	Removed      []string               `json:"removed,omitempty"`
+	RemovedCount int                    `json:"removedCount"`
 }
 
 func parseLabels(values []string) (map[string]string, error) {
