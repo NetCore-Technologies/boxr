@@ -25,7 +25,7 @@ It is an early-stage runtime and **not a hardened security boundary or Docker re
 - **Filesystem:** optional chroot rootfs, private mount propagation, read-only rootfs, proc, recursive bind mounts, read-only bind mounts, bounded tmpfs mounts and optional persistent OverlayFS writable layers (`--overlay-dir`).
 - **Security controls:** capability drops, `no_new_privileges`, and an opt-in architecture-guarded seccomp baseline denylist. These are defense-in-depth controls, not a sandbox guarantee.
 - **cgroup v2:** memory max/high/low/min/swap, CPU quota/weight, I/O weight, PID limits and group OOM policy. The blocked helper is attached before workload execution.
-- **Configuration:** versioned JSON run files, repeatable environment overrides, env files, labels and named containers.
+- **Configuration and deployment planning:** versioned JSON run files plus strict multi-service deployment manifests, dependency validation and deterministic, secret-redacted plans.
 - **Local lifecycle:** persistent records, `ps`, `inspect`, `stats`, `events`, `logs` (tail/follow), `stop` (graceful TERM then KILL), `kill`, `wait`, `rm`, automatic record removal and age-based pruning.
 - **Persistent storage:** named, owner-private volumes with labels, name/label filtering, inspection, listing, safe removal, usage protection, filtered pruning, gzip-tar export and `--volume NAME:/PATH[:ro|rw]` mounts (requires `--rootfs`). OverlayFS upper/work data can also persist between runs.
 - **Rootfs workflows:** pack/unpack gzip-tar archives, inspect and verify rootfs, deterministic SHA-256 tree digest and directory diff.
@@ -249,6 +249,19 @@ boxr image prune --force
 ```
 
 The store defaults to `$XDG_DATA_HOME/boxr/images` or `~/.local/share/boxr/images`; set `BOXR_IMAGE_DIR` (or `BOXR_DATA_DIR`) to override it. Registry credentials are read from `BOXR_REGISTRY_USERNAME` and `BOXR_REGISTRY_PASSWORD`; do not put passwords on the command line. `image push [--authfile PATH] LOCAL:TAG [REMOTE:TAG]` publishes a local image in Boxr's canonical single-rootfs-layer format and `image pull [--platform linux/ARCH[/VARIANT]] [--authfile PATH] REMOTE[:TAG|@sha256:DIGEST]` fetches supported schema-2 OCI or Docker images, including multi-layer images (the default platform is Linux on the host architecture). Selected OS, architecture and variant metadata are preserved in the local image config, including when pulling a foreign architecture. Docker Hub is the default registry; use a registry-qualified name for GHCR or a private registry. Immutable digest pulls are assigned a deterministic local tag. `image rm` removes a tag without deleting shared blobs. `image verify` checks the complete image descriptor graph and compressed/uncompressed layer digests. `image audit [--json] [--strict] NAME:TAG` combines full integrity verification with a bounded rootfs security scan; its report includes manifest/config/layer digests, platform metadata and filesystem findings. The verified layer is snapshotted while the image-store lock is held before scanning, so concurrent pruning cannot invalidate the audited input. `image du` audits every blob against its content-addressed filename and reports unique, reachable and reclaimable storage. `image prune` requires an explicit `--dry-run` or `--force`; the latter deletes unreferenced content-addressed blobs. `run --dry-run` validates runtime options and prints a redacted plan; environment values, label values and raw arguments are not emitted, and no container record is created.
+
+## Multi-service deployment planning
+
+Create and validate a declarative deployment before starting any workload:
+
+```sh
+boxr deploy example > boxr.deploy.json
+boxr deploy validate boxr.deploy.json
+boxr deploy plan boxr.deploy.json
+boxr deploy plan --json boxr.deploy.json
+```
+
+Deployment manifests define named services, each service's command and existing Boxr container options, and its `dependsOn` services. Boxr rejects missing dependencies, duplicate edges, invalid run options and cycles, then produces a stable dependency-first order. JSON plans omit command contents, environment values, labels and host paths. This milestone is a validated planner only: it does not start, supervise, network, or stop services; use `boxr run` for execution. Managed multi-service lifecycle and networking remain separate runtime work.
 
 ## Run configuration
 

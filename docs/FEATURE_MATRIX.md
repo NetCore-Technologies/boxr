@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 556 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 567 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -562,3 +562,14 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 554. per-layer uncompressed rootfs diff_id verification
 555. ordered multi-layer registry filesystem application
 556. registry layer whiteout and opaque-directory semantics
+557. versioned multi-service deployment manifests
+558. strict bounded deployment manifest loading
+559. deployment service and stack name validation
+560. per-service command and runtime option validation
+561. deployment dependency reference validation
+562. duplicate and self-dependency rejection
+563. deployment dependency cycle detection
+564. deterministic topological deployment ordering
+565. deployment plan service resource summaries
+566. secret-redacted JSON deployment plans
+567. deployment plan example and validation commands

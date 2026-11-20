@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/manit6752025/boxr/internal/config"
+	"github.com/manit6752025/boxr/internal/deploy"
 	"github.com/manit6752025/boxr/internal/container"
 	imageStore "github.com/manit6752025/boxr/internal/image"
 	"github.com/manit6752025/boxr/internal/registry"
@@ -87,6 +88,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runCompletion(args[1:], stdout, stderr)
 	case "config":
 		return runConfig(args[1:], stdout, stderr)
+	case "deploy":
+		return runDeploy(args[1:], stdout, stderr)
 	case "ps":
 		return runPS(args[1:], stdout, stderr)
 	case "stop":
@@ -1445,6 +1448,9 @@ Usage:
   boxr image prune [--dry-run|--force] [--json]
   boxr config validate FILE.json
   boxr config example
+  boxr deploy validate FILE.json
+  boxr deploy plan [--json] FILE.json
+  boxr deploy example
   boxr features [--json]
   boxr completion bash|zsh|fish|powershell
   boxr help
@@ -2518,6 +2524,17 @@ var implementedFeatures = []string{
 	"per-layer uncompressed rootfs diff_id verification",
 	"ordered multi-layer registry filesystem application",
 	"registry layer whiteout and opaque-directory semantics",
+	"versioned multi-service deployment manifests",
+	"strict bounded deployment manifest loading",
+	"deployment service and stack name validation",
+	"per-service command and runtime option validation",
+	"deployment dependency reference validation",
+	"duplicate and self-dependency rejection",
+	"deployment dependency cycle detection",
+	"deterministic topological deployment ordering",
+	"deployment plan service resource summaries",
+	"secret-redacted JSON deployment plans",
+	"deployment plan example and validation commands",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -2680,6 +2697,73 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 		return 0
 	default:
 		fmt.Fprintf(stderr, "boxr config: unknown action %q\n", args[0])
+		return 2
+	}
+}
+
+ 
+func runDeploy(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "Usage: boxr deploy validate FILE.json | plan [--json] FILE.json | example")
+		return 2
+	}
+	switch args[0] {
+	case "example":
+		if len(args) != 1 {
+			fmt.Fprintln(stderr, "Usage: boxr deploy example")
+			return 2
+		}
+		fmt.Fprint(stdout, deploy.Example())
+		return 0
+	case "validate", "plan":
+		action := args[0]
+		flags := flag.NewFlagSet("deploy "+action, flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		jsonOutput := flags.Bool("json", false, "write a secret-redacted JSON plan")
+		if err := flags.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if flags.NArg() != 1 {
+			fmt.Fprintf(stderr, "Usage: boxr deploy %s [--json] FILE.json\n", action)
+			return 2
+		}
+		file, err := deploy.Load(flags.Arg(0))
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr deploy: %v\n", err)
+			return 1
+		}
+		plan, err := deploy.BuildPlan(file)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr deploy: %v\n", err)
+			return 1
+		}
+		if *jsonOutput {
+			return writeJSON(stdout, plan, stderr, "boxr deploy")
+		}
+		if action == "validate" {
+			fmt.Fprintf(stdout, "valid Boxr deployment v%d (%d services)\n", plan.Version, len(plan.Services))
+			fmt.Fprintf(stdout, "execution order: %s\n", strings.Join(plan.ExecutionOrder, " -> "))
+			return 0
+		}
+		fmt.Fprintf(stdout, "Deployment: %s\nServices: %d\nExecution order: %s\n\n", plan.Name, len(plan.Services), strings.Join(plan.ExecutionOrder, " -> "))
+		fmt.Fprintln(stdout, "SERVICE\tDEPENDS ON\tNETWORK\tSECURITY\tROOTFS")
+		for _, service := range plan.Services {
+			rootfsConfigured := "no"
+			if service.RootFSConfigured {
+				rootfsConfigured = "yes"
+			}
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n",
+				service.Name,
+				strings.Join(service.DependsOn, ","),
+				service.NetworkMode,
+				service.SecurityProfile,
+				rootfsConfigured,
+			)
+		}
+		fmt.Fprintln(stdout, "\nPlan only: no container was created and no process was started.")
+		return 0
+	default:
+		fmt.Fprintf(stderr, "boxr deploy: unknown action %q\n", args[0])
 		return 2
 	}
 }

@@ -449,6 +449,63 @@ func TestConfigExampleCommandAndCompletion(t *testing.T) {
 	}
 }
 
+func TestDeployExamplePlanAndValidationCommands(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "deployment.json")
+	contents := `{
+		"version": 1,
+		"name": "test-stack",
+		"services": {
+			"api": {
+				"command": ["/bin/sh", "-c", "echo private-command"],
+				"options": {"networkMode": "none", "env": ["TOKEN=private-env"]},
+				"dependsOn": ["database"]
+			},
+			"database": {
+				"command": ["/bin/true"],
+				"options": {}
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"deploy", "validate", path}, &out, &errOut); code != 0 {
+		t.Fatalf("deploy validate: code=%d err=%q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "database -> api") {
+		t.Fatalf("validate output lacks dependency order: %q", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"deploy", "plan", "--json", path}, &out, &errOut); code != 0 {
+		t.Fatalf("deploy plan --json: code=%d err=%q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"executionOrder"`) || strings.Contains(out.String(), "private-command") || strings.Contains(out.String(), "private-env") {
+		t.Fatalf("JSON plan is missing ordering or leaked secrets: %q", out.String())
+	}
+	var plan struct {
+		ExecutionOrder []string `json:"executionOrder"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil || !reflect.DeepEqual(plan.ExecutionOrder, []string{"database", "api"}) {
+		t.Fatalf("invalid plan JSON: %#v, error=%v", plan, err)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"deploy", "example"}, &out, &errOut); code != 0 {
+		t.Fatalf("deploy example: code=%d err=%q", code, errOut.String())
+	}
+	example := filepath.Join(t.TempDir(), "example.json")
+	if err := os.WriteFile(example, out.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if code := run([]string{"deploy", "validate", example}, &out, &errOut); code != 0 {
+		t.Fatalf("generated deployment example did not validate: %q", errOut.String())
+	}
+}
+
 func TestVersionJSONOutput(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run([]string{"version", "--json"}, &out, &errOut); code != 0 {
