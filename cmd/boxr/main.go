@@ -3327,6 +3327,7 @@ var implementedFeatures = []string{
 	"Engine API pushes verified local single-layer OCI images using Docker X-Registry-Auth and registry upload verification",
 	"Engine API creates Docker image tag aliases from verified OCI content and protects tags referenced by containers",
 	"top-level pull command reuses verified OCI and Docker registry image downloads",
+	"top-level push command reuses verified OCI and Docker registry image uploads",
 	"native create command records a verified image-backed container without starting it",
 	"native start command launches a created image-backed container through the detached supervisor",
 	"native start command restarts stopped image-backed containers through the detached supervisor"
