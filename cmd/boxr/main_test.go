@@ -3777,3 +3777,31 @@ func TestRemoveCanDeleteCreatedContainersButStillProtectsRunningOnes(t *testing.
 		t.Fatalf("clean up completed test record: %v", err)
 	}
 }
+
+
+func TestRemoveForceCancelsPendingRestartAndDeletesRecord(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+	record, err := state.Create("force-remove", []string{"/bin/true"}, container.Options{
+		RestartPolicy: "always",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatalf("start test record: %v", err)
+	}
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatalf("finish test record: %v", err)
+	}
+	if err := state.PrepareRestart(record.ID); err != nil {
+		t.Fatalf("prepare pending restart: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"container", "rm", "--force", record.ID}, &stdout, &stderr); code != 0 {
+		t.Fatalf("forced remove returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := state.Get(record.ID); err == nil {
+		t.Fatal("container remains after forced removal")
+	}
+}
