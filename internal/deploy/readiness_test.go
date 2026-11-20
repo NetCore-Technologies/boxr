@@ -2,9 +2,11 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -137,3 +139,116 @@ func TestReadinessProbeDefaultsAreBounded(t *testing.T) {
 		t.Fatalf("WaitForReadiness error = %v, want context.DeadlineExceeded", err)
 	}
 }
+
+func TestHealthcheckFailsAfterConsecutiveUnhealthyChecks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	err := MonitorHealth(context.Background(), &Healthcheck{
+		Probe:      ReadinessProbe{HTTPURL: server.URL + "/healthz", TimeoutMS: 100},
+		IntervalMS: 10,
+		Retries:    2,
+	})
+	if err == nil || !strings.Contains(err.Error(), "2 consecutive failure(s)") {
+		t.Fatalf("MonitorHealth() error = %v, want two consecutive healthcheck failures", err)
+	}
+}
+
+func TestHealthcheckSuccessResetsConsecutiveFailureCount(t *testing.T) {
+	var requests atomic.Int32
+	reachedFour := make(chan struct{}, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		attempt := requests.Add(1)
+		reachedFour <- struct{}{}
+		if attempt == 1 || attempt == 3 {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- MonitorHealth(ctx, &Healthcheck{
+			Probe:      ReadinessProbe{HTTPURL: server.URL + "/healthz", TimeoutMS: 100},
+			IntervalMS: 10,
+			Retries:    2,
+		})
+	}()
+	for count := 0; count < 4; count++ {
+		select {
+		case <-reachedFour:
+		case err := <-result:
+			cancel()
+			t.Fatalf("healthcheck stopped before four probes; success should reset failures: %v", err)
+		case <-time.After(time.Second):
+			cancel()
+			t.Fatal("healthcheck did not perform four probes")
+		}
+	}
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("MonitorHealth() after cancellation = %v, want context.Canceled", err)
+	}
+}
+
+func TestHealthcheckStartPeriodDefersFirstProbe(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- MonitorHealth(ctx, &Healthcheck{
+			Probe:         ReadinessProbe{HTTPURL: server.URL},
+			IntervalMS:    10,
+			Retries:       2,
+			StartPeriodMS: 250,
+		})
+	}()
+	time.Sleep(25 * time.Millisecond)
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("MonitorHealth() after start-period cancellation = %v, want context.Canceled", err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("healthcheck made %d requests during its start period, want 0", got)
+	}
+}
+
+func TestHealthcheckValidatesItsOwnTimingAndRetryBudget(t *testing.T) {
+	base := Healthcheck{Probe: ReadinessProbe{TCPAddress: "127.0.0.1:8080"}}
+	tests := map[string]Healthcheck{
+		"interval below minimum": {Probe: base.Probe, IntervalMS: 1},
+		"interval above maximum": {Probe: base.Probe, IntervalMS: 60001},
+		"negative retries":       {Probe: base.Probe, Retries: -1},
+		"too many retries":       {Probe: base.Probe, Retries: 11},
+		"negative start period":  {Probe: base.Probe, StartPeriodMS: -1},
+		"long start period":      {Probe: base.Probe, StartPeriodMS: 600001},
+		"probe has multiple attempts": {
+			Probe: ReadinessProbe{TCPAddress: "127.0.0.1:8080", Attempts: 2},
+		},
+		"probe has its own interval": {
+			Probe: ReadinessProbe{TCPAddress: "127.0.0.1:8080", IntervalMS: 100},
+		},
+	}
+	for name, health := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := health.Validate(); err == nil {
+				t.Fatal("invalid healthcheck unexpectedly validated")
+			}
+		})
+	}
+	if err := base.Validate(); err != nil {
+		t.Fatalf("valid healthcheck defaults: %v", err)
+	}
+}
+
