@@ -24,7 +24,7 @@ boxr deploy pull compose.yaml
 boxr deploy up compose.yaml
 ```
 
-The current translator supports literal `image` references, string or array `command`, `environment` maps/lists, relative or absolute `env_file` paths, `depends_on` with `service_started`, `profiles`, `labels`, `working_dir`, `hostname`, and short-form IPv4 TCP/UDP `ports`. Command strings are tokenized with quote handling; they are not run through a shell and Compose variable interpolation is not performed. A service must explicitly select `network_mode: none`, `network_mode: host`, or one pre-created external Boxr bridge network. For the latter, declare an external network in Compose and create it first with `boxr network create`; published ports require that external bridge. The implicit Compose default bridge, multiple networks, network aliases and service-name DNS are not implemented.
+The current translator supports literal `image` references, string or array `command`, `environment` maps/lists, relative or absolute `env_file` paths, `depends_on` with `service_started`, `profiles`, `labels`, `working_dir`, `hostname`, short-form IPv4 TCP/UDP `ports`, external named volumes and existing host bind mounts. Command strings are tokenized with quote handling; they are not run through a shell and Compose variable interpolation is not performed. Named volumes must be declared at the top level with `external: true` (or `external.name`) and must already exist as Boxr-managed volumes; create them with `boxr volume create NAME`. Relative bind paths resolve from the Compose file directory, and bind sources must already exist as a regular file or directory with no symlink components. Only short-form `SOURCE:TARGET[:ro|rw]` mounts are supported. A service must explicitly select `network_mode: none`, `network_mode: host`, or one pre-created external Boxr bridge network. For the latter, declare an external network in Compose and create it first with `boxr network create`; published ports require that external bridge. The implicit Compose default bridge, multiple networks, network aliases and service-name DNS are not implemented.
 
 ```yaml
 name: sample-stack
@@ -49,7 +49,30 @@ networks:
     name: boxr-app
 ```
 
-Before using the example, create `boxr-app` with `boxr network create` and attach any services that must share that bridge to it. Boxr does not yet provide Compose's service DNS, so containers cannot resolve one another by Compose service name. Named volumes, bind mounts in Compose YAML, build contexts, arbitrary healthcheck commands, custom entrypoints, container-name overrides, restart policies, TTY/stdin, privileged mode, and other unimplemented Compose fields are rejected with a diagnostic instead of being silently ignored. Use the JSON manifest format for Boxr-specific rootfs, named-volume and explicit loopback TCP/HTTP healthcheck settings.
+Before using the example, create `boxr-app` with `boxr network create` and attach any services that must share that bridge to it. Boxr does not yet provide Compose's service DNS, so containers cannot resolve one another by Compose service name. Compose-created volumes, volume drivers/options/labels, long-form service mounts, mount propagation flags, build contexts, arbitrary healthcheck commands, custom entrypoints, container-name overrides, restart policies, TTY/stdin, privileged mode, and other unimplemented Compose fields are rejected with a diagnostic instead of being silently ignored. Use the JSON manifest format for Boxr-specific rootfs and explicit loopback TCP/HTTP healthcheck settings.
+
+
+A minimal external-volume and bind-mount example (create the Boxr volume and host directory before running the stack):
+
+```sh
+boxr volume create app-data
+mkdir -p ./config
+boxr deploy validate compose.yaml
+boxr deploy up compose.yaml
+```
+
+```yaml
+services:
+  api:
+    image: ghcr.io/example/api:1.2.3
+    network_mode: none
+    volumes:
+      - app-data:/var/lib/app:rw
+      - ./config:/etc/app:ro
+volumes:
+  app-data:
+    external: true
+```
 
 ## Manifest structure
 
