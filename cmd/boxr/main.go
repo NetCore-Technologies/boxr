@@ -4345,11 +4345,26 @@ func runStop(args []string, stdout, stderr io.Writer) int {
 			failed = true
 			continue
 		}
+		if record.Status == "restarting" {
+			if err := state.RequestStop(record.ID); err != nil {
+				fmt.Fprintf(stderr, "boxr stop: %s: %v\n", record.ID, err)
+				failed = true
+				continue
+			}
+			fmt.Fprintf(stdout, "cancelled pending restart for %s\n", record.ID)
+			continue
+		}
 		if record.Status != "running" {
 			fmt.Fprintf(stdout, "%s is already %s\n", record.ID, record.Status)
 			continue
 		}
+		if err := state.RequestStop(record.ID); err != nil {
+			fmt.Fprintf(stderr, "boxr stop: %s: %v\n", record.ID, err)
+			failed = true
+			continue
+		}
 		if err := state.Signal(record.ID, "TERM"); err != nil {
+			_ = state.CancelStopRequest(record.ID)
 			fmt.Fprintf(stderr, "boxr stop: %s: %v\n", record.ID, err)
 			failed = true
 			continue
@@ -4411,13 +4426,27 @@ func runKill(args []string, stdout, stderr io.Writer) int {
 	failed := false
 	for _, query := range flags.Args() {
 		record, err := state.Get(query)
+		terminating := isTerminatingSignal(*signalName)
+		if err == nil && record.Status == "restarting" && terminating {
+			err = state.RequestStop(record.ID)
+			if err == nil {
+				fmt.Fprintf(stdout, "cancelled pending restart for %s\n", record.ID)
+				continue
+			}
+		}
 		if err == nil && record.Status != "running" {
 			err = fmt.Errorf("container is %s, not running", record.Status)
+		}
+		if err == nil && terminating {
+			err = state.RequestStop(record.ID)
 		}
 		if err == nil {
 			err = state.Signal(record.ID, *signalName)
 		}
 		if err != nil {
+			if record.ID != "" && terminating && record.Status == "running" && record.StopRequested {
+				_ = state.CancelStopRequest(record.ID)
+			}
 			fmt.Fprintf(stderr, "boxr kill: %s: %v\n", query, err)
 			failed = true
 			continue
@@ -4436,6 +4465,15 @@ type waitResult struct {
 	Status    string `json:"status"`
 	ExitCode  *int   `json:"exitCode,omitempty"`
 	WaitedMS  int64  `json:"waitedMs"`
+}
+
+func isTerminatingSignal(value string) bool {
+	switch strings.ToUpper(strings.TrimPrefix(value, "SIG")) {
+	case "HUP", "INT", "QUIT", "TERM", "KILL":
+		return true
+	default:
+		return false
+	}
 }
 
 func runWait(args []string, stdout, stderr io.Writer) int {
