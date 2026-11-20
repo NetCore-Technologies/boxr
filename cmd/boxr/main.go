@@ -1437,6 +1437,7 @@ Usage:
   boxr image verify NAME:TAG
   boxr image audit [--json] [--strict] NAME:TAG
   boxr image du [--json]
+  boxr image du --all [--json] [--filter KEY=VALUE]
   boxr image save NAME:TAG ARCHIVE.tar.gz
   boxr image load ARCHIVE.tar.gz
   boxr image unpack NAME:TAG PATH
@@ -1859,19 +1860,71 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 		}
 		return writeJSON(stdout, item, stderr, "boxr image inspect")
 	case "du":
-		if len(args) > 2 || (len(args) == 2 && args[1] != "--json") {
-			fmt.Fprintln(stderr, "Usage: boxr image du [--json]")
+		flags := flag.NewFlagSet("image du", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		jsonOutput := flags.Bool("json", false, "write usage as JSON")
+		all := flags.Bool("all", false, "list each tagged image's rootfs layer size")
+		var filters envList
+		flags.Var(&filters, "filter", "filter all-image usage by reference, os, arch, variant, digest, or label")
+		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}
-		usage, err := imageStore.Usage()
+		if flags.NArg() != 0 || (!*all && len(filters) != 0) {
+			fmt.Fprintln(stderr, "Usage: boxr image du [--json] | boxr image du --all [--json] [--filter KEY=VALUE]")
+			return 2
+		}
+		storeUsage, err := imageStore.Usage()
 		if err != nil {
 			fmt.Fprintf(stderr, "boxr image du: %v\n", err)
 			return 1
 		}
-		if len(args) == 2 {
-			return writeJSON(stdout, usage, stderr, "boxr image du")
+		if !*all {
+			if *jsonOutput {
+				return writeJSON(stdout, storeUsage, stderr, "boxr image du")
+			}
+			fmt.Fprintf(stdout, "Images: %d\nUnique blobs: %d (%d bytes)\nReachable: %d blobs (%d bytes)\nReclaimable: %d blobs (%d bytes)\n", storeUsage.Images, storeUsage.UniqueBlobs, storeUsage.TotalBytes, storeUsage.ReachableBlobs, storeUsage.ReachableBytes, storeUsage.ReclaimableBlobs, storeUsage.ReclaimableBytes)
+			return 0
 		}
-		fmt.Fprintf(stdout, "Images: %d\nUnique blobs: %d (%d bytes)\nReachable: %d blobs (%d bytes)\nReclaimable: %d blobs (%d bytes)\n", usage.Images, usage.UniqueBlobs, usage.TotalBytes, usage.ReachableBlobs, usage.ReachableBytes, usage.ReclaimableBlobs, usage.ReclaimableBytes)
+		images, err := imageStore.List()
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr image du: %v\n", err)
+			return 1
+		}
+		images, err = filterImageList(images, filters)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr image du: %v\n", err)
+			return 2
+		}
+		report := imageUsageSummary{
+			ImageCount: len(images),
+			Images: make([]imageUsageEntry, 0, len(images)),
+			Store: storeUsage,
+		}
+		for _, item := range images {
+			entry := imageUsageEntry{
+				Reference: item.Reference,
+				Digest: item.Digest,
+				OS: item.OS,
+				Architecture: item.Arch,
+				Variant: item.Variant,
+				LayerBytes: item.LayerBytes,
+			}
+			report.Images = append(report.Images, entry)
+			report.ReferencedLayerBytes += item.LayerBytes
+		}
+		if *jsonOutput {
+			return writeJSON(stdout, report, stderr, "boxr image du")
+		}
+		fmt.Fprintln(stdout, "REFERENCE                         PLATFORM          ROOTFS_LAYER_BYTES")
+		for _, item := range report.Images {
+			platform := item.OS + "/" + item.Arch
+			if item.Variant != "" {
+				platform += "/" + item.Variant
+			}
+			fmt.Fprintf(stdout, "%-34s %-17s %d\n", item.Reference, platform, item.LayerBytes)
+		}
+		fmt.Fprintf(stdout, "Tagged images: %d\nReferenced rootfs layers: %d bytes (shared layers may be counted more than once)\nUnique store blobs: %d bytes\n",
+			report.ImageCount, report.ReferencedLayerBytes, report.Store.TotalBytes)
 		return 0
 	case "sbom":
 		flags := flag.NewFlagSet("image sbom", flag.ContinueOnError)
@@ -2017,6 +2070,22 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "boxr image: unknown action %q\n", args[0])
 		return 2
 	}
+}
+
+type imageUsageEntry struct {
+	Reference    string `json:"reference"`
+	Digest       string `json:"digest"`
+	OS           string `json:"os"`
+	Architecture string `json:"architecture"`
+	Variant      string `json:"variant,omitempty"`
+	LayerBytes   int64  `json:"layerBytes"`
+}
+
+type imageUsageSummary struct {
+	ImageCount            int                     `json:"imageCount"`
+	Images                []imageUsageEntry       `json:"images"`
+	ReferencedLayerBytes  int64                   `json:"referencedLayerBytes"`
+	Store                 imageStore.StoreUsage   `json:"store"`
 }
 
 func filterImageList(items []imageStore.Image, filters []string) ([]imageStore.Image, error) {
@@ -2366,6 +2435,12 @@ var implementedFeatures = []string{
 	"volume du aggregates logical bytes across volumes",
 	"volume du all mode supports name and label filters",
 	"volume du all mode supports JSON summary output",
+	"image du inventories every tagged image",
+	"image du reports per-tag rootfs layer bytes and platform",
+	"image du all mode supports existing image metadata filters",
+	"image du distinguishes referenced layer bytes from unique store bytes",
+	"image du all mode supports JSON output",
+	"image du preserves the existing unique-blob usage report",
 }
 
 func printFeatures(stdout io.Writer) {

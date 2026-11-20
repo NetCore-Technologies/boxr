@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 512 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 518 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -518,3 +518,9 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 510. volume du aggregates logical bytes across volumes
 511. volume du all mode supports name and label filters
 512. volume du all mode supports JSON summary output
+513. image du inventories every tagged image
+514. image du reports per-tag rootfs layer bytes and platform
+515. image du all mode supports existing image metadata filters
+516. image du distinguishes referenced layer bytes from unique store bytes
+517. image du all mode supports JSON output
+518. image du preserves the existing unique-blob usage report

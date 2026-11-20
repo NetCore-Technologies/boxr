@@ -411,3 +411,14 @@ boxr volume du --all --filter label=team=demo --json
 ```
 
 The all-volume view reports per-volume file, directory, symlink and byte counts plus aggregate totals. Name and label filters let scripts target a subset; the original single-volume `boxr volume du NAME` command remains unchanged. See [volume storage usage](docs/volume-usage.md).
+
+
+## Inspect storage by image tag
+
+```bash
+boxr image du --all
+boxr image du --all --json
+boxr image du --all --filter os=linux --filter arch=arm64 --json
+```
+
+The all-image view lists each tag's rootfs layer bytes and platform, alongside the verified store-wide unique-blob totals. Referenced layer bytes are summed per tag, so the same shared layer may appear more than once; use the unique store total for physical blob storage. The original `boxr image du` summary remains unchanged. See [image storage usage](docs/image-usage.md).
