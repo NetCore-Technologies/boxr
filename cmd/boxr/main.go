@@ -168,16 +168,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func runContainer(args []string, stdout, stderr io.Writer) int {
-	forwardedArgs, detached, err := extractDetachedFlag(args)
-	if err != nil {
-		fmt.Fprintf(stderr, "boxr run: %v\n", err)
-		return 2
-	}
-	if detached {
-		return runDetachedContainer(forwardedArgs, stdout, stderr)
-	}
-	args = forwardedArgs
-
+	var detached bool
 	var opts container.Options
 	var memory, memoryHigh, memoryLow, memoryMin, memorySwap string
 	var configPath string
@@ -240,6 +231,8 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 	flags.StringVar(&configPath, "config", configPath, "load versioned JSON run configuration")
 	flags.StringVar(&imageReference, "image", "", "run from a verified local Boxr image (NAME:TAG)")
 	flags.BoolVar(&dryRun, "dry-run", false, "validate and print a redacted execution plan without starting a container")
+	flags.BoolVar(&detached, "detach", false, "run the container in the background with persistent logs")
+	flags.BoolVar(&detached, "d", false, "alias for --detach")
 	flags.StringVar(&opts.Name, "name", opts.Name, "unique local container name")
 	flags.Var(&labels, "label", "container metadata label (repeatable KEY=VALUE)")
 	flags.BoolVar(&opts.AutoRemove, "rm", opts.AutoRemove, "remove the local record after the container exits")
@@ -279,6 +272,10 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
+		return 2
+	}
+	if detached && dryRun {
+		fmt.Fprintln(stderr, "boxr run: --detach cannot be combined with --dry-run")
 		return 2
 	}
 	providedCommand := flags.Args()
@@ -482,6 +479,9 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 		plan := buildRunPlan(commandArgs, opts)
 		plan.ImageReference = imageReference
 		return writeJSON(stdout, plan, stderr, "boxr run --dry-run")
+	}
+	if detached && detachedReadyWriter == nil {
+		return runDetachedContainer(args, stdout, stderr)
 	}
 
 	record, err := state.Create(opts.Name, commandArgs, opts, opts.Labels)
