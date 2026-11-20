@@ -98,6 +98,13 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			s.handleContainerKill(writer, request, strings.TrimSuffix(remainder, "/kill"))
 			return
 		}
+		if strings.HasSuffix(remainder, "/rename") {
+			if !requireMethod(writer, request, http.MethodPost) {
+				return
+			}
+			s.handleContainerRename(writer, request, strings.TrimSuffix(remainder, "/rename"))
+			return
+		}
 		if strings.HasSuffix(remainder, "/restart") {
 			if !requireMethod(writer, request, http.MethodPost) {
 				return
@@ -478,6 +485,37 @@ func (s *Server) handleContainerKill(writer http.ResponseWriter, request *http.R
 	}
 	if err := state.Signal(record.ID, signal); err != nil {
 		writeError(writer, http.StatusConflict, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleContainerRename(writer http.ResponseWriter, request *http.Request, rawID string) {
+	query, err := decodeContainerID(rawID)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	newName, err := singleQueryValue(request.URL.Query(), "name")
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(newName) == "" {
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("query parameter name is required"))
+		return
+	}
+	record, err := state.Get(query)
+	if err != nil {
+		writeError(writer, http.StatusNotFound, err)
+		return
+	}
+	if _, err := state.Rename(record.ID, newName); err != nil {
+		if strings.Contains(err.Error(), "already in use") {
+			writeError(writer, http.StatusConflict, err)
+		} else {
+			writeError(writer, http.StatusBadRequest, err)
+		}
 		return
 	}
 	writer.WriteHeader(http.StatusNoContent)
