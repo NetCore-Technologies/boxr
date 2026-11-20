@@ -659,7 +659,6 @@ func TestResolveDeploymentImageReferenceFindsCanonicalDockerHubAlias(t *testing.
 	}
 }
 
-
 func TestResolveDeploymentImageReferenceRejectsWrongCachedPlatform(t *testing.T) {
 	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
 	root := t.TempDir()
@@ -719,7 +718,6 @@ func TestDeploymentReadinessRejectsUnknownProcessService(t *testing.T) {
 		t.Fatalf("expected unknown service error, got %v", err)
 	}
 }
-
 
 func TestDeployWaitRequiresAllServicesAndRedactsRuntimeDetails(t *testing.T) {
 	t.Setenv("BOXR_STATE_DIR", t.TempDir())
@@ -781,7 +779,7 @@ func TestDeployWaitRequiresAllServicesAndRedactsRuntimeDetails(t *testing.T) {
 func TestDeployWaitFailsWhenServiceExitsBeforeRunningAndTimesOut(t *testing.T) {
 	t.Setenv("BOXR_STATE_DIR", t.TempDir())
 	record, err := state.Create("wait-failed", []string{"/bin/false"}, container.Options{}, map[string]string{
-		deploy.StackLabel: "wait-failure-stack",
+		deploy.StackLabel:   "wait-failure-stack",
 		deploy.ServiceLabel: "worker",
 	})
 	if err != nil {
@@ -800,7 +798,7 @@ func TestDeployWaitFailsWhenServiceExitsBeforeRunningAndTimesOut(t *testing.T) {
 
 	t.Setenv("BOXR_STATE_DIR", t.TempDir())
 	_, err = state.Create("not-started", []string{"/bin/true"}, container.Options{}, map[string]string{
-		deploy.StackLabel: "wait-timeout-stack",
+		deploy.StackLabel:   "wait-timeout-stack",
 		deploy.ServiceLabel: "pending",
 	})
 	if err != nil {
@@ -824,7 +822,6 @@ func TestDeploymentWaitConditionHandlesEmptyStacksAndInvalidStates(t *testing.T)
 		t.Fatal("invalid wait condition unexpectedly accepted")
 	}
 }
-
 
 func TestDeployLogsPrefixesServicesAndFiltersByName(t *testing.T) {
 	t.Setenv("BOXR_STATE_DIR", t.TempDir())
@@ -931,7 +928,7 @@ func TestDeployLogsFollowDrainsFinalServiceOutput(t *testing.T) {
 func TestDeployLogsFollowWaitsForCreatedServiceToStart(t *testing.T) {
 	t.Setenv("BOXR_STATE_DIR", t.TempDir())
 	record, err := state.Create("logs-created-api", []string{"/bin/service"}, container.Options{}, map[string]string{
-		deploy.StackLabel: "logs-created-stack",
+		deploy.StackLabel:   "logs-created-stack",
 		deploy.ServiceLabel: "api",
 	})
 	if err != nil {
