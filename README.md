@@ -305,6 +305,7 @@ Create a container from an image already verified in the local store, then start
 
 ```bash
 sudo boxr create --name alpine-shell alpine:latest /bin/sh
+sudo boxr run alpine:latest /bin/sh   # positional local-image run form
 sudo boxr ps --all
 sudo boxr start alpine-shell
 sudo boxr restart --time 10s alpine-shell
