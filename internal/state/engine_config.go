@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"syscall"
 )
 
 const maxEngineConfigBytes = 1 << 20
@@ -143,8 +142,7 @@ func engineConfigDirectoryLocked() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || !ok || stat.Uid != uint32(os.Getuid()) || info.Mode().Perm()&0077 != 0 {
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
 		return "", fmt.Errorf("Engine API configuration directory must be a private directory owned by the current user")
 	}
 	return directory, nil
