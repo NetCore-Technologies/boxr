@@ -1455,6 +1455,7 @@ Usage:
   boxr deploy plan [--profile NAME] [--json] FILE.json
   boxr deploy pull [--profile NAME] [--platform linux/ARCH[/VARIANT]] [--authfile PATH] FILE.json
   boxr deploy up [--profile NAME] [--dry-run] FILE.json
+  boxr deploy profiles [--json] FILE.json
   boxr deploy ps [--json] STACK
   boxr deploy logs [--tail 100] [--follow] STACK [SERVICE]
   boxr deploy wait [--condition running|stopped] [--timeout 30s] [--interval 100ms] [--json] STACK
@@ -2610,6 +2611,12 @@ var implementedFeatures = []string{
 	"always-enabled services appear separately from opt-in profiles",
 	"services assigned to multiple profiles appear in every matching group",
 	"secret-free JSON and text profile inventory output",
+	"per-service ordered environment file loading in deployments",
+	"deployment environment files override service-inherited values in declaration order",
+	"explicit service environment entries override environment file values",
+	"environment file path traversal and duplicate path rejection",
+	"deployment environment file count and path length bounds",
+	"secret-free environment file metadata in deployment plans",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -3099,6 +3106,19 @@ type deploymentStatus struct {
 
 func deploymentContainerOptions(service deploy.Service) (container.Options, error) {
 	options := service.Options
+	if len(service.EnvFiles) > 0 {
+		fileValues := make([]string, 0)
+		for index, path := range service.EnvFiles {
+			entries, err := readEnvFile(path)
+			if err != nil {
+				return container.Options{}, fmt.Errorf("environment file %d could not be read: %w", index+1, err)
+			}
+			fileValues = append(fileValues, entries...)
+		}
+		// Manifest options are explicit overrides and take precedence over
+		// values loaded from the service's environment files.
+		options.Env = mergeEnvValues(fileValues, options.Env)
+	}
 	for index, mount := range service.Volumes {
 		managed, err := volume.Get(mount.Name)
 		if err != nil {
