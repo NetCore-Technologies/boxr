@@ -4,11 +4,9 @@
 package engineapi
 
 import (
-	"bufio"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -813,5 +811,3 @@ func write(writer http.ResponseWriter, status int, contentType string, data []by
 	}
 }
 
-var _ = bufio.ErrInvalidUnreadByte
-var _ = errors.Is
