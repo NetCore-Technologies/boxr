@@ -855,10 +855,11 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 846. container namespace exposes Docker-style lifecycle subcommands through the native verified Boxr operations
 847. native rm safely removes created containers without weakening running-container protection
 848. native rm --force stops running containers or cancels pending restarts before safe removal
-849. Engine API DELETE force true delegates to native safe forced removal for running or restarting containers
-850. native create command records a verified image-backed container without starting it
-851. native start command launches a created image-backed container through the detached supervisor
-852. native start command restarts stopped image-backed containers through the detached supervisor
-853. native restart command stops then starts an image-backed container with a bounded graceful timeout
-854. Engine API start endpoint restarts stopped image-backed containers through the native detached supervisor
-855. Engine API restart endpoint performs a bounded graceful stop and launches the same saved container again
+849. native run accepts positional verified local image references while preserving ordinary command execution
+850. Engine API DELETE force true delegates to native safe forced removal for running or restarting containers
+851. native create command records a verified image-backed container without starting it
+852. native start command launches a created image-backed container through the detached supervisor
+853. native start command restarts stopped image-backed containers through the detached supervisor
+854. native restart command stops then starts an image-backed container with a bounded graceful timeout
+855. Engine API start endpoint restarts stopped image-backed containers through the native detached supervisor
+856. Engine API restart endpoint performs a bounded graceful stop and launches the same saved container again
