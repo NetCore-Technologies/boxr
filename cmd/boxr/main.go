@@ -2754,7 +2754,7 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 
 func runDeploy(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "Usage: boxr deploy validate FILE.json | plan [--json] FILE.json | up [--dry-run] FILE.json | ps [--json] STACK | down [--time 10s] [--remove] STACK | example")
+		fmt.Fprintln(stderr, "Usage: boxr deploy validate FILE.json | plan [--json] FILE.json | pull [--platform ...] [--authfile PATH] FILE.json | up [--dry-run] FILE.json | ps [--json] STACK | logs [--tail N] [--follow] STACK [SERVICE] | wait [--condition running|stopped] STACK | down [--time 10s] [--remove] STACK | example")
 		return 2
 	}
 	switch args[0] {
@@ -3561,7 +3561,7 @@ func runDeploymentLogs(stack, service string, tail int, follow bool, interval ti
 			return 1
 		}
 		offsets[record.ID] = offset
-		if !follow || record.Status != "running" {
+		if !follow || (record.Status != "running" && record.Status != "created") {
 			if err := writer.Flush(); err != nil {
 				fmt.Fprintf(stderr, "boxr deploy logs: flush service %s: %v\n", name, err)
 				return 1
@@ -3609,7 +3609,7 @@ func runDeploymentLogs(stack, service string, tail int, follow bool, interval ti
 				fmt.Fprintf(stderr, "boxr deploy logs: write service %s: %v\n", record.Labels[deploy.ServiceLabel], err)
 				return 1
 			}
-			if current.Status == "running" {
+			if current.Status == "running" || current.Status == "created" {
 				active = true
 				continue
 			}

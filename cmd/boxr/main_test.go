@@ -927,6 +927,55 @@ func TestDeployLogsFollowDrainsFinalServiceOutput(t *testing.T) {
 	}
 }
 
+ 
+func TestDeployLogsFollowWaitsForCreatedServiceToStart(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	record, err := state.Create("logs-created-api", []string{"/bin/service"}, container.Options{}, map[string]string{
+		deploy.StackLabel: "logs-created-stack",
+		deploy.ServiceLabel: "api",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type followResult struct {
+		code int
+		out  string
+		err  string
+	}
+	done := make(chan followResult, 1)
+	go func() {
+		var out, errOut bytes.Buffer
+		code := run([]string{"deploy", "logs", "--follow", "--tail", "0", "--interval", "10ms", "logs-created-stack"}, &out, &errOut)
+		done <- followResult{code: code, out: out.String(), err: errOut.String()}
+	}()
+	time.Sleep(25 * time.Millisecond)
+	if err := state.Start(record.ID, 502); err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := state.OpenLog(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := logFile.WriteString("service started\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = logFile.Close()
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-done:
+		if result.code != 0 {
+			t.Fatalf("deploy logs --follow returned %d: %q", result.code, result.err)
+		}
+		if result.out != "[api] service started\n" {
+			t.Fatalf("followed created-service output = %q", result.out)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("deploy logs --follow stopped watching a created service")
+	}
+}
+
 func TestVersionJSONOutput(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run([]string{"version", "--json"}, &out, &errOut); code != 0 {
