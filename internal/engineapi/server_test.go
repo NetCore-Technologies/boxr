@@ -506,6 +506,27 @@ func TestDockerPortBindingsRejectEphemeralAndInvalidProtocols(t *testing.T) {
 	}
 }
 
+func TestWriteMethodErrorForSetsAllowAndJSONError(t *testing.T) {
+	response := httptest.NewRecorder()
+	writeMethodErrorFor(response, http.MethodPost+", "+http.MethodDelete)
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status=%d, want %d", response.Code, http.StatusMethodNotAllowed)
+	}
+	if got := response.Header().Get("Allow"); got != http.MethodPost+", "+http.MethodDelete {
+		t.Fatalf("Allow=%q", got)
+	}
+	if got := response.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type=%q", got)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if body["message"] != "method not allowed" {
+		t.Fatalf("message=%q", body["message"])
+	}
+}
+
 func TestEngineAPIContainerStopRollsBackFailedSignal(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record, err := state.Create("failed-stop-signal-test", []string{"/bin/sleep", "30"}, container.Options{}, nil)
