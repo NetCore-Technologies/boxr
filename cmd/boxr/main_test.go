@@ -3241,3 +3241,60 @@ func TestRunDryRunDescribesRestartPolicyAndDelay(t *testing.T) {
 
 func intPointer(value int) *int { return &value }
 
+func TestRunStopCancelsContainerPendingRestart(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	record, err := state.Create("stop-pending-restart", []string{"/bin/false"}, container.Options{RestartPolicy: "always"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, 5501); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(record.ID, &container.ExitError{Code: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.PrepareRestart(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"stop", record.ID}, &out, &errOut); code != 0 {
+		t.Fatalf("stop pending restart returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	cancelled, err := state.Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != "failed" || !cancelled.StopRequested || !strings.Contains(out.String(), "cancelled pending restart") {
+		t.Fatalf("stop did not cancel restart: record=%+v stdout=%q", cancelled, out.String())
+	}
+}
+
+func TestRunKillTermCancelsContainerPendingRestart(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	record, err := state.Create("kill-pending-restart", []string{"/bin/false"}, container.Options{RestartPolicy: "always"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, 5502); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(record.ID, &container.ExitError{Code: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.PrepareRestart(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"kill", "--signal", "TERM", record.ID}, &out, &errOut); code != 0 {
+		t.Fatalf("kill pending restart returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	cancelled, err := state.Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != "failed" || !cancelled.StopRequested || !strings.Contains(out.String(), "cancelled pending restart") {
+		t.Fatalf("kill did not cancel restart: record=%+v stdout=%q", cancelled, out.String())
+	}
+}
+
+
