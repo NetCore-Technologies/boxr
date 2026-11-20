@@ -1,0 +1,6 @@
+{
+  "name": "boxr",
+  "image": "mcr.microsoft.com/devcontainers/go:1.27-bookworm",
+  "capAdd": ["SYS_ADMIN"],
+  "securityOpt": ["seccomp=unconfined"]
+}

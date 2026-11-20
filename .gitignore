@@ -1,0 +1,14 @@
+# Local binaries and release output
+/boxr
+/dist/
+/build/
+/release-notes.md
+/coverage.out
+/coverage.html
+*.test
+*.out
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
