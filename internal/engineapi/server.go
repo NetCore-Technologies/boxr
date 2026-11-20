@@ -121,6 +121,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		s.handleContainer(writer, request, remainder)
+	case path == "/images/create":
+		if !requireMethod(writer, request, http.MethodPost) {
+			return
+		}
+		s.handleImageCreate(writer, request)
 	case path == "/images/json":
 		if !requireMethod(writer, request, http.MethodGet) {
 			return
@@ -893,10 +898,11 @@ func decodeDockerImageReference(raw string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid image reference encoding")
 	}
-	if err := imageStore.ValidateReference(reference); err != nil {
+	normalized, err := normalizeDockerLocalImageReference(reference)
+	if err != nil {
 		return "", err
 	}
-	return reference, nil
+	return normalized, nil
 }
 
 func dockerImageConfig(config imageStore.ImageRuntimeConfig) map[string]any {

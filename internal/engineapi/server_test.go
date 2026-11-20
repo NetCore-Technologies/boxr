@@ -1,9 +1,14 @@
 package engineapi
 
 import (
+	"archive/tar"
 	"bufio"
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"math"
 	"net/http"
@@ -214,6 +219,163 @@ func TestEventsStreamDockerContainerEventShape(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("events did not include container %s: %s", record.ID, response.Body.String())
+	}
+}
+
+func newEngineAPITestRegistry(t *testing.T) (*httptest.Server, string) {
+	t.Helper()
+	fileData := []byte("pulled OCI image\n")
+	var tarBytes bytes.Buffer
+	tarWriter := tar.NewWriter(&tarBytes)
+	if err := tarWriter.WriteHeader(&tar.Header{Name: "bin/", Typeflag: tar.TypeDir, Mode: 0755}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tarWriter.WriteHeader(&tar.Header{Name: "bin/app", Typeflag: tar.TypeReg, Mode: 0755, Size: int64(len(fileData))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tarWriter.Write(fileData); err != nil {
+		t.Fatal(err)
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var compressed bytes.Buffer
+	gzipWriter := gzip.NewWriter(&compressed)
+	if _, err := gzipWriter.Write(tarBytes.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	layerDigestBytes := sha256.Sum256(compressed.Bytes())
+	layerDigest := "sha256:" + hex.EncodeToString(layerDigestBytes[:])
+	diffIDBytes := sha256.Sum256(tarBytes.Bytes())
+	diffID := "sha256:" + hex.EncodeToString(diffIDBytes[:])
+	configBytes, err := json.Marshal(map[string]any{
+		"os": "linux", "architecture": "amd64",
+		"config": map[string]any{
+			"Env": []string{"PULLED=1"}, "Entrypoint": []string{"/bin/app"},
+			"Cmd": []string{"--serve"}, "WorkingDir": "/srv/pulled",
+			"Labels": map[string]string{"org.example.pull": "verified"},
+		},
+		"rootfs": map[string]any{"type": "layers", "diff_ids": []string{diffID}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configDigestBytes := sha256.Sum256(configBytes)
+	configDigest := "sha256:" + hex.EncodeToString(configDigestBytes[:])
+	manifest, err := json.Marshal(map[string]any{
+		"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+		"config": map[string]any{
+			"mediaType": "application/vnd.oci.image.config.v1+json",
+			"digest": configDigest, "size": len(configBytes),
+		},
+		"layers": []map[string]any{{
+			"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+			"digest": layerDigest, "size": compressed.Len(),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestDigestBytes := sha256.Sum256(manifest)
+	manifestDigest := "sha256:" + hex.EncodeToString(manifestDigestBytes[:])
+	username, password := "boxr-test", "registry-secret"
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Basic "+base64.StdEncoding.EncodeToString([]byte(username+":"+password)) {
+			writer.Header().Set("WWW-Authenticate", fmt.Sprintf("Basic realm=%q", "boxr-test"))
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch request.URL.Path {
+		case "/v2/team/app/manifests/v1":
+			writer.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			writer.Header().Set("Docker-Content-Digest", manifestDigest)
+			_, _ = writer.Write(manifest)
+		case "/v2/team/app/blobs/" + configDigest:
+			writer.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = writer.Write(configBytes)
+		case "/v2/team/app/blobs/" + layerDigest:
+			writer.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = writer.Write(compressed.Bytes())
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	registryHost := strings.TrimPrefix(server.URL, "http://")
+	return server, registryHost + "/team/app"
+}
+
+func TestEngineAPIImageCreatePullsAuthenticatedOCIImage(t *testing.T) {
+	server := setupEngineAPITest(t)
+	registryServer, remoteImage := newEngineAPITestRegistry(t)
+	localReference := remoteImage + ":v1"
+	authConfig, err := json.Marshal(map[string]string{
+		"username": "boxr-test", "password": "registry-secret",
+		"serveraddress": registryServer.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authHeader := base64.RawURLEncoding.EncodeToString(authConfig)
+	target := "/v1.45/images/create?fromImage=" + url.QueryEscape(remoteImage) + "&tag=v1&platform=linux%2Famd64"
+	request := httptest.NewRequest(http.MethodPost, target, nil)
+	request.Header.Set("X-Registry-Auth", authHeader)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("image pull status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "Pull complete") || !strings.Contains(response.Body.String(), "Digest: sha256:") {
+		t.Fatalf("image pull progress stream = %s", response.Body.String())
+	}
+	image, err := imageStore.Inspect(localReference)
+	if err != nil {
+		t.Fatalf("pulled image was not imported: %v", err)
+	}
+	if image.RuntimeConfig.WorkingDir != "/srv/pulled" || len(image.RuntimeConfig.Env) != 1 || image.RuntimeConfig.Env[0] != "PULLED=1" {
+		t.Fatalf("pulled runtime config = %+v", image.RuntimeConfig)
+	}
+	root := filepath.Join(t.TempDir(), "unpacked")
+	if _, err := imageStore.Unpack(localReference, root); err != nil {
+		t.Fatalf("unpack pulled image: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "bin", "app")); err != nil || string(data) != "pulled OCI image\n" {
+		t.Fatalf("pulled image file = %q, error=%v", data, err)
+	}
+	created, err := createContainerRecord("pulled-container", dockerCreateRequest{Image: remoteImage})
+	if err != nil {
+		t.Fatalf("create container from pulled untagged reference: %v", err)
+	}
+	if created.Labels["io.boxr.image"] != localReference || strings.Join(created.Command, " ") != "/bin/app --serve" {
+		t.Fatalf("container created from pull = %+v", created)
+	}
+	if err := state.RemoveCreated(created.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEngineAPIImageCreateRejectsInvalidQueriesAndAuth(t *testing.T) {
+	server := setupEngineAPITest(t)
+	for _, target := range []string{
+		"/images/create",
+		"/images/create?fromImage=not-a-valid-reference%20value",
+		"/images/create?fromImage=example.com/team/app&tag=",
+	} {
+		response := engineAPIRequest(server, http.MethodPost, target)
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("%s: status=%d body=%s", target, response.Code, response.Body.String())
+		}
+	}
+	request := httptest.NewRequest(http.MethodPost, "/images/create?fromImage=example.com/team/app:v1", nil)
+	request.Header.Set("X-Registry-Auth", "not-base64!")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid registry auth status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

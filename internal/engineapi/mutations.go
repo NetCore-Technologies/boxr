@@ -2,6 +2,7 @@ package engineapi
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 	"github.com/manit6752025/boxr/internal/container"
 	imageStore "github.com/manit6752025/boxr/internal/image"
 	boxrnetwork "github.com/manit6752025/boxr/internal/network"
+	"github.com/manit6752025/boxr/internal/registry"
 	"github.com/manit6752025/boxr/internal/state"
 )
 
@@ -77,6 +79,235 @@ type dockerPortBinding struct {
 type dockerRestartPolicyConfig struct {
 	Name              string `json:"Name"`
 	MaximumRetryCount int    `json:"MaximumRetryCount"`
+}
+
+const maxDockerRegistryAuthBytes = 16 << 10
+
+func decodeDockerRegistryCredentials(request *http.Request) (registry.Credentials, error) {
+	header := strings.TrimSpace(request.Header.Get("X-Registry-Auth"))
+	if header == "" {
+		return registry.Credentials{}, nil
+	}
+	if len(header) > maxDockerRegistryAuthBytes {
+		return registry.Credentials{}, fmt.Errorf("X-Registry-Auth exceeds %d bytes", maxDockerRegistryAuthBytes)
+	}
+	var decoded []byte
+	var decodeErr error
+	for _, encoding := range []*base64.Encoding{
+		base64.RawURLEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.StdEncoding,
+	} {
+		decoded, decodeErr = encoding.DecodeString(header)
+		if decodeErr == nil {
+			break
+		}
+	}
+	if decodeErr != nil {
+		return registry.Credentials{}, fmt.Errorf("X-Registry-Auth is not valid base64")
+	}
+	var auth map[string]string
+	decoder := json.NewDecoder(bytes.NewReader(decoded))
+	if err := decoder.Decode(&auth); err != nil {
+		return registry.Credentials{}, fmt.Errorf("decode X-Registry-Auth: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return registry.Credentials{}, fmt.Errorf("X-Registry-Auth must contain one JSON object")
+	}
+	for key := range auth {
+		switch key {
+		case "username", "password", "auth", "identitytoken", "registrytoken", "email", "serveraddress":
+		default:
+			return registry.Credentials{}, fmt.Errorf("unsupported X-Registry-Auth field %q", key)
+		}
+	}
+	var credentials registry.Credentials
+	if encoded := auth["auth"]; encoded != "" {
+		var pair []byte
+		var err error
+		for _, encoding := range []*base64.Encoding{base64.RawStdEncoding, base64.StdEncoding} {
+			pair, err = encoding.DecodeString(encoded)
+			if err == nil {
+				break
+			}
+		}
+		if err != nil {
+			return registry.Credentials{}, fmt.Errorf("X-Registry-Auth auth field is not valid base64")
+		}
+		username, password, ok := strings.Cut(string(pair), ":")
+		if !ok || username == "" {
+			return registry.Credentials{}, fmt.Errorf("X-Registry-Auth auth field must encode username:password")
+		}
+		credentials = registry.Credentials{Username: username, Password: password}
+	}
+	if auth["username"] != "" || auth["password"] != "" {
+		if auth["username"] == "" {
+			return registry.Credentials{}, fmt.Errorf("X-Registry-Auth password requires a username")
+		}
+		explicit := registry.Credentials{Username: auth["username"], Password: auth["password"]}
+		if credentials.Username != "" && credentials != explicit {
+			return registry.Credentials{}, fmt.Errorf("X-Registry-Auth username/password conflicts with auth field")
+		}
+		credentials = explicit
+	}
+	token := auth["identitytoken"]
+	if token == "" {
+		token = auth["registrytoken"]
+	}
+	if token != "" {
+		if credentials.Username != "" || credentials.Password != "" {
+			return registry.Credentials{}, fmt.Errorf("X-Registry-Auth token cannot be combined with username/password")
+		}
+		credentials = registry.Credentials{Username: "oauth2accesstoken", Password: token}
+	}
+	return credentials, nil
+}
+
+func normalizeDockerLocalImageReference(reference string) (string, error) {
+	reference = strings.TrimSpace(reference)
+	if reference == "" || strings.ContainsAny(reference, "\x00\r\n ") || strings.Contains(reference, "@") {
+		return "", fmt.Errorf("image must be a literal tagged image reference")
+	}
+	if err := imageStore.ValidateReference(reference); err == nil {
+		return reference, nil
+	}
+	lastSlash := strings.LastIndex(reference, "/")
+	lastColon := strings.LastIndex(reference, ":")
+	if lastColon <= lastSlash {
+		reference += ":latest"
+	}
+	if err := imageStore.ValidateReference(reference); err != nil {
+		return "", err
+	}
+	return reference, nil
+}
+
+func dockerPullReference(query url.Values) (remoteReference, localReference, platform string, err error) {
+	fromImage, err := singleQueryValue(query, "fromImage")
+	if err != nil {
+		return "", "", "", err
+	}
+	if strings.TrimSpace(fromImage) == "" {
+		return "", "", "", fmt.Errorf("fromImage query parameter is required")
+	}
+	if strings.ContainsAny(fromImage, "\x00\r\n ") || strings.Contains(fromImage, "@") {
+		return "", "", "", fmt.Errorf("fromImage must be a literal tagged image reference; digest pulls are not supported yet")
+	}
+	tag, err := singleQueryValue(query, "tag")
+	if err != nil {
+		return "", "", "", err
+	}
+	if _, present := query["tag"]; present && strings.TrimSpace(tag) == "" {
+		return "", "", "", fmt.Errorf("tag query parameter must not be empty")
+	}
+	remoteReference := fromImage
+	if tag != "" {
+		lastSlash := strings.LastIndex(remoteReference, "/")
+		lastColon := strings.LastIndex(remoteReference, ":")
+		if lastColon > lastSlash {
+			remoteReference = remoteReference[:lastColon]
+		}
+		remoteReference += ":" + tag
+	}
+	localReference, err = normalizeDockerLocalImageReference(remoteReference)
+	if err != nil {
+		return "", "", "", fmt.Errorf("invalid image reference: %w", err)
+	}
+	if _, err := registry.ParseReference(localReference); err != nil {
+		return "", "", "", err
+	}
+	platform, err = singleQueryValue(query, "platform")
+	if err != nil {
+		return "", "", "", err
+	}
+	if strings.ContainsAny(platform, "\x00\r\n ") {
+		return "", "", "", fmt.Errorf("platform must be linux/ARCH[/VARIANT]")
+	}
+	return localReference, localReference, platform, nil
+}
+
+func writeImagePullStreamError(encoder *json.Encoder, err error) {
+	message := err.Error()
+	_ = encoder.Encode(map[string]any{
+		"error": message, "errorDetail": map[string]string{"message": message},
+	})
+}
+
+func (s *Server) handleImageCreate(writer http.ResponseWriter, request *http.Request) {
+	remoteReference, localReference, platform, err := dockerPullReference(request.URL.Query())
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	fallbackCredentials, err := decodeDockerRegistryCredentials(request)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	credentials, err := registry.ResolveCredentials(remoteReference, "", fallbackCredentials)
+	if err != nil {
+		writeError(writer, http.StatusUnauthorized, fmt.Errorf("registry credentials: %w", err))
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	writer.Header().Set("Cache-Control", "no-cache")
+	writer.WriteHeader(http.StatusOK)
+	encoder := json.NewEncoder(writer)
+	_ = encoder.Encode(map[string]string{"status": "Pulling image", "id": remoteReference})
+	if flusher, ok := writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	artifact, err := registry.Pull(request.Context(), remoteReference, platform, credentials)
+	if err != nil {
+		writeImagePullStreamError(encoder, err)
+		return
+	}
+	defer artifact.Cleanup()
+	staging, err := os.MkdirTemp("", "boxr-engine-image-pull-*")
+	if err != nil {
+		writeImagePullStreamError(encoder, fmt.Errorf("create image staging directory: %w", err))
+		return
+	}
+	defer os.RemoveAll(staging)
+	rootPath := filepath.Join(staging, "rootfs")
+	if err := os.Mkdir(rootPath, 0700); err != nil {
+		writeImagePullStreamError(encoder, fmt.Errorf("create image rootfs: %w", err))
+		return
+	}
+	for index, layer := range artifact.Layers {
+		if err := imageStore.ApplyLayerArchive(rootPath, layer.Path); err != nil {
+			writeImagePullStreamError(encoder, fmt.Errorf("apply image layer %d: %w", index+1, err))
+			return
+		}
+	}
+	s.imageMu.Lock()
+	defer s.imageMu.Unlock()
+	records, err := state.List(true)
+	if err != nil {
+		writeImagePullStreamError(encoder, fmt.Errorf("check existing image users: %w", err))
+		return
+	}
+	for _, record := range records {
+		if record.Labels["io.boxr.image"] == localReference {
+			writeImagePullStreamError(encoder, fmt.Errorf("image %q is referenced by container %s; refusing to replace a tag in use", localReference, record.ID))
+			return
+		}
+	}
+	imported, err := imageStore.ImportRootFSWithConfig(
+		rootPath, localReference, artifact.OS, artifact.Architecture, artifact.Variant,
+		imageStore.ImageRuntimeConfig{
+			Env: artifact.RuntimeConfig.Env, Entrypoint: artifact.RuntimeConfig.Entrypoint,
+			Cmd: artifact.RuntimeConfig.Cmd, WorkingDir: artifact.RuntimeConfig.WorkingDir,
+			User: artifact.RuntimeConfig.User, Labels: artifact.RuntimeConfig.Labels,
+		},
+	)
+	if err != nil {
+		writeImagePullStreamError(encoder, fmt.Errorf("import verified registry image: %w", err))
+		return
+	}
+	_ = encoder.Encode(map[string]string{"status": "Pull complete", "id": imported.Reference})
+	_ = encoder.Encode(map[string]string{"status": "Digest: " + artifact.ManifestDigest})
+	_ = encoder.Encode(map[string]string{"status": "Downloaded newer image for " + imported.Reference})
 }
 
 func (s *Server) handleContainerCreate(writer http.ResponseWriter, request *http.Request) {
@@ -139,10 +370,14 @@ func (s *Server) handleContainerCreate(writer http.ResponseWriter, request *http
 func createContainerRecord(name string, input dockerCreateRequest) (state.Record, error) {
 	var empty state.Record
 	if strings.TrimSpace(input.Image) == "" {
-		return empty, fmt.Errorf("Image is required; Engine API image pull is not implemented, so the image must already exist locally")
+		return empty, fmt.Errorf("Image is required; the image must already exist in the local Boxr image store")
 	}
-	if strings.ContainsAny(input.Image, "\x00\r\n") || strings.Contains(input.Image, "$") {
-		return empty, fmt.Errorf("Image must be a literal local image reference")
+	imageReference, err := normalizeDockerLocalImageReference(input.Image)
+	if err != nil || strings.Contains(input.Image, "$") {
+		if err == nil {
+			err = fmt.Errorf("Image must be a literal local image reference")
+		}
+		return empty, err
 	}
 	if input.User != "" {
 		return empty, fmt.Errorf("Config.User is unsupported because image user switching is not implemented")
@@ -165,12 +400,12 @@ func createContainerRecord(name string, input dockerCreateRequest) (state.Record
 	if strings.TrimSpace(name) != "" {
 		name = strings.TrimPrefix(name, "/")
 	}
-	image, err := imageStore.Inspect(input.Image)
+	image, err := imageStore.Inspect(imageReference)
 	if err != nil {
-		return empty, fmt.Errorf("image %q is not present in the local Boxr image store: %w", input.Image, err)
+		return empty, fmt.Errorf("image %q is not present in the local Boxr image store: %w", imageReference, err)
 	}
-	if _, err := imageStore.Verify(input.Image); err != nil {
-		return empty, fmt.Errorf("verify local image %q: %w", input.Image, err)
+	if _, err := imageStore.Verify(imageReference); err != nil {
+		return empty, fmt.Errorf("verify local image %q: %w", imageReference, err)
 	}
 	if image.RuntimeConfig.User != "" {
 		return empty, fmt.Errorf("image declares User=%q, but Boxr image user switching is not implemented", image.RuntimeConfig.User)
@@ -190,7 +425,7 @@ func createContainerRecord(name string, input dockerCreateRequest) (state.Record
 	if _, exists := options.Labels["io.boxr.image"]; exists {
 		return empty, fmt.Errorf("label io.boxr.image is reserved by Boxr")
 	}
-	options.Labels["io.boxr.image"] = input.Image
+	options.Labels["io.boxr.image"] = imageReference
 	if err := options.ApplySecurityProfile(); err != nil {
 		return empty, err
 	}
