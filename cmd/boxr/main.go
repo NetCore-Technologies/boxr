@@ -2721,6 +2721,9 @@ var implementedFeatures = []string{
 	"run config JSON schema describes strict published port mapping objects",
 	"dry-run plans show normalized published port mapping values without starting container",
 	"published ports are accepted only with a named managed bridge network",
+	"deployment manifests validate service published port mappings through container option rules",
+	"deployment service plans expose normalized TCP and UDP published port bindings",
+	"deployment subprocess runs apply and release published port rules through the container lifecycle",
 }
 
 func printFeatures(stdout io.Writer) {
