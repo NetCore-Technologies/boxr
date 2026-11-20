@@ -452,8 +452,8 @@ func TestDockerOptionsRejectsUnsupportedOrImpossibleLimits(t *testing.T) {
 		{name: "negative limit", host: dockerHostConfig{PidsLimit: -1}},
 		{name: "privileged", host: dockerHostConfig{Privileged: true}},
 		{name: "capability add", host: dockerHostConfig{CapAdd: []string{"SYS_ADMIN"}}},
-		{name: "auto remove with restart", host: dockerHostConfig{AutoRemove: true, RestartPolicy: dockerRestartPolicy{Name: "always"}}},
-		{name: "unknown restart mode", host: dockerHostConfig{RestartPolicy: dockerRestartPolicy{Name: "unless-stopped-and-also-maybe"}}},
+		{name: "auto remove with restart", host: dockerHostConfig{AutoRemove: true, RestartPolicy: dockerRestartPolicyConfig{Name: "always"}}},
+		{name: "unknown restart mode", host: dockerHostConfig{RestartPolicy: dockerRestartPolicyConfig{Name: "unless-stopped-and-also-maybe"}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
