@@ -2498,6 +2498,11 @@ var implementedFeatures = []string{
 	"Docker export preserves rootfs diff IDs platform and runtime config",
 	"Docker image layer is rehashed while expanding it for export",
 	"format-selectable image save with the existing OCI format as default",
+	"multi-image Docker save export from a single command",
+	"combine tags with identical Docker image configurations into one manifest entry",
+	"deduplicate shared rootfs layers across Docker image exports",
+	"deterministic ordering of Docker manifest config and layer entries",
+	"enforce Docker export image-count and duplicate-reference limits",
 }
 
 func printFeatures(stdout io.Writer) {
