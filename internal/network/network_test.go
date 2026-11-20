@@ -10,15 +10,20 @@ import (
 )
 
 type fakeRunner struct {
-	calls  []string
-	failAt int
+	calls       []string
+	failAt      int
+	failMessage string
 }
 
 func (runner *fakeRunner) Run(_ context.Context, executable string, args ...string) error {
 	call := executable + " " + strings.Join(args, " ")
 	runner.calls = append(runner.calls, call)
 	if runner.failAt > 0 && len(runner.calls) == runner.failAt {
-		return errors.New("injected command failure")
+		message := runner.failMessage
+		if message == "" {
+			message = "injected command failure"
+		}
+		return errors.New(message)
 	}
 	return nil
 }
@@ -93,6 +98,27 @@ func TestCreateBridgeRejectsInvalidAndOverlappingNetworks(t *testing.T) {
 				t.Fatal("invalid network configuration unexpectedly accepted")
 			}
 		})
+	}
+}
+
+func TestCreateBridgeDoesNotDeleteExistingInterfaceWhenCreateFails(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	runner := &fakeRunner{failAt: 1, failMessage: "RTNETLINK answers: File exists"}
+	if _, err := CreateWithRunner(context.Background(), "collision", CreateOptions{
+		Subnet: "172.30.15.0/24",
+		Bridge: "br-existing",
+	}, runner); err == nil {
+		t.Fatal("bridge interface collision unexpectedly succeeded")
+	}
+	if len(runner.calls) != 1 || !strings.Contains(runner.calls[0], "link add name br-existing") {
+		t.Fatalf("failed bridge create attempted to remove a pre-existing interface: %v", runner.calls)
+	}
+	items, err := List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("failed bridge create was persisted: %+v", items)
 	}
 }
 
@@ -196,6 +222,52 @@ func TestJoinAllocatesConfiguresAndLeaveReleasesAddress(t *testing.T) {
 	}
 }
 
+func TestJoinDoesNotDeletePreExistingVethWhenCreateFails(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	if _, err := CreateWithRunner(context.Background(), "backend", CreateOptions{
+		Subnet: "172.30.45.0/29",
+	}, &fakeRunner{}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{failAt: 1, failMessage: "RTNETLINK answers: File exists"}
+	if _, err := JoinWithRunner(context.Background(), "backend", 2222, "container-collision", runner); err == nil {
+		t.Fatal("veth name collision unexpectedly succeeded")
+	}
+	if len(runner.calls) != 1 || !strings.Contains(runner.calls[0], "link add vbx") {
+		t.Fatalf("veth collision attempted to remove an unrelated interface: %v", runner.calls)
+	}
+	summary, err := Inspect("backend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ContainerCount != 0 {
+		t.Fatalf("veth collision retained an IPAM allocation: %+v", summary)
+	}
+}
+
+func TestLeaveReleasesAllocationWhenVethWasAlreadyRemoved(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	if _, err := CreateWithRunner(context.Background(), "backend", CreateOptions{
+		Subnet: "172.30.46.0/29",
+	}, &fakeRunner{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := JoinWithRunner(context.Background(), "backend", 2222, "container-gone", &fakeRunner{}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{failAt: 1, failMessage: "Cannot find device vbxdeadbeef"}
+	if err := LeaveWithRunner(context.Background(), "backend", "container-gone", runner); err != nil {
+		t.Fatalf("LeaveWithRunner() for a removed veth: %v", err)
+	}
+	summary, err := Inspect("backend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ContainerCount != 0 {
+		t.Fatalf("stale allocation was not released: %+v", summary)
+	}
+}
+
 func TestJoinRollsBackIPAMWhenNamespaceSetupFails(t *testing.T) {
 	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
 	if _, err := CreateWithRunner(context.Background(), "backend", CreateOptions{
@@ -287,3 +359,29 @@ func mustStoreDir(t *testing.T) string {
 	}
 	return dir
 }
+
+func TestNetworkStoreRejectsTrailingJSONAndUnsafeRecords(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "networks")
+	t.Setenv("BOXR_NETWORK_DIR", dir)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"trailing JSON": `{"version":1,"networks":[]} {}`,
+		"unknown field": `{"version":1,"networks":[],"unexpected":true}`,
+		"invalid bridge name": `{"version":1,"networks":[{"id":"0123456789abcdef","name":"frontend","driver":"bridge","bridge":"br/name","subnet":"172.30.0.0/24","gateway":"172.30.0.1","nat":false}]}`,
+		"overlapping networks": `{"version":1,"networks":[{"id":"0123456789abcdef","name":"frontend","driver":"bridge","bridge":"brfront","subnet":"172.30.0.0/24","gateway":"172.30.0.1","nat":false},{"id":"fedcba9876543210","name":"backend","driver":"bridge","bridge":"brback","subnet":"172.30.0.128/25","gateway":"172.30.0.129","nat":false}]}`,
+		"duplicate allocation": `{"version":1,"networks":[{"id":"0123456789abcdef","name":"frontend","driver":"bridge","bridge":"brfront","subnet":"172.30.0.0/24","gateway":"172.30.0.1","nat":false,"allocations":{"container-a":"172.30.0.2","container-b":"172.30.0.2"}}]}`,
+	}
+	for name, contents := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := os.WriteFile(filepath.Join(dir, "networks.json"), []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := List(); err == nil {
+				t.Fatal("unsafe network store unexpectedly loaded")
+			}
+		})
+	}
+}
+
