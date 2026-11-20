@@ -1411,6 +1411,7 @@ Usage:
   boxr volume ls [--format table|json] [--filter label=KEY=VALUE]
   boxr volume inspect NAME
   boxr volume du [--json] NAME
+  boxr volume du --all [--json] [--filter name=VALUE|label=KEY[=VALUE]]
   boxr volume clone SOURCE TARGET
   boxr volume export NAME ARCHIVE.tar.gz
   boxr volume import ARCHIVE.tar.gz NAME
@@ -2360,6 +2361,11 @@ var implementedFeatures = []string{
 	"container stats watch supports live table rows",
 	"container stats table includes timestamp memory CPU and PID metrics",
 	"container stats preserves JSON as the default output format",
+	"volume du inventories every named volume",
+	"volume du aggregates file and directory counts",
+	"volume du aggregates logical bytes across volumes",
+	"volume du all mode supports name and label filters",
+	"volume du all mode supports JSON summary output",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -2900,22 +2906,62 @@ func runVolume(args []string, stdout, stderr io.Writer) int {
 		flags := flag.NewFlagSet("volume du", flag.ContinueOnError)
 		flags.SetOutput(stderr)
 		jsonOutput := flags.Bool("json", false, "write volume usage as JSON")
+		all := flags.Bool("all", false, "measure every named volume")
+		var filters envList
+		flags.Var(&filters, "filter", "filter all-volume usage by name=VALUE or label=KEY[=VALUE]")
 		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}
-		if flags.NArg() != 1 {
-			fmt.Fprintln(stderr, "Usage: boxr volume du [--json] NAME")
+		if (*all && flags.NArg() != 0) || (!*all && (flags.NArg() != 1 || len(filters) != 0)) {
+			fmt.Fprintln(stderr, "Usage: boxr volume du [--json] NAME | boxr volume du --all [--json] [--filter name=VALUE|label=KEY[=VALUE]]")
 			return 2
 		}
-		usage, err := volume.Measure(flags.Arg(0))
+		if !*all {
+			usage, err := volume.Measure(flags.Arg(0))
+			if err != nil {
+				fmt.Fprintf(stderr, "boxr volume du: %v\n", err)
+				return 1
+			}
+			if *jsonOutput {
+				return writeJSON(stdout, usage, stderr, "boxr volume du")
+			}
+			fmt.Fprintf(stdout, "%s: %d file(s), %d directory(s), %d symlink(s), %d other, %d bytes (snapshot)\n", usage.Name, usage.Files, usage.Directories, usage.Symlinks, usage.OtherEntries, usage.TotalBytes)
+			return 0
+		}
+		items, err := volume.List()
 		if err != nil {
 			fmt.Fprintf(stderr, "boxr volume du: %v\n", err)
 			return 1
 		}
-		if *jsonOutput {
-			return writeJSON(stdout, usage, stderr, "boxr volume du")
+		items, err = filterVolumeList(items, filters)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr volume du: %v\n", err)
+			return 2
 		}
-		fmt.Fprintf(stdout, "%s: %d file(s), %d directory(s), %d symlink(s), %d other, %d bytes (snapshot)\n", usage.Name, usage.Files, usage.Directories, usage.Symlinks, usage.OtherEntries, usage.TotalBytes)
+		report := volumeUsageSummary{Volumes: make([]volume.Usage, 0, len(items))}
+		for _, item := range items {
+			usage, err := volume.Measure(item.Name)
+			if err != nil {
+				fmt.Fprintf(stderr, "boxr volume du: %s: %v\n", item.Name, err)
+				return 1
+			}
+			report.Volumes = append(report.Volumes, usage)
+			report.Files += usage.Files
+			report.Directories += usage.Directories
+			report.Symlinks += usage.Symlinks
+			report.OtherEntries += usage.OtherEntries
+			report.TotalBytes += usage.TotalBytes
+		}
+		report.VolumeCount = len(report.Volumes)
+		if *jsonOutput {
+			return writeJSON(stdout, report, stderr, "boxr volume du")
+		}
+		fmt.Fprintln(stdout, "NAME                 FILES      DIRS       SYMLINKS   OTHER      SIZE")
+		for _, usage := range report.Volumes {
+			fmt.Fprintf(stdout, "%-20s %-10d %-10d %-10d %-10d %d bytes\n", usage.Name, usage.Files, usage.Directories, usage.Symlinks, usage.OtherEntries, usage.TotalBytes)
+		}
+		fmt.Fprintf(stdout, "TOTAL (%d volume(s))  %d file(s), %d directory(s), %d symlink(s), %d other, %d bytes\n",
+			report.VolumeCount, report.Files, report.Directories, report.Symlinks, report.OtherEntries, report.TotalBytes)
 		return 0
 	case "inspect":
 		if len(args) != 2 {
@@ -3144,6 +3190,16 @@ func ensureVolumeUnused(path string) error {
 		}
 	}
 	return nil
+}
+
+type volumeUsageSummary struct {
+	VolumeCount  int            `json:"volumeCount"`
+	Volumes      []volume.Usage `json:"volumes"`
+	Files        int64          `json:"files"`
+	Directories  int64          `json:"directories"`
+	Symlinks     int64          `json:"symlinks"`
+	OtherEntries int64          `json:"otherEntries"`
+	TotalBytes   int64          `json:"totalBytes"`
 }
 
 func filterVolumeList(items []volume.Volume, filters []string) ([]volume.Volume, error) {

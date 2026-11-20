@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 507 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 512 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -513,3 +513,8 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 505. container stats watch supports live table rows
 506. container stats table includes timestamp memory CPU and PID metrics
 507. container stats preserves JSON as the default output format
+508. volume du inventories every named volume
+509. volume du aggregates file and directory counts
+510. volume du aggregates logical bytes across volumes
+511. volume du all mode supports name and label filters
+512. volume du all mode supports JSON summary output

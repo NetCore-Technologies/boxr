@@ -400,3 +400,14 @@ The optional size report includes separate state-record and log byte counts plus
 
 
 For a human-readable snapshot, use `boxr stats --format table CONTAINER`. The same format is available with `--watch`; the table header is emitted once followed by one timestamped row per sample.
+
+
+## Inventory all named volumes
+
+```bash
+boxr volume du --all
+boxr volume du --all --json
+boxr volume du --all --filter label=team=demo --json
+```
+
+The all-volume view reports per-volume file, directory, symlink and byte counts plus aggregate totals. Name and label filters let scripts target a subset; the original single-volume `boxr volume du NAME` command remains unchanged. See [volume storage usage](docs/volume-usage.md).
