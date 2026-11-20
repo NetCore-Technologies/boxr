@@ -624,3 +624,13 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 616. volume archive exports never overwrite an existing destination
 617. volume archive exports publish atomically from a same-directory staging file
 618. volume export JSON includes SHA-256 integrity and filesystem manifest metadata
+616. versioned deployment service profiles
+617. validated lowercase service profile identifiers and duplicate rejection
+618. unprofiled baseline services remain enabled by default
+619. repeatable command-line service profile selection
+620. additive activation of services matching any selected profile
+621. profile-disabled services are omitted from deployment plans
+622. full manifest validation occurs before profile filtering
+623. unknown deployment profiles are rejected
+624. profile-filtered dependency graphs reject inactive dependencies
+625. deployment image prefetch and startup are limited to selected profiles
