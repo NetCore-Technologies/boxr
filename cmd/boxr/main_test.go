@@ -2845,3 +2845,81 @@ func TestNetworkCommandValidatesUsageAndUnknownActions(t *testing.T) {
 	}
 }
 
+func TestParsePortMappingSupportsHostBindingAndProtocol(t *testing.T) {
+	tests := []struct {
+		value string
+		want  container.PortMapping
+	}{
+		{
+			value: "8080:80",
+			want:  container.PortMapping{HostIP: "0.0.0.0", HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
+		},
+		{
+			value: "127.0.0.1:8443:443/tcp",
+			want:  container.PortMapping{HostIP: "127.0.0.1", HostPort: 8443, ContainerPort: 443, Protocol: "tcp"},
+		},
+		{
+			value: "5353:53/UDP",
+			want:  container.PortMapping{HostIP: "0.0.0.0", HostPort: 5353, ContainerPort: 53, Protocol: "udp"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.value, func(t *testing.T) {
+			got, err := parsePortMapping(test.value)
+			if err != nil {
+				t.Fatalf("parsePortMapping(): %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("parsePortMapping() = %+v, want %+v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestParsePortMappingRejectsMalformedValues(t *testing.T) {
+	for _, value := range []string{
+		"", "8080", "0:80", "8080:0", "65536:80", "8080:65536",
+		"127.0.0.1:8080:80/sctp", "127.0.0.1:8080:80/tcp/extra",
+		"::1:8080:80", " 8080:80", "8080:80 ",
+	} {
+		t.Run(strings.ReplaceAll(value, "/", "_"), func(t *testing.T) {
+			if _, err := parsePortMapping(value); err == nil {
+				t.Fatalf("parsePortMapping(%q) unexpectedly succeeded", value)
+			}
+		})
+	}
+}
+
+func TestRunDryRunIncludesValidatedPublishedPorts(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{
+		"run", "--dry-run", "--network", "bridge", "--network-name", "frontend",
+		"--publish", "127.0.0.1:8080:80/tcp", "-p", "5353:53/udp", "--", "/bin/echo", "ready",
+	}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("published port dry-run returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	var plan runPlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatalf("decode published port dry-run: %v", err)
+	}
+	want := []container.PortMapping{
+		{HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 80, Protocol: "tcp"},
+		{HostIP: "0.0.0.0", HostPort: 5353, ContainerPort: 53, Protocol: "udp"},
+	}
+	if !reflect.DeepEqual(plan.PublishedPorts, want) {
+		t.Fatalf("published ports = %+v, want %+v", plan.PublishedPorts, want)
+	}
+	if !plan.NoContainerStateMade {
+		t.Fatal("dry-run unexpectedly reports creating container state")
+	}
+}
+
+func TestRunRejectsPublishedPortsOutsideBridgeMode(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"run", "--dry-run", "--publish", "8080:80", "/bin/true"}, &out, &errOut)
+	if code != 2 || !strings.Contains(errOut.String(), "require network mode bridge") {
+		t.Fatalf("published port without bridge returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+}
+
