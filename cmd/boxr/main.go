@@ -2484,7 +2484,7 @@ var implementedFeatures = []string{
 	"Docker opaque-directory whiteout semantics",
 	"Docker image environment entrypoint command working-directory user and label preservation",
 	"Docker archive multi-tag import with complete preflight validation",
-		"Docker-save-compatible image archive export",
+	"Docker-save-compatible image archive export",
 	"plain uncompressed tar output compatible with Docker load",
 	"Docker image config filenames derived from SHA-256 config identities",
 	"Docker archive repositories tag map for legacy-compatible consumers",

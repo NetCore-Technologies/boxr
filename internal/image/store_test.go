@@ -481,7 +481,6 @@ func TestPruneDetailedReportsBlobSizesAndHonorsDryRun(t *testing.T) {
 	}
 }
 
-
 func TestSaveDockerArchiveRoundTrip(t *testing.T) {
 	store := useStore(t)
 	root := newRoot(t)
