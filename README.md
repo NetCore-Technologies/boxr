@@ -288,6 +288,28 @@ boxr image prune --force
 
 The store defaults to `$XDG_DATA_HOME/boxr/images` or `~/.local/share/boxr/images`; set `BOXR_IMAGE_DIR` (or `BOXR_DATA_DIR`) to override it. Registry credentials are read from `BOXR_REGISTRY_USERNAME` and `BOXR_REGISTRY_PASSWORD`; do not put passwords on the command line. `image push [--authfile PATH] LOCAL:TAG [REMOTE:TAG]` publishes a local image in Boxr's canonical single-rootfs-layer format and `image pull [--platform linux/ARCH[/VARIANT]] [--authfile PATH] REMOTE[:TAG|@sha256:DIGEST]` fetches supported schema-2 OCI or Docker images, including multi-layer images (the default platform is Linux on the host architecture). Selected OS, architecture and variant metadata are preserved in the local image config, including when pulling a foreign architecture. Docker Hub is the default registry; use a registry-qualified name for GHCR or a private registry. Immutable digest pulls are assigned a deterministic local tag. `image rm` removes a tag without deleting shared blobs. `image verify` checks the complete image descriptor graph and compressed/uncompressed layer digests. `image audit [--json] [--strict] NAME:TAG` combines full integrity verification with a bounded rootfs security scan; its report includes manifest/config/layer digests, platform metadata and filesystem findings. The verified layer is snapshotted while the image-store lock is held before scanning, so concurrent pruning cannot invalidate the audited input. `image du` audits every blob against its content-addressed filename and reports unique, reachable and reclaimable storage. `image prune` requires an explicit `--dry-run` or `--force`; the latter deletes unreferenced content-addressed blobs. `run --dry-run` validates runtime options and prints a redacted plan; environment values, label values and raw arguments are not emitted, and no container record is created.
 
+## Docker-style pull, create, and start
+
+The top-level image commands are shortcuts for the full image namespace:
+
+```bash
+sudo boxr pull --platform linux/amd64 docker.io/library/alpine:latest
+sudo boxr push alpine:latest ghcr.io/your-org/alpine-boxr:latest
+```
+
+Create a container from an image already verified in the local store, then start it separately:
+
+```bash
+sudo boxr create --name alpine-shell alpine:latest /bin/sh
+sudo boxr ps --all
+sudo boxr start alpine-shell
+sudo boxr logs --follow alpine-shell
+sudo boxr stop alpine-shell
+sudo boxr rm alpine-shell
+```
+
+`boxr pull` and `boxr push` use the same registry verification and authentication flows as `boxr image pull` and `boxr image push`. `boxr create` accepts the native run options and the Docker-style positional form `IMAGE [COMMAND...]` (or the explicit `--image IMAGE` form). It verifies the image, resolves its default command and records a stopped-in-`created`-state container without launching a workload. `boxr start ID|NAME` reuses that record and launches it through Boxr's detached supervisor. Pull and create are separate operations: create does not silently download a missing image. This is an initial native lifecycle workflow, not full Docker CLI or Engine API compatibility; unsupported runtime features remain explicitly rejected, and Linux container execution still requires the appropriate kernel and privileges.
+
 ## Multi-service deployment planning
 
 Create and validate a declarative deployment before starting any workload. The deployment commands accept both Boxr JSON manifests and the supported subset of Docker Compose YAML (`.yaml`/`.yml`):
