@@ -44,6 +44,8 @@ services:
     profiles: [frontend]
     working_dir: /srv/app
     hostname: api
+    read_only: true
+    cap_drop: [NET_RAW, CAP_MKNOD]
     networks: [app]
 networks:
   app:
@@ -77,6 +79,12 @@ networks:
 	}
 	if api.Options.Workdir != "/srv/app" || api.Options.Hostname != "api" {
 		t.Fatalf("workdir/hostname = %q / %q", api.Options.Workdir, api.Options.Hostname)
+	}
+	if !api.Options.ReadOnlyRootFS {
+		t.Fatal("Compose read_only was not translated to a read-only root filesystem")
+	}
+	if !reflect.DeepEqual(api.Options.DropCapabilities, []string{"NET_RAW", "MKNOD"}) {
+		t.Fatalf("cap_drop = %#v, want [NET_RAW MKNOD]", api.Options.DropCapabilities)
 	}
 	if !containsComposeEnv(api.Options.Env, "APP_MODE", "production") ||
 		!containsComposeEnv(api.Options.Env, "BOXR_COMPOSE_INHERITED", "from-host") {
@@ -144,6 +152,27 @@ func TestLoadComposeRejectsSemanticsBoxrCannotRepresent(t *testing.T) {
 			}
 			if _, err := Load(path); err == nil {
 				t.Fatal("unsupported Compose document was accepted")
+			}
+		})
+	}
+}
+
+
+func TestLoadComposeValidatesCapabilityDrops(t *testing.T) {
+	tests := map[string]string{
+		"non-list": "NET_RAW",
+		"unknown capability": "[NOT_A_LINUX_CAPABILITY]",
+		"empty capability": "[NET_RAW, '']",
+	}
+	for name, value := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "compose.yaml")
+			contents := "services:\n  api:\n    image: alpine:3.21\n    network_mode: none\n    cap_drop: " + value + "\n"
+			if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatal("invalid cap_drop configuration was accepted")
 			}
 		})
 	}
