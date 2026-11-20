@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 714 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 725 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -720,3 +720,14 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 712. registry pull cancels outstanding layer downloads after the first failure
 713. parallel registry pull removes every partial temporary layer on failure
 714. concurrent registry requests share a synchronized Bearer token refresh
+715. live network connect supports repeatable TCP and UDP published host ports
+716. container exit detaches dynamically connected managed networks even when they were not present at run startup
+717. container exit releases dynamically connected published port rules veth links and IPAM reservations
+718. network detach is idempotent when a container has no remaining managed network lease
+719. managed bridge IPAM prevents a single container from acquiring conflicting eth0 attachments on multiple networks
+720. bounded parallel OCI and Docker registry layer downloads
+721. registry layer download worker count capped at four
+722. parallel registry layer verification preserves manifest order
+723. registry pull cancels outstanding layer downloads after the first failure
+724. parallel registry pull removes every partial temporary layer on failure
+725. concurrent registry requests share a synchronized Bearer token refresh
