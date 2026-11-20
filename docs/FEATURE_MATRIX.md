@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 518 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 523 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -524,3 +524,8 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 516. image du distinguishes referenced layer bytes from unique store bytes
 517. image du all mode supports JSON output
 518. image du preserves the existing unique-blob usage report
+519. image prune supports structured per-blob JSON reports
+520. image prune reports the size of each unreferenced blob
+521. image prune aggregates reclaimable bytes before deletion
+522. image prune dry-run preserves every unreferenced blob
+523. image prune retains explicit force confirmation for deletion

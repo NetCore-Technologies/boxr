@@ -1,6 +1,8 @@
 package image
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -440,5 +442,42 @@ func TestExportRegistryBundleRejectsMissingImage(t *testing.T) {
 	useStore(t)
 	if _, err := ExportRegistryBundle("missing:latest"); err == nil {
 		t.Fatal("export of missing image unexpectedly succeeded")
+	}
+}
+
+
+func TestPruneDetailedReportsBlobSizesAndHonorsDryRun(t *testing.T) {
+	base := useStore(t)
+	if _, err := ImportRootFS(newRoot(t), "demo:keep"); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("unreferenced payload for detailed prune")
+	sum := sha256.Sum256(payload)
+	digest := hex.EncodeToString(sum[:])
+	path := filepath.Join(base, "images", "blobs", "sha256", digest)
+	if err := os.WriteFile(path, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := PruneDetailed(true)
+	if err != nil {
+		t.Fatalf("PruneDetailed dry-run: %v", err)
+	}
+	if len(items) != 1 || items[0].Digest != "sha256:"+digest || items[0].SizeBytes != int64(len(payload)) {
+		t.Fatalf("unexpected detailed prune plan: %#v", items)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("dry-run removed unreferenced blob: %v", err)
+	}
+
+	items, err = PruneDetailed(false)
+	if err != nil {
+		t.Fatalf("PruneDetailed destructive run: %v", err)
+	}
+	if len(items) != 1 || items[0].Digest != "sha256:"+digest || items[0].SizeBytes != int64(len(payload)) {
+		t.Fatalf("unexpected detailed prune result: %#v", items)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("destructive prune left unreferenced blob: %v", err)
 	}
 }

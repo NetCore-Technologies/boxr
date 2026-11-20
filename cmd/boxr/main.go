@@ -1442,7 +1442,7 @@ Usage:
   boxr image load ARCHIVE.tar.gz
   boxr image unpack NAME:TAG PATH
   boxr image rm NAME:TAG [...]
-  boxr image prune [--dry-run|--force]
+  boxr image prune [--dry-run|--force] [--json]
   boxr config validate FILE.json
   boxr config example
   boxr features [--json]
@@ -2045,31 +2045,46 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 		flags.SetOutput(stderr)
 		dryRun := flags.Bool("dry-run", false, "list unreferenced blobs without deleting them")
 		force := flags.Bool("force", false, "delete unreferenced blobs")
+		jsonOutput := flags.Bool("json", false, "write per-blob prune details as JSON")
 		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}
 		if flags.NArg() != 0 || (*dryRun == *force) {
-			fmt.Fprintln(stderr, "Usage: boxr image prune [--dry-run|--force]")
+			fmt.Fprintln(stderr, "Usage: boxr image prune [--dry-run|--force] [--json]")
 			return 2
 		}
-		items, err := imageStore.Prune(!*force)
+		items, err := imageStore.PruneDetailed(!*force)
 		if err != nil {
 			fmt.Fprintf(stderr, "boxr image prune: %v\n", err)
 			return 1
+		}
+		report := imagePruneReport{DryRun: *dryRun, BlobCount: len(items), Blobs: items}
+		for _, item := range items {
+			report.ReclaimableBytes += item.SizeBytes
+		}
+		if *jsonOutput {
+			return writeJSON(stdout, report, stderr, "boxr image prune")
 		}
 		verb := "would remove"
 		if *force {
 			verb = "removed"
 		}
-		for _, digest := range items {
-			fmt.Fprintf(stdout, "%s %s\n", verb, digest)
+		for _, item := range items {
+			fmt.Fprintf(stdout, "%s %s (%d bytes)\n", verb, item.Digest, item.SizeBytes)
 		}
-		fmt.Fprintf(stdout, "%d unreferenced blob(s) %s\n", len(items), map[bool]string{true: "removed", false: "found"}[*force])
+		fmt.Fprintf(stdout, "%d unreferenced blob(s), %d bytes %s\n", report.BlobCount, report.ReclaimableBytes, map[bool]string{true: "removed", false: "found"}[*force])
 		return 0
 	default:
 		fmt.Fprintf(stderr, "boxr image: unknown action %q\n", args[0])
 		return 2
 	}
+}
+
+type imagePruneReport struct {
+	DryRun           bool                   `json:"dryRun"`
+	BlobCount        int                    `json:"blobCount"`
+	ReclaimableBytes int64                  `json:"reclaimableBytes"`
+	Blobs            []imageStore.PrunedBlob `json:"blobs"`
 }
 
 type imageUsageEntry struct {
@@ -2441,6 +2456,11 @@ var implementedFeatures = []string{
 	"image du distinguishes referenced layer bytes from unique store bytes",
 	"image du all mode supports JSON output",
 	"image du preserves the existing unique-blob usage report",
+	"image prune supports structured per-blob JSON reports",
+	"image prune reports the size of each unreferenced blob",
+	"image prune aggregates reclaimable bytes before deletion",
+	"image prune dry-run preserves every unreferenced blob",
+	"image prune retains explicit force confirmation for deletion",
 }
 
 func printFeatures(stdout io.Writer) {

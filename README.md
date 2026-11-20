@@ -422,3 +422,13 @@ boxr image du --all --filter os=linux --filter arch=arm64 --json
 ```
 
 The all-image view lists each tag's rootfs layer bytes and platform, alongside the verified store-wide unique-blob totals. Referenced layer bytes are summed per tag, so the same shared layer may appear more than once; use the unique store total for physical blob storage. The original `boxr image du` summary remains unchanged. See [image storage usage](docs/image-usage.md).
+
+
+## Review image cleanup before deletion
+
+```bash
+boxr image prune --dry-run --json
+boxr image prune --force --json
+```
+
+The JSON report lists every unreferenced blob digest and size, plus aggregate reclaimable bytes. Dry-run mode does not remove data; destructive cleanup still requires explicit `--force`. See [image pruning](docs/image-pruning.md).

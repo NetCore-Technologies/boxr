@@ -92,6 +92,12 @@ type Image struct {
 // StoreUsage describes verified storage usage in the local image store.
 // Reachable blobs are referenced by at least one image tag; reclaimable blobs
 // are valid content-addressed files not referenced by the current index.
+// PrunedBlob identifies an unreferenced content-addressed blob and its size.
+type PrunedBlob struct {
+	Digest    string `json:"digest"`
+	SizeBytes int64  `json:"sizeBytes"`
+}
+
 type StoreUsage struct {
 	Images           int   `json:"images"`
 	UniqueBlobs      int   `json:"uniqueBlobs"`
@@ -971,6 +977,18 @@ func Load(archivePath string) ([]Image, error) {
 // Prune removes content-addressed blobs not reachable from any local tag.
 // When dryRun is true it reports candidates without deleting them.
 func Prune(dryRun bool) ([]string, error) {
+	blobs, err := PruneDetailed(dryRun)
+	if err != nil {
+		return nil, err
+	}
+	digests := make([]string, 0, len(blobs))
+	for _, blob := range blobs {
+		digests = append(digests, blob.Digest)
+	}
+	return digests, nil
+}
+
+func PruneDetailed(dryRun bool) ([]PrunedBlob, error) {
 	storeMu.Lock()
 	defer storeMu.Unlock()
 	dir, err := ensureStore()
@@ -1002,7 +1020,7 @@ func Prune(dryRun bool) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	removed := make([]string, 0)
+	removed := make([]PrunedBlob, 0)
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -1021,14 +1039,14 @@ func Prune(dryRun bool) ([]string, error) {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return nil, fmt.Errorf("refusing to prune non-regular blob path %s", path)
 		}
-		removed = append(removed, "sha256:"+entry.Name())
+		removed = append(removed, PrunedBlob{Digest: "sha256:" + entry.Name(), SizeBytes: info.Size()})
 		if !dryRun {
 			if err := os.Remove(path); err != nil {
 				return nil, err
 			}
 		}
 	}
-	sort.Strings(removed)
+	sort.Slice(removed, func(i, j int) bool { return removed[i].Digest < removed[j].Digest })
 	return removed, nil
 }
 
