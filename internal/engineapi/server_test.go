@@ -1274,3 +1274,74 @@ func TestDockerContainerRenameUsesUniquePersistentNames(t *testing.T) {
 		t.Fatalf("unrelated container changed after rename: %v", err)
 	}
 }
+
+func TestDockerContainerWaitReturnsExitCodeAndSupportsNotRunningOnly(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("wait-exit-code", []string{"/bin/false"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(record.ID, &container.ExitError{Code: 7}); err != nil {
+		t.Fatal(err)
+	}
+
+	response := engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+record.ID+"/wait")
+	if response.Code != http.StatusOK {
+		t.Fatalf("wait status=%d body=%s", response.Code, response.Body.String())
+	}
+	var result struct {
+		StatusCode int
+		Error      any
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode wait response: %v", err)
+	}
+	if result.StatusCode != 7 || result.Error != nil {
+		t.Fatalf("wait response = %+v", result)
+	}
+
+	response = engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+record.ID+"/wait?condition=next-exit")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("unsupported wait condition status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+record.ID+"/wait?condition=not-running&condition=next-exit")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("repeated wait condition status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = engineAPIRequest(server, http.MethodGet, "/v1.45/containers/"+record.ID+"/wait")
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET wait status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestDockerContainerWaitBlocksUntilRunningContainerExits(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("wait-running", []string{"/bin/sleep", "0.1"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	time.AfterFunc(20*time.Millisecond, func() {
+		if err := state.Finish(record.ID, nil); err != nil {
+			t.Errorf("finish waiting container: %v", err)
+		}
+	})
+	response := engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+record.ID+"/wait")
+	if response.Code != http.StatusOK {
+		t.Fatalf("wait for running container status=%d body=%s", response.Code, response.Body.String())
+	}
+	var result struct {
+		StatusCode int
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode wait response: %v", err)
+	}
+	if result.StatusCode != 0 {
+		t.Fatalf("wait exit code = %d, want 0", result.StatusCode)
+	}
+}
