@@ -445,7 +445,6 @@ func TestExportRegistryBundleRejectsMissingImage(t *testing.T) {
 	}
 }
 
-
 func TestPruneDetailedReportsBlobSizesAndHonorsDryRun(t *testing.T) {
 	base := useStore(t)
 	if _, err := ImportRootFS(newRoot(t), "demo:keep"); err != nil {

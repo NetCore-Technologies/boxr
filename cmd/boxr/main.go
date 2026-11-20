@@ -2081,9 +2081,9 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 }
 
 type imagePruneReport struct {
-	DryRun           bool                   `json:"dryRun"`
-	BlobCount        int                    `json:"blobCount"`
-	ReclaimableBytes int64                  `json:"reclaimableBytes"`
+	DryRun           bool                    `json:"dryRun"`
+	BlobCount        int                     `json:"blobCount"`
+	ReclaimableBytes int64                   `json:"reclaimableBytes"`
 	Blobs            []imageStore.PrunedBlob `json:"blobs"`
 }
 
