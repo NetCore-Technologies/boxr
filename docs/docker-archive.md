@@ -33,3 +33,17 @@ The default format remains Boxr's existing portable OCI-layout archive:
     boxr image save example/app:latest example-app.oci.tar.gz
 
 The Docker export contains the single rootfs layer used by Boxr's current local image format. It does not reconstruct source build history or unsupported Docker configuration fields. Docker Engine integration is not executed as part of Boxr's Go test suite; the test suite validates the archive structure and round-trips it through Boxr's Docker archive loader.
+
+
+### Exporting more than one image
+
+A single Docker archive can contain multiple local references:
+
+    boxr image save --format docker example/api:latest example/api:stable example/worker:latest app-stack.docker.tar
+    docker load --input app-stack.docker.tar
+
+The exporter accepts between one and 128 distinct local image references. Tags that point to the same image configuration are combined into one manifest entry. Distinct images can reuse the same layer path when their verified uncompressed diff IDs match, so shared rootfs layers are written once. The manifest, config files, repositories map and layers are emitted in deterministic order. Duplicate reference arguments, missing local tags and excessive reference counts are rejected before the archive is published.
+
+The existing OCI format remains a single-reference operation and remains the default:
+
+    boxr image save example/api:latest app.oci.tar.gz

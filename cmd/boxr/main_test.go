@@ -1112,15 +1112,18 @@ func TestImageCommandLifecycle(t *testing.T) {
 	if code := run([]string{"image", "save", "demo:test", archive}, &out, &errOut); code != 0 {
 		t.Fatalf("image save code=%d stderr=%s", code, errOut.String())
 	}
+	if code := run([]string{"image", "tag", "demo:test", "demo:latest"}, &out, &errOut); code != 0 {
+		t.Fatalf("image tag code=%d stderr=%s", code, errOut.String())
+	}
 	dockerArchive := filepath.Join(t.TempDir(), "image.docker.tar")
 	out.Reset()
 	errOut.Reset()
-	if code := run([]string{"image", "save", "--format", "docker", "demo:test", dockerArchive}, &out, &errOut); code != 0 {
+	if code := run([]string{"image", "save", "--format", "docker", "demo:test", "demo:latest", dockerArchive}, &out, &errOut); code != 0 {
 		t.Fatalf("Docker image save code=%d stderr=%s", code, errOut.String())
 	}
 	out.Reset()
 	errOut.Reset()
-	if code := run([]string{"image", "rm", "demo:test"}, &out, &errOut); code != 0 {
+	if code := run([]string{"image", "rm", "demo:test", "demo:latest"}, &out, &errOut); code != 0 {
 		t.Fatalf("image rm code=%d stderr=%s", code, errOut.String())
 	}
 	out.Reset()
@@ -1130,7 +1133,12 @@ func TestImageCommandLifecycle(t *testing.T) {
 	}
 	out.Reset()
 	errOut.Reset()
-	if code := run([]string{"image", "rm", "demo:test"}, &out, &errOut); code != 0 {
+	if code := run([]string{"image", "inspect", "demo:latest"}, &out, &errOut); code != 0 {
+		t.Fatalf("multi-image Docker load omitted second tag: %s", errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"image", "rm", "demo:test", "demo:latest"}, &out, &errOut); code != 0 {
 		t.Fatalf("image rm after Docker load code=%d stderr=%s", code, errOut.String())
 	}
 	out.Reset()

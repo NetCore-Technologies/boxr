@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -32,12 +33,36 @@ type dockerSaveConfig struct {
 
 // SaveDocker writes a standard Docker-save-compatible tar archive for one
 // local image tag. The OCI save format remains available through Save.
+type dockerSaveLayer struct {
+	path string
+	size int64
+}
+
+// SaveDocker writes a standard Docker-save-compatible tar archive for one
+// local image tag. The OCI save format remains available through Save.
 func SaveDocker(reference, archivePath string) error {
-	if err := ValidateReference(reference); err != nil {
-		return err
+	return SaveDockerMany([]string{reference}, archivePath)
+}
+
+// SaveDockerMany writes up to 128 local tags into one Docker-save archive.
+// Repeated image configurations are combined into a single manifest entry,
+// and shared rootfs layers are written only once.
+func SaveDockerMany(references []string, archivePath string) error {
+	if len(references) == 0 || len(references) > maxDockerImageCount {
+		return fmt.Errorf("Docker export requires between 1 and %d image references", maxDockerImageCount)
 	}
 	if archivePath == "" {
 		return fmt.Errorf("Docker archive path must not be empty")
+	}
+	refs := append([]string(nil), references...)
+	sort.Strings(refs)
+	for index, reference := range refs {
+		if err := ValidateReference(reference); err != nil {
+			return err
+		}
+		if index > 0 && refs[index-1] == reference {
+			return fmt.Errorf("duplicate Docker export reference %q", reference)
+		}
 	}
 
 	storeMu.Lock()
@@ -51,118 +76,166 @@ func SaveDocker(reference, archivePath string) error {
 	if err != nil {
 		return err
 	}
+	storeResolved, err := filepath.EvalSymlinks(storeAbs)
+	if err != nil {
+		return fmt.Errorf("resolve image store directory: %w", err)
+	}
 	destination, err := filepath.Abs(archivePath)
 	if err != nil {
 		return err
 	}
-	relative, err := filepath.Rel(storeAbs, destination)
-	if err != nil {
+	if err := validateDockerArchiveDestination(storeResolved, destination); err != nil {
 		return err
-	}
-	if relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))) {
-		return fmt.Errorf("Docker archive destination must be outside the image store")
 	}
 
 	index, err := loadIndex(dir)
 	if err != nil {
 		return err
 	}
-	var selected *Descriptor
-	for i := range index.Manifests {
-		if index.Manifests[i].Annotations["org.opencontainers.image.ref.name"] == reference {
-			copy := index.Manifests[i]
-			selected = &copy
-			break
-		}
-	}
-	if selected == nil {
-		return fmt.Errorf("image %q not found", reference)
-	}
-	if _, err := inspectDescriptor(dir, reference, *selected); err != nil {
-		return fmt.Errorf("verify image before Docker save: %w", err)
-	}
-	manifest, err := loadManifest(dir, *selected)
-	if err != nil {
-		return err
-	}
-	if len(manifest.Layers) != 1 || manifest.Layers[0].MediaType != layerType {
-		return fmt.Errorf("image %q has an unsupported layer layout", reference)
-	}
-	configData, err := readBlob(dir, manifest.Config)
-	if err != nil {
-		return err
-	}
-	var config ImageConfig
-	if err := json.Unmarshal(configData, &config); err != nil {
-		return fmt.Errorf("decode image config: %w", err)
-	}
-	if config.RootFS.Type != "layers" || len(config.RootFS.DiffIDs) != 1 ||
-		!validDockerDiffID(config.RootFS.DiffIDs[0]) {
-		return fmt.Errorf("image %q has an invalid rootfs diff_id", reference)
+	descriptors := make(map[string]Descriptor, len(index.Manifests))
+	for _, descriptor := range index.Manifests {
+		reference := descriptor.Annotations["org.opencontainers.image.ref.name"]
+		descriptors[reference] = descriptor
 	}
 
-	layerPath, err := verifyBlob(dir, manifest.Layers[0])
-	if err != nil {
-		return err
-	}
 	stage, err := os.MkdirTemp("", "boxr-docker-save-*")
 	if err != nil {
 		return fmt.Errorf("create Docker save workspace: %w", err)
 	}
 	defer os.RemoveAll(stage)
 
-	uncompressedLayer := filepath.Join(stage, "layer.tar")
-	layerFile, err := os.OpenFile(uncompressedLayer, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	if err := decompressDockerLayer(layerPath, layerFile, config.RootFS.DiffIDs[0]); err != nil {
-		_ = layerFile.Close()
-		return fmt.Errorf("prepare Docker layer: %w", err)
-	}
-	layerInfo, err := layerFile.Stat()
-	if err != nil {
-		_ = layerFile.Close()
-		return err
-	}
-	if err := layerFile.Close(); err != nil {
-		return err
+	layers := make(map[string]dockerSaveLayer)
+	var totalLayerBytes int64
+	images := make(map[string]*dockerSaveManifestEntry)
+	configs := make(map[string][]byte)
+	repositories := make(map[string]map[string]string)
+	for _, reference := range refs {
+		descriptor, ok := descriptors[reference]
+		if !ok {
+			return fmt.Errorf("image %q not found", reference)
+		}
+		if _, err := inspectDescriptor(dir, reference, descriptor); err != nil {
+			return fmt.Errorf("verify image %q before Docker save: %w", reference, err)
+		}
+		manifest, err := loadManifest(dir, descriptor)
+		if err != nil {
+			return fmt.Errorf("load image %q manifest: %w", reference, err)
+		}
+		if len(manifest.Layers) != 1 || manifest.Layers[0].MediaType != layerType {
+			return fmt.Errorf("image %q has an unsupported layer layout", reference)
+		}
+		configData, err := readBlob(dir, manifest.Config)
+		if err != nil {
+			return fmt.Errorf("read image %q config: %w", reference, err)
+		}
+		var config ImageConfig
+		if err := json.Unmarshal(configData, &config); err != nil {
+			return fmt.Errorf("decode image %q config: %w", reference, err)
+		}
+		if config.RootFS.Type != "layers" || len(config.RootFS.DiffIDs) != 1 ||
+			!validDockerDiffID(config.RootFS.DiffIDs[0]) {
+			return fmt.Errorf("image %q has an invalid rootfs diff_id", reference)
+		}
+		layerID := strings.TrimPrefix(config.RootFS.DiffIDs[0], "sha256:")
+		layerName := layerID + "/layer.tar"
+		if _, exists := layers[layerID]; !exists {
+			layerPath, err := verifyBlob(dir, manifest.Layers[0])
+			if err != nil {
+				return fmt.Errorf("verify image %q layer: %w", reference, err)
+			}
+			uncompressedLayer := filepath.Join(stage, layerID+".layer.tar")
+			layerFile, err := os.OpenFile(uncompressedLayer, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			if err != nil {
+				return err
+			}
+			if err := decompressDockerLayer(layerPath, layerFile, config.RootFS.DiffIDs[0]); err != nil {
+				_ = layerFile.Close()
+				return fmt.Errorf("prepare image %q Docker layer: %w", reference, err)
+			}
+			layerInfo, err := layerFile.Stat()
+			if err != nil {
+				_ = layerFile.Close()
+				return err
+			}
+			if layerInfo.Size() > maxDockerArchiveBytes-totalLayerBytes {
+				_ = layerFile.Close()
+				return fmt.Errorf("Docker export exceeds the %d-byte total layer limit", maxDockerArchiveBytes)
+			}
+			totalLayerBytes += layerInfo.Size()
+			if err := layerFile.Close(); err != nil {
+				return err
+			}
+			layers[layerID] = dockerSaveLayer{path: uncompressedLayer, size: layerInfo.Size()}
+		}
+
+		dockerConfig := dockerSaveConfig{
+			ImageConfig: config,
+			History: []dockerSaveHistory{{
+				Created:   config.Created,
+				CreatedBy: "boxr image save --format docker",
+			}},
+		}
+		exportConfig, err := json.Marshal(dockerConfig)
+		if err != nil {
+			return fmt.Errorf("encode Docker config for %q: %w", reference, err)
+		}
+		configDigest := digestBytes(exportConfig)
+		configName := strings.TrimPrefix(configDigest, "sha256:") + ".json"
+		configs[configName] = exportConfig
+		groupKey := configDigest + ":" + layerID
+		entry := images[groupKey]
+		if entry == nil {
+			entry = &dockerSaveManifestEntry{
+				Config: configName,
+				RepoTags: []string{},
+				Layers: []string{layerName},
+			}
+			images[groupKey] = entry
+		}
+		entry.RepoTags = append(entry.RepoTags, reference)
+
+		repository, tag, err := splitDockerRepositoryTag(reference)
+		if err != nil {
+			return err
+		}
+		if repositories[repository] == nil {
+			repositories[repository] = make(map[string]string)
+		}
+		if previous, exists := repositories[repository][tag]; exists && previous != layerID {
+			return fmt.Errorf("Docker repository tag %s:%s refers to conflicting layers", repository, tag)
+		}
+		repositories[repository][tag] = layerID
 	}
 
-	dockerConfig := dockerSaveConfig{
-		ImageConfig: config,
-		History: []dockerSaveHistory{{
-			Created:   config.Created,
-			CreatedBy: "boxr image save --format docker",
-		}},
+	groupKeys := make([]string, 0, len(images))
+	for key := range images {
+		groupKeys = append(groupKeys, key)
 	}
-	configBytes, err := json.Marshal(dockerConfig)
+	sort.Strings(groupKeys)
+	manifestEntries := make([]dockerSaveManifestEntry, 0, len(groupKeys))
+	for _, key := range groupKeys {
+		entry := *images[key]
+		sort.Strings(entry.RepoTags)
+		manifestEntries = append(manifestEntries, entry)
+	}
+	manifestBytes, err := json.Marshal(manifestEntries)
 	if err != nil {
 		return err
 	}
-	configDigest := digestBytes(configBytes)
-	configName := strings.TrimPrefix(configDigest, "sha256:") + ".json"
-	layerID := strings.TrimPrefix(config.RootFS.DiffIDs[0], "sha256:")
-	layerName := layerID + "/layer.tar"
-
-	repository, tag, err := splitDockerRepositoryTag(reference)
+	repositoriesBytes, err := json.Marshal(repositories)
 	if err != nil {
 		return err
 	}
-	manifestBytes, err := json.Marshal([]dockerSaveManifestEntry{{
-		Config:   configName,
-		RepoTags: []string{reference},
-		Layers:   []string{layerName},
-	}})
-	if err != nil {
-		return err
+	configNames := make([]string, 0, len(configs))
+	for name := range configs {
+		configNames = append(configNames, name)
 	}
-	repositoriesBytes, err := json.Marshal(map[string]map[string]string{
-		repository: {tag: layerID},
-	})
-	if err != nil {
-		return err
+	sort.Strings(configNames)
+	layerIDs := make([]string, 0, len(layers))
+	for id := range layers {
+		layerIDs = append(layerIDs, id)
 	}
+	sort.Strings(layerIDs)
 
 	parent := filepath.Dir(destination)
 	if err := os.MkdirAll(parent, 0755); err != nil {
@@ -172,12 +245,8 @@ func SaveDocker(reference, archivePath string) error {
 	if err != nil {
 		return fmt.Errorf("resolve Docker archive destination directory: %w", err)
 	}
-	resolvedRelative, err := filepath.Rel(storeAbs, resolvedParent)
-	if err != nil {
-		return err
-	}
-	if resolvedRelative == "." || (resolvedRelative != ".." && !strings.HasPrefix(resolvedRelative, ".."+string(filepath.Separator))) {
-		return fmt.Errorf("Docker archive destination resolves inside the image store")
+	if err := validateDockerArchiveDestination(storeResolved, filepath.Join(resolvedParent, filepath.Base(destination))); err != nil {
+		return fmt.Errorf("Docker archive destination resolves inside image store: %w", err)
 	}
 	output, err := os.CreateTemp(parent, ".boxr-docker-save-*.tmp")
 	if err != nil {
@@ -194,25 +263,33 @@ func SaveDocker(reference, archivePath string) error {
 
 	writer := tar.NewWriter(output)
 	archiveTime := time.Unix(0, 0).UTC()
-	if err := writeDockerTarBytes(writer, "manifest.json", manifestBytes, archiveTime); err != nil {
+	write := func(name string, data []byte) error {
+		return writeDockerTarBytes(writer, name, data, archiveTime)
+	}
+	if err := write("manifest.json", manifestBytes); err != nil {
 		_ = writer.Close()
 		return err
 	}
-	if err := writeDockerTarBytes(writer, configName, configBytes, archiveTime); err != nil {
+	for _, name := range configNames {
+		if err := write(name, configs[name]); err != nil {
+			_ = writer.Close()
+			return err
+		}
+	}
+	if err := write("repositories", repositoriesBytes); err != nil {
 		_ = writer.Close()
 		return err
 	}
-	if err := writeDockerTarBytes(writer, "repositories", repositoriesBytes, archiveTime); err != nil {
-		_ = writer.Close()
-		return err
-	}
-	if err := writeDockerTarDirectory(writer, layerID+"/", archiveTime); err != nil {
-		_ = writer.Close()
-		return err
-	}
-	if err := writeDockerTarFile(writer, layerName, uncompressedLayer, layerInfo.Size(), archiveTime); err != nil {
-		_ = writer.Close()
-		return err
+	for _, layerID := range layerIDs {
+		layer := layers[layerID]
+		if err := writeDockerTarDirectory(writer, layerID+"/", archiveTime); err != nil {
+			_ = writer.Close()
+			return err
+		}
+		if err := writeDockerTarFile(writer, layerID+"/layer.tar", layer.path, layer.size, archiveTime); err != nil {
+			_ = writer.Close()
+			return err
+		}
 	}
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("close Docker archive: %w", err)
@@ -227,6 +304,17 @@ func SaveDocker(reference, archivePath string) error {
 		return fmt.Errorf("publish Docker archive: %w", err)
 	}
 	committed = true
+	return nil
+}
+
+func validateDockerArchiveDestination(storeDir, destination string) error {
+	relative, err := filepath.Rel(storeDir, destination)
+	if err != nil {
+		return err
+	}
+	if relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))) {
+		return fmt.Errorf("Docker archive destination must be outside the image store")
+	}
 	return nil
 }
 

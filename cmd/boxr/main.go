@@ -1438,7 +1438,7 @@ Usage:
   boxr image audit [--json] [--strict] NAME:TAG
   boxr image du [--json]
   boxr image du --all [--json] [--filter KEY=VALUE]
-  boxr image save [--format oci|docker] NAME:TAG ARCHIVE.tar[.gz]
+  boxr image save [--format oci|docker] NAME:TAG [NAME2:TAG ...] ARCHIVE.tar[.gz]
   boxr image load ARCHIVE.tar.gz
   boxr image unpack NAME:TAG PATH
   boxr image rm NAME:TAG [...]
@@ -1992,21 +1992,27 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}
-		if flags.NArg() != 2 || (*format != "oci" && *format != "docker") {
-			fmt.Fprintln(stderr, "Usage: boxr image save [--format oci|docker] NAME:TAG ARCHIVE.tar[.gz]")
+		if flags.NArg() < 2 || (*format != "oci" && *format != "docker") ||
+			(*format == "oci" && flags.NArg() != 2) {
+			fmt.Fprintln(stderr, "Usage: boxr image save [--format oci|docker] NAME:TAG [NAME2:TAG ...] ARCHIVE.tar[.gz]")
 			return 2
+		}
+		archivePath := flags.Arg(flags.NArg() - 1)
+		references := make([]string, flags.NArg()-1)
+		for index := range references {
+			references[index] = flags.Arg(index)
 		}
 		var err error
 		if *format == "docker" {
-			err = imageStore.SaveDocker(flags.Arg(0), flags.Arg(1))
+			err = imageStore.SaveDockerMany(references, archivePath)
 		} else {
-			err = imageStore.Save(flags.Arg(0), flags.Arg(1))
+			err = imageStore.Save(references[0], archivePath)
 		}
 		if err != nil {
 			fmt.Fprintf(stderr, "boxr image save: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "saved %s to %s\n", flags.Arg(0), flags.Arg(1))
+		fmt.Fprintf(stdout, "saved %s to %s\n", strings.Join(references, ", "), archivePath)
 		return 0
 	case "load":
 		if len(args) != 2 {

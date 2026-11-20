@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 542 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 547 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -548,3 +548,8 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 540. Docker export preserves rootfs diff IDs platform and runtime config
 541. Docker image layer is rehashed while expanding it for export
 542. format-selectable image save with the existing OCI format as default
+543. multi-image Docker save export from a single command
+544. combine tags with identical Docker image configurations into one manifest entry
+545. deduplicate shared rootfs layers across Docker image exports
+546. deterministic ordering of Docker manifest config and layer entries
+547. enforce Docker export image-count and duplicate-reference limits

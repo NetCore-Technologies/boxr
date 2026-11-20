@@ -1,11 +1,14 @@
 package image
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -592,5 +595,134 @@ func TestSaveDockerArchiveRoundTrip(t *testing.T) {
 	}
 	if string(contents) != "hello image\n" {
 		t.Fatalf("unexpected rootfs content after round trip: %q", contents)
+	}
+}
+
+
+func TestSaveDockerManyDeduplicatesImagesAndLayers(t *testing.T) {
+	useStore(t)
+	root := newRoot(t)
+	firstConfig := ImageRuntimeConfig{
+		Env:        []string{"APP_MODE=production"},
+		Entrypoint: []string{"/bin/hello"},
+		WorkingDir: "/srv/app",
+		Labels:     map[string]string{"org.example.component": "api"},
+	}
+	if _, err := ImportRootFSWithConfig(root, "example.com/demo:stable", "linux", "amd64", "", firstConfig); err != nil {
+		t.Fatal(err)
+	}
+	if err := Tag("example.com/demo:stable", "example.com/demo:latest"); err != nil {
+		t.Fatal(err)
+	}
+	secondConfig := ImageRuntimeConfig{Cmd: []string{"sidecar"}}
+	if _, err := ImportRootFSWithConfig(root, "example.com/sidecar:v1", "linux", "amd64", "", secondConfig); err != nil {
+		t.Fatal(err)
+	}
+
+	archive := filepath.Join(t.TempDir(), "bundle.tar")
+	references := []string{
+		"example.com/sidecar:v1",
+		"example.com/demo:stable",
+		"example.com/demo:latest",
+	}
+	if err := SaveDockerMany(references, archive); err != nil {
+		t.Fatalf("SaveDockerMany: %v", err)
+	}
+	firstBytes, err := os.ReadFile(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated := filepath.Join(t.TempDir(), "bundle-repeat.tar")
+	if err := SaveDockerMany(references, repeated); err != nil {
+		t.Fatalf("repeat SaveDockerMany: %v", err)
+	}
+	secondBytes, err := os.ReadFile(repeated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(firstBytes, secondBytes) {
+		t.Fatal("Docker archive export is not deterministic for the same image references")
+	}
+
+	stage := filepath.Join(t.TempDir(), "extracted")
+	if err := os.Mkdir(stage, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractDockerArchive(archive, stage); err != nil {
+		t.Fatalf("extract multi-image archive: %v", err)
+	}
+	manifestData, err := os.ReadFile(filepath.Join(stage, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest []dockerSaveManifestEntry
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest) != 2 {
+		t.Fatalf("got %d manifest entries, want 2 (identical tags should be grouped): %+v", len(manifest), manifest)
+	}
+	var allTags []string
+	layerNames := make(map[string]bool)
+	for _, entry := range manifest {
+		if len(entry.Layers) != 1 {
+			t.Fatalf("unexpected layer list: %+v", entry)
+		}
+		layerNames[entry.Layers[0]] = true
+		allTags = append(allTags, entry.RepoTags...)
+	}
+	sort.Strings(allTags)
+	wantTags := []string{
+		"example.com/demo:latest",
+		"example.com/demo:stable",
+		"example.com/sidecar:v1",
+	}
+	if !reflect.DeepEqual(allTags, wantTags) {
+		t.Fatalf("manifest tags = %v, want %v", allTags, wantTags)
+	}
+	if len(layerNames) != 1 {
+		t.Fatalf("shared layer should be stored once, found %d layer paths", len(layerNames))
+	}
+	layerID := strings.TrimSuffix(strings.TrimSuffix(manifest[0].Layers[0], "/layer.tar"), "/")
+	if layerID == manifest[0].Layers[0] || len(layerID) != 64 {
+		t.Fatalf("unexpected Docker layer path %q", manifest[0].Layers[0])
+	}
+
+	repositoriesData, err := os.ReadFile(filepath.Join(stage, "repositories"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var repositories map[string]map[string]string
+	if err := json.Unmarshal(repositoriesData, &repositories); err != nil {
+		t.Fatal(err)
+	}
+	for _, reference := range wantTags {
+		repository, tag, err := splitDockerRepositoryTag(reference)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if repositories[repository][tag] != layerID {
+			t.Errorf("repositories map omitted %s or used the wrong layer: %+v", reference, repositories)
+		}
+	}
+
+	if err := SaveDockerMany([]string{"example.com/demo:stable", "example.com/demo:stable"}, filepath.Join(t.TempDir(), "duplicate.tar")); err == nil {
+		t.Fatal("duplicate Docker export references were accepted")
+	}
+	if err := SaveDockerMany(make([]string, maxDockerImageCount+1), filepath.Join(t.TempDir(), "too-many.tar")); err == nil {
+		t.Fatal("Docker export accepted more than the supported image count")
+	}
+
+	loaded, err := Load(archive)
+	if err != nil {
+		t.Fatalf("load multi-image Docker archive: %v", err)
+	}
+	loadedReferences := make([]string, 0, len(loaded))
+	for _, item := range loaded {
+		loadedReferences = append(loadedReferences, item.Reference)
+	}
+	sort.Strings(loadedReferences)
+	if !reflect.DeepEqual(loadedReferences, wantTags) {
+		t.Fatalf("loaded references = %v, want %v", loadedReferences, wantTags)
 	}
 }
