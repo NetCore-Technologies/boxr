@@ -2921,3 +2921,118 @@ func TestRunRejectsPublishedPortsOutsideBridgeMode(t *testing.T) {
 		t.Fatalf("published port without bridge returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
 	}
 }
+
+func TestNetworkConnectAttachesRunningPrivateNamespaceAndPublishedPorts(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	record, err := state.Create("live-connect-api", []string{"/bin/service"}, container.Options{NetworkMode: "none"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+
+	oldJoin, oldVerify := joinExistingContainerNetwork, verifyContainerNamespacePID
+	t.Cleanup(func() {
+		joinExistingContainerNetwork, verifyContainerNamespacePID = oldJoin, oldVerify
+	})
+	var gotNetwork, gotID string
+	var gotPID int
+	var gotPorts []container.PortMapping
+	joinExistingContainerNetwork = func(network string, pid int, id string, ports ...container.PortMapping) (string, error) {
+		gotNetwork, gotPID, gotID = network, pid, id
+		gotPorts = append([]container.PortMapping(nil), ports...)
+		return "172.30.10.8", nil
+	}
+	verifyContainerNamespacePID = func(pid int) error {
+		if pid != os.Getpid() {
+			t.Fatalf("verified PID = %d, want test process %d", pid, os.Getpid())
+		}
+		return nil
+	}
+
+	var out, errOut bytes.Buffer
+	code := run([]string{
+		"network", "connect", "--publish", "127.0.0.1:8080:80/tcp",
+		"frontend", "live-connect-api",
+	}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("network connect returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	wantPorts := []container.PortMapping{{
+		HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 80, Protocol: "tcp",
+	}}
+	if gotNetwork != "frontend" || gotID != record.ID || gotPID != os.Getpid() || !reflect.DeepEqual(gotPorts, wantPorts) {
+		t.Fatalf("network attach arguments = network %q id %q pid %d ports %+v", gotNetwork, gotID, gotPID, gotPorts)
+	}
+	if !strings.Contains(out.String(), "172.30.10.8") {
+		t.Fatalf("connect output does not include allocated address: %q", out.String())
+	}
+}
+
+func TestNetworkConnectRejectsHostNetworkContainerBeforeNamespaceEntry(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	record, err := state.Create("live-connect-host", []string{"/bin/service"}, container.Options{NetworkMode: "host"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	oldJoin, oldVerify := joinExistingContainerNetwork, verifyContainerNamespacePID
+	t.Cleanup(func() {
+		joinExistingContainerNetwork, verifyContainerNamespacePID = oldJoin, oldVerify
+	})
+	verifyCalled := false
+	joinCalled := false
+	verifyContainerNamespacePID = func(int) error {
+		verifyCalled = true
+		return nil
+	}
+	joinExistingContainerNetwork = func(string, int, string, ...container.PortMapping) (string, error) {
+		joinCalled = true
+		return "172.30.10.8", nil
+	}
+	var out, errOut bytes.Buffer
+	code := run([]string{"network", "connect", "frontend", "live-connect-host"}, &out, &errOut)
+	if code != 1 || !strings.Contains(errOut.String(), "started with --network none") {
+		t.Fatalf("network connect host mode returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	if verifyCalled || joinCalled {
+		t.Fatalf("unsafe host-network container reached namespace attachment: verify=%v join=%v", verifyCalled, joinCalled)
+	}
+}
+
+func TestNetworkDisconnectDetachesRunningPrivateNamespace(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	record, err := state.Create("live-disconnect-api", []string{"/bin/service"}, container.Options{NetworkMode: "none"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+
+	oldLeave := leaveExistingContainerNetwork
+	t.Cleanup(func() { leaveExistingContainerNetwork = oldLeave })
+	var gotNetwork, gotID string
+	leaveExistingContainerNetwork = func(network, id string) error {
+		gotNetwork, gotID = network, id
+		return nil
+	}
+	var out, errOut bytes.Buffer
+	code := run([]string{"network", "disconnect", "frontend", "live-disconnect-api"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("network disconnect returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	if gotNetwork != "frontend" || gotID != record.ID || !strings.Contains(out.String(), "disconnected container") {
+		t.Fatalf("network detach arguments/output = network %q id %q out %q", gotNetwork, gotID, out.String())
+	}
+}
+
+func TestVerifyContainerRuntimePIDRejectsNonBoxrProcess(t *testing.T) {
+	if err := verifyContainerRuntimePID(os.Getpid()); err == nil {
+		t.Fatal("test process unexpectedly passed Boxr helper PID verification")
+	}
+}
+
