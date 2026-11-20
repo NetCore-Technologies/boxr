@@ -83,6 +83,12 @@ sudo boxr doctor
 boxr run --dry-run --name preview --env APP_MODE=dev -- /bin/echo hello
 
 sudo boxr run --hostname worker --memory 256m --cpus 1 -- /bin/sh
+
+# Start a background workload that survives the launching terminal.
+sudo boxr run --detach --name background-job -- /usr/bin/sleep 3600
+boxr ps
+boxr logs --follow background-job
+sudo boxr stop --time 10s background-job
 ```
 
 OverlayFS keeps writes in a persistent upper directory while leaving the supplied rootfs unchanged. The upper/work storage must be on a filesystem that supports OverlayFS; one directory cannot be used by two active containers at once:
@@ -122,6 +128,20 @@ sudo boxr run \
 ```
 
 `--network none` creates a private network namespace and enables loopback; it does not configure a veth pair, bridge, NAT, DNS or outbound internet access.
+
+### Detached containers
+
+On Linux, `boxr run --detach` (or `-d`) starts a separate Boxr supervisor in a new session. The launching CLI waits until the container's namespace helper has passed cgroup configuration and the startup barrier has been released, then prints the container ID and host PID. The supervisor retains the container lifecycle and captures output in the private state/log directory; use `boxr ps`, `boxr logs --follow`, `boxr stop` and `boxr rm` for normal management.
+
+```bash
+sudo boxr run -d --name worker -- /usr/bin/sleep 3600
+boxr ps
+boxr logs --follow worker
+sudo boxr stop --time 10s worker
+sudo boxr rm worker
+```
+
+Detached mode is a per-container supervisor, not a system daemon. It does not yet provide automatic restart policies, reboot recovery, daemon-wide health monitoring or a service manager integration. If the supervisor or host is terminated, the container is not automatically restarted. Linux namespace permissions and the same runtime security limitations still apply.
 
 ## Container workflow
 
