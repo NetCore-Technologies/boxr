@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 702 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 708 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -708,3 +708,9 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 700. deployment manifests validate service published port mappings through container option rules
 701. deployment service plans expose normalized TCP and UDP published port bindings
 702. deployment subprocess runs apply and release published port rules through the container lifecycle
+703. Linux network store transactions use an advisory cross-process lock for IPAM and port reservations
+704. Linux network store lock files are opened without following symlinks and restricted to owner read/write
+705. non-Linux CLI builds retain process-local network store locking without claiming runtime support
+706. published port setup checks exact PREROUTING OUTPUT and FORWARD rules before insertion
+707. published port rollback removes only firewall rules inserted by the current attachment attempt
+708. failed firewall cleanup retains the IPAM lease and host-port reservation until cleanup can be retried
