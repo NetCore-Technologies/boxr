@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 628 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 633 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -634,3 +634,8 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 626. unknown deployment profiles are rejected
 627. profile-filtered dependency graphs reject inactive dependencies
 628. deployment image prefetch and startup are limited to selected profiles
+629. deterministic service profile inventory
+630. profile inventory groups services by opt-in profile
+631. always-enabled services appear separately from opt-in profiles
+632. services assigned to multiple profiles appear in every matching group
+633. secret-free JSON and text profile inventory output
