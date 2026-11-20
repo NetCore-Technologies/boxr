@@ -3038,6 +3038,7 @@ func TestVerifyContainerRuntimePIDRejectsNonBoxrProcess(t *testing.T) {
 }
 
 func TestNetworkPruneDefaultsToDryRunAndKeepsLiveLeases(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
 	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
 	runner := boxrnetwork.RunnerFunc(func(context.Context, string, ...string) error { return nil })
 	if _, err := boxrnetwork.CreateWithRunner(context.Background(), "stale-net", boxrnetwork.CreateOptions{
@@ -3067,6 +3068,7 @@ func TestNetworkPruneDefaultsToDryRunAndKeepsLiveLeases(t *testing.T) {
 }
 
 func TestNetworkPruneForceInvokesOwnershipCheckedCleanup(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
 	t.Setenv("BOXR_NETWORK_DIR", t.TempDir())
 	oldPrune := pruneManagedNetworkAttachments
 	t.Cleanup(func() { pruneManagedNetworkAttachments = oldPrune })
