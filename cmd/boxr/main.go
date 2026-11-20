@@ -3325,7 +3325,7 @@ var implementedFeatures = []string{
 	"Engine API removes unused local image tags and rejects removal while containers reference them",
 	"Engine API pulls and verifies OCI/Docker registry images using Docker X-Registry-Auth and Linux platform selection",
 	"Engine API pushes verified local single-layer OCI images using Docker X-Registry-Auth and registry upload verification",
-	"Engine API creates Docker image tag aliases from verified OCI content and protects tags referenced by containers",,
+	"Engine API creates Docker image tag aliases from verified OCI content and protects tags referenced by containers",
 	"top-level pull command reuses verified OCI and Docker registry image downloads",
 	"native create command records a verified image-backed container without starting it",
 	"native start command launches a created image-backed container through the detached supervisor"
@@ -3379,7 +3379,7 @@ func runCompletion(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Usage: boxr completion bash|zsh|fish|powershell")
 		return 2
 	}
-	commands := "daemon run exec ps inspect stop kill wait logs network volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
+	commands := "daemon pull push create start run exec ps inspect stop kill wait logs network volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
 	switch args[0] {
 	case "bash":
 		fmt.Fprintf(stdout, `_boxr_complete() { COMPREPLY=($(compgen -W "%s" -- "${COMP_WORDS[COMP_CWORD]}")); }
