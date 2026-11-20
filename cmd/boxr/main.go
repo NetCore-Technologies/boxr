@@ -3106,6 +3106,11 @@ type deploymentProcessExit struct {
 	err     error
 }
 
+type deploymentHealthFailure struct {
+	service string
+	err     error
+}
+
 type deploymentStatus struct {
 	Service       string     `json:"service"`
 	ContainerName string     `json:"containerName"`
@@ -3508,8 +3513,27 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 			fmt.Fprintf(stdout, "started service %s\n", process.service)
 		}
 	}
+	healthCtx, cancelHealth := context.WithCancel(ctx)
+	defer cancelHealth()
+	healthFailures := make(chan deploymentHealthFailure, len(processes))
+	for _, process := range processes {
+		healthcheck := file.Services[process.service].Healthcheck
+		if healthcheck == nil {
+			continue
+		}
+		go func(service string, health *deploy.Healthcheck) {
+			if err := deploy.MonitorHealth(healthCtx, health); err != nil && !errors.Is(err, context.Canceled) {
+				select {
+				case healthFailures <- deploymentHealthFailure{service: service, err: err}:
+				case <-healthCtx.Done():
+				}
+			}
+		}(process.service, healthcheck)
+	}
+
 	fmt.Fprintf(stdout, "deployment %s is running; press Ctrl+C to stop all services\n", file.Name)
 	var terminalExit *deploymentProcessExit
+	var terminalHealthFailure *deploymentHealthFailure
 	interrupted := false
 	select {
 	case exitedService := <-exits:
@@ -3520,13 +3544,20 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 		} else {
 			fmt.Fprintf(stdout, "boxr deploy up: service %s completed\n", exitedService.service)
 		}
+	case failure := <-healthFailures:
+		terminalHealthFailure = &failure
+		fmt.Fprintf(stderr, "boxr deploy up: service %s is unhealthy: %v\n", failure.service, failure.err)
 	case <-ctx.Done():
 		interrupted = true
 		fmt.Fprintln(stdout, "stopping deployment after interrupt")
 	}
+	cancelHealth()
 	stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
 	if terminalExit != nil {
 		return deploymentExitCode(terminalExit.err)
+	}
+	if terminalHealthFailure != nil {
+		return 1
 	}
 	if interrupted {
 		return 130
