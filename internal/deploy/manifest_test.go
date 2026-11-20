@@ -470,3 +470,48 @@ func TestListProfilesReturnsDeterministicInventory(t *testing.T) {
 	}
 }
 
+func TestBuildPlanValidatesServiceEnvironmentFiles(t *testing.T) {
+	file := File{
+		Version: 1,
+		Services: map[string]Service{
+			"api": {
+				Command:  []string{"/bin/api"},
+				EnvFiles: []string{"/etc/boxr/base.env", "/run/secrets/api.env"},
+			},
+		},
+	}
+	plan, err := BuildPlan(file)
+	if err != nil {
+		t.Fatalf("BuildPlan(valid environment files): %v", err)
+	}
+	if got := plan.Services[0].EnvironmentFileCount; got != 2 {
+		t.Fatalf("environment file count = %d, want 2", got)
+	}
+
+	tests := map[string][]string{
+		"relative path":       {"config/api.env"},
+		"parent traversal":    {"/etc/boxr/../secrets/api.env"},
+		"non-canonical path":  {"/etc//boxr/api.env"},
+		"surrounding spaces":  {"/etc/boxr/api.env "},
+		"NUL byte":            {"/etc/boxr/api.env\x00"},
+		"duplicate path":      {"/etc/boxr/api.env", "/etc/boxr/api.env"},
+		"too many files":      make([]string, 17),
+	}
+	for index := range tests["too many files"] {
+		tests["too many files"][index] = fmt.Sprintf("/etc/boxr/%02d.env", index)
+	}
+	for name, paths := range tests {
+		t.Run(name, func(t *testing.T) {
+			invalid := File{
+				Version: 1,
+				Services: map[string]Service{
+					"api": {Command: []string{"/bin/api"}, EnvFiles: paths},
+				},
+			}
+			if _, err := BuildPlan(invalid); err == nil {
+				t.Fatal("invalid environment file list unexpectedly produced a plan")
+			}
+		})
+	}
+}
+
