@@ -3,7 +3,6 @@ package engineapi
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -231,7 +230,6 @@ func dockerOptions(host dockerHostConfig) (container.Options, error) {
 		NetworkMode: "none",
 		MemoryLimitBytes: host.Memory,
 		MemoryLowBytes: host.MemoryReservation,
-		MemorySwapMaxBytes: host.MemorySwap,
 		PidsLimit: host.PidsLimit,
 		ReadOnlyRootFS: host.ReadonlyRootfs,
 		AutoRemove: host.AutoRemove,
@@ -248,8 +246,14 @@ func dockerOptions(host dockerHostConfig) (container.Options, error) {
 			return options, fmt.Errorf("NanoCpus is outside the supported range")
 		}
 	}
-	if host.MemorySwap > 0 && host.Memory > 0 && host.MemorySwap < host.Memory {
-		return options, fmt.Errorf("MemorySwap cannot be smaller than Memory")
+	if host.MemorySwap > 0 {
+		if host.Memory == 0 {
+			return options, fmt.Errorf("MemorySwap requires a positive Memory limit so Boxr can derive the swap-only cgroup limit")
+		}
+		if host.MemorySwap < host.Memory {
+			return options, fmt.Errorf("MemorySwap cannot be smaller than Memory")
+		}
+		options.MemorySwapMaxBytes = host.MemorySwap - host.Memory
 	}
 	if host.Privileged || host.PublishAllPorts || len(host.CapAdd) > 0 || len(host.Devices) > 0 || len(host.SecurityOpt) > 0 || len(host.Tmpfs) > 0 || len(host.Mounts) > 0 || host.ShmSize > 0 {
 		return options, fmt.Errorf("Privileged, CapAdd, Devices, SecurityOpt, Tmpfs, Mounts, ShmSize and PublishAllPorts are not supported by Engine API create")
