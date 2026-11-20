@@ -3630,3 +3630,65 @@ func TestRestartRejectsAutoRemoveContainers(t *testing.T) {
 	}
 	_ = state.RemoveCreated(record.ID)
 }
+
+
+func TestDockerStyleImageAliasesBuildListTagAndRemove(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	contextDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(contextDir, "bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(contextDir, "bin", "hello"), []byte("hello from Docker-style build\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	dockerfile := "FROM scratch\nCOPY bin/hello /usr/bin/hello\nCMD [\"/usr/bin/hello\"]\n"
+	if err := os.WriteFile(filepath.Join(contextDir, "Dockerfile"), []byte(dockerfile), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"build", "-t", "demo:latest", contextDir}, &stdout, &stderr); code != 0 {
+		t.Fatalf("top-level build returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "built demo:latest") {
+		t.Fatalf("build output does not identify image: %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"images", "--quiet"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("images returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "demo:latest") {
+		t.Fatalf("images output misses newly built image: %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"tag", "demo:latest", "demo:stable"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("tag returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	original, err := imageStore.Inspect("demo:latest")
+	if err != nil {
+		t.Fatalf("inspect original tag: %v", err)
+	}
+	alias, err := imageStore.Inspect("demo:stable")
+	if err != nil {
+		t.Fatalf("inspect stable alias: %v", err)
+	}
+	if original.Digest != alias.Digest {
+		t.Fatalf("tag alias copied or changed image content: original=%s alias=%s", original.Digest, alias.Digest)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"rmi", "demo:latest"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("rmi returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := imageStore.Inspect("demo:latest"); err == nil {
+		t.Fatal("rmi left the source image tag in the store")
+	}
+	if _, err := imageStore.Verify("demo:stable"); err != nil {
+		t.Fatalf("removing one tag damaged shared image content: %v", err)
+	}
+}
