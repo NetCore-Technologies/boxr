@@ -171,6 +171,7 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 	var detached bool
 	var opts container.Options
 	var memory, memoryHigh, memoryLow, memoryMin, memorySwap string
+	var restartDelay time.Duration
 	var configPath string
 	var imageReference string
 	var configCommand []string
@@ -204,6 +205,7 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 		// override both sources below.
 		opts.Labels = mergeLabels(loaded.Metadata, opts.Labels)
 	}
+	restartDelay = time.Duration(opts.RestartDelayMS) * time.Millisecond
 	if opts.MemoryLimitBytes > 0 {
 		memory = strconv.FormatInt(opts.MemoryLimitBytes, 10)
 	}
@@ -236,6 +238,9 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 	flags.StringVar(&opts.Name, "name", opts.Name, "unique local container name")
 	flags.Var(&labels, "label", "container metadata label (repeatable KEY=VALUE)")
 	flags.BoolVar(&opts.AutoRemove, "rm", opts.AutoRemove, "remove the local record after the container exits")
+	flags.StringVar(&opts.RestartPolicy, "restart", opts.RestartPolicy, "restart policy: no, on-failure, always, or unless-stopped (requires --detach)")
+	flags.IntVar(&opts.RestartMaxRetries, "restart-max-retries", opts.RestartMaxRetries, "maximum on-failure restarts (0 means unlimited)")
+	flags.DurationVar(&restartDelay, "restart-delay", restartDelay, "delay between restart attempts (100ms to 5m; default 1s)")
 	flags.StringVar(&opts.Hostname, "hostname", opts.Hostname, "hostname visible inside the container")
 	flags.StringVar(&memory, "memory", "", "hard memory limit (for example: 256m, 1g, or 536870912)")
 	flags.StringVar(&memoryHigh, "memory-high", "", "memory pressure threshold (cgroup v2 memory.high)")
@@ -277,6 +282,13 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 	if detached && dryRun {
 		fmt.Fprintln(stderr, "boxr run: --detach cannot be combined with --dry-run")
 		return 2
+	}
+	if restartDelay != 0 {
+		if restartDelay%time.Millisecond != 0 {
+			fmt.Fprintln(stderr, "boxr run: --restart-delay must use whole milliseconds")
+			return 2
+		}
+		opts.RestartDelayMS = int(restartDelay / time.Millisecond)
 	}
 	providedCommand := flags.Args()
 	if len(providedCommand) == 0 {
@@ -475,6 +487,15 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "boxr run: %v\n", err)
 		return 2
 	}
+	if opts.RestartPolicy != "" && opts.RestartPolicy != "no" &&
+		!detached && detachedReadyWriter == nil && !dryRun {
+		fmt.Fprintln(stderr, "boxr run: restart policies require --detach")
+		return 2
+	}
+	if opts.RestartPolicy != "" && opts.RestartPolicy != "no" && opts.AutoRemove {
+		fmt.Fprintln(stderr, "boxr run: restart policies cannot be combined with --rm")
+		return 2
+	}
 	if dryRun {
 		plan := buildRunPlan(commandArgs, opts)
 		plan.ImageReference = imageReference
@@ -579,6 +600,9 @@ type runPlan struct {
 	NetworkMode          string                  `json:"networkMode"`
 	NetworkName          string                  `json:"networkName,omitempty"`
 	PublishedPorts       []container.PortMapping `json:"publishedPorts,omitempty"`
+	RestartPolicy        string                  `json:"restartPolicy,omitempty"`
+	RestartMaxRetries    int                     `json:"restartMaxRetries,omitempty"`
+	RestartDelayMS       int                     `json:"restartDelayMs,omitempty"`
 	MemoryLimitBytes     int64                   `json:"memoryLimitBytes,omitempty"`
 	MemoryHighBytes      int64                   `json:"memoryHighBytes,omitempty"`
 	CPUs                 float64                 `json:"cpus,omitempty"`
@@ -598,6 +622,13 @@ type runPlan struct {
 	SecurityProfile      string                  `json:"securityProfile,omitempty"`
 	ResourceProfile      string                  `json:"resourceProfile,omitempty"`
 	NoContainerStateMade bool                    `json:"noContainerStateCreated"`
+}
+
+func restartPolicyName(value string) string {
+	if value == "" {
+		return "no"
+	}
+	return value
 }
 
 func buildRunPlan(command []string, opts container.Options) runPlan {
@@ -626,7 +657,7 @@ func buildRunPlan(command []string, opts container.Options) runPlan {
 				return "host"
 			}
 			return opts.NetworkMode
-		}(), NetworkName: opts.NetworkName, PublishedPorts: normalizePublishedPorts(opts.PublishedPorts), MemoryLimitBytes: opts.MemoryLimitBytes,
+		}(), NetworkName: opts.NetworkName, PublishedPorts: normalizePublishedPorts(opts.PublishedPorts), RestartPolicy: restartPolicyName(opts.RestartPolicy), RestartMaxRetries: opts.RestartMaxRetries, RestartDelayMS: opts.RestartDelayMS, MemoryLimitBytes: opts.MemoryLimitBytes,
 		MemoryHighBytes: opts.MemoryHighBytes, CPUs: opts.CPUs, CPUWeight: opts.CPUWeight,
 		IOWeight: opts.IOWeight, PIDsLimit: opts.PidsLimit, BindMountCount: len(opts.BindMounts),
 		TmpfsMountCount: len(opts.TmpfsMounts), EnvironmentKeys: envKeys, EnvironmentValues: "redacted",
