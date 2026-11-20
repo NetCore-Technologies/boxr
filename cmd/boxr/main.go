@@ -3254,6 +3254,9 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 			if err != nil {
 				fmt.Fprintf(stderr, "boxr deploy up: %v\n", err)
 				stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
+				if errors.Is(err, context.Canceled) {
+					return 130
+				}
 				return 1
 			}
 			fmt.Fprintf(stdout, "started service %s\n", process.service)
