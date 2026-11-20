@@ -287,7 +287,17 @@ The store defaults to `$XDG_DATA_HOME/boxr/images` or `~/.local/share/boxr/image
 
 ## Multi-service deployment planning
 
-Create and validate a declarative deployment before starting any workload:
+Create and validate a declarative deployment before starting any workload. The deployment commands accept both Boxr JSON manifests and the supported subset of Docker Compose YAML (`.yaml`/`.yml`):
+
+```sh
+boxr deploy validate compose.yaml
+boxr deploy plan compose.yaml
+boxr deploy pull compose.yaml
+boxr deploy up compose.yaml
+```
+
+Compose YAML supports image-based services, command arguments, environment values/files, dependency ordering, profiles, labels, working directories, hostnames and short IPv4 TCP/UDP port mappings on a pre-created external Boxr bridge. Services must explicitly choose `network_mode: none|host` or one external Boxr bridge network. This is not full Compose parity: builds, Compose volumes, implicit bridge networks, service DNS, arbitrary healthcheck commands, TTY, privileged mode and other unsupported semantics are rejected. See [the deployment guide](docs/deployments.md) for the exact supported subset and example.
+
 
 ```sh
 boxr volume create db-data
