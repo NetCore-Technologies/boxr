@@ -462,19 +462,14 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 				}
 			}
 			if err := state.Start(record.ID, pid); err != nil {
-				if opts.NetworkMode == "bridge" {
-					_ = boxrnetwork.Leave(opts.NetworkName, record.ID)
-				}
+				_ = boxrnetwork.LeaveAll(record.ID)
 				return err
 			}
 			started = true
 			return nil
 		},
 		OnExit: func(_ int, executionErr error) error {
-			var networkErr error
-			if opts.NetworkMode == "bridge" {
-				networkErr = boxrnetwork.Leave(opts.NetworkName, record.ID)
-			}
+			networkErr := boxrnetwork.LeaveAll(record.ID)
 			stateErr := state.Finish(record.ID, executionErr)
 			if networkErr != nil && stateErr != nil {
 				return fmt.Errorf("disconnect bridge network: %v; finish container record: %w", networkErr, stateErr)
