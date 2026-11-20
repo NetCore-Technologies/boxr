@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	imageStore "github.com/manit6752025/boxr/internal/image"
 )
 
 const (
