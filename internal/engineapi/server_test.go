@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -287,3 +288,108 @@ func TestEventFiltersMatchContainerActionsAndIDs(t *testing.T) {
 		})
 	}
 }
+
+func TestEngineAPIContainerKillSendsVerifiedDockerSignal(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("kill-test", []string{"sleep", "30"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := exec.Command("sh", "-c", "exec sleep 30")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	defer func() {
+		if !waited {
+			_ = child.Process.Kill()
+			_ = child.Wait()
+		}
+	}()
+	if err := state.Start(record.ID, child.Process.Pid); err != nil {
+		t.Fatal(err)
+	}
+
+	response := engineAPIRequest(server, http.MethodPost, "/containers/"+record.ID+"/kill?signal=15")
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("kill status=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := child.Wait(); err != nil {
+		waited = true
+		if finishErr := state.Finish(record.ID, err); finishErr != nil {
+			t.Fatal(finishErr)
+		}
+	} else {
+		waited = true
+		t.Fatal("SIGTERM unexpectedly produced a successful process exit")
+	}
+}
+
+func TestEngineAPIContainerKillValidatesSignalAndState(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("created-kill-test", []string{"sleep", "30"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := engineAPIRequest(server, http.MethodPost, "/containers/"+record.ID+"/kill?signal=999")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid signal status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = engineAPIRequest(server, http.MethodPost, "/containers/"+record.ID+"/kill")
+	if response.Code != http.StatusConflict {
+		t.Fatalf("created container kill status=%d", response.Code)
+	}
+	response = engineAPIRequest(server, http.MethodPost, "/containers/missing/kill")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("missing container kill status=%d", response.Code)
+	}
+}
+
+func TestEngineAPIContainerDeleteCreatedAndRejectsRunning(t *testing.T) {
+	server := setupEngineAPITest(t)
+	created, err := state.Create("created-delete-test", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := engineAPIRequest(server, http.MethodDelete, "/containers/"+created.ID)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("delete created status=%d body=%s", response.Code, response.Body.String())
+	}
+	if _, err := state.Get(created.ID); err == nil {
+		t.Fatal("created container still exists after delete")
+	}
+
+	running := createEngineAPITestContainer(t, "running-delete-test", container.Options{})
+	response = engineAPIRequest(server, http.MethodDelete, "/containers/"+running.ID)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("delete running status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = engineAPIRequest(server, http.MethodDelete, "/containers/"+running.ID+"?force=not-a-bool")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid force query status=%d", response.Code)
+	}
+	if err := state.Finish(running.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	response = engineAPIRequest(server, http.MethodDelete, "/containers/"+running.ID)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("delete stopped status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestEngineAPIContainerDeleteRejectsUnsupportedForceAndVolumeRemoval(t *testing.T) {
+	server := setupEngineAPITest(t)
+	created, err := state.Create("delete-options-test", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := engineAPIRequest(server, http.MethodDelete, "/containers/"+created.ID+"?v=true")
+	if response.Code != http.StatusNotImplemented {
+		t.Fatalf("volume removal status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = engineAPIRequest(server, http.MethodDelete, "/containers/"+created.ID+"?force=true")
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("force flag on a stopped created container status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+

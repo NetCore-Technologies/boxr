@@ -83,10 +83,23 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		}
 		s.handleContainers(writer, request)
 	case strings.HasPrefix(path, "/containers/"):
-		if !requireMethod(writer, request, http.MethodGet) {
+		remainder := strings.TrimPrefix(path, "/containers/")
+		if strings.HasSuffix(remainder, "/kill") {
+			if !requireMethodAllow(writer, request, http.MethodPost, http.MethodPost) {
+				return
+			}
+			s.handleContainerKill(writer, request, strings.TrimSuffix(remainder, "/kill"))
 			return
 		}
-		s.handleContainer(writer, request, strings.TrimPrefix(path, "/containers/"))
+		if !strings.Contains(remainder, "/") && request.Method == http.MethodDelete {
+			s.handleContainerDelete(writer, request, remainder)
+			return
+		}
+		if request.Method != http.MethodGet {
+			writeMethodErrorFor(writer, http.MethodGet+", "+http.MethodHead)
+			return
+		}
+		s.handleContainer(writer, request, remainder)
 	case path == "/images/json":
 		if !requireMethod(writer, request, http.MethodGet) {
 			return
@@ -382,6 +395,113 @@ func matchesContainerFilters(record state.Record, filters map[string][]string) b
 		}
 	}
 	return true
+}
+
+func (s *Server) handleContainerKill(writer http.ResponseWriter, request *http.Request, rawID string) {
+	query, err := decodeContainerID(rawID)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	record, err := state.Get(query)
+	if err != nil {
+		writeError(writer, http.StatusNotFound, err)
+		return
+	}
+	if record.Status != "running" {
+		writeError(writer, http.StatusConflict, fmt.Errorf("container %s is %s, not running", record.ID, record.Status))
+		return
+	}
+	signal, err := dockerSignalName(request.URL.Query().Get("signal"))
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if err := state.Signal(record.ID, signal); err != nil {
+		writeError(writer, http.StatusConflict, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleContainerDelete(writer http.ResponseWriter, request *http.Request, rawID string) {
+	query, err := decodeContainerID(rawID)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	force, err := boolQuery(request, "force")
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	removeVolumes, err := boolQuery(request, "v")
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	record, err := state.Get(query)
+	if err != nil {
+		writeError(writer, http.StatusNotFound, err)
+		return
+	}
+	if record.Status == "running" || record.Status == "restarting" {
+		if force {
+			writeError(writer, http.StatusNotImplemented, fmt.Errorf("forced removal is not implemented; stop the container before removal"))
+			return
+		}
+		writeError(writer, http.StatusConflict, fmt.Errorf("container %s is %s; stop it before removal", record.ID, record.Status))
+		return
+	}
+	if removeVolumes {
+		writeError(writer, http.StatusNotImplemented, fmt.Errorf("anonymous volume removal is not implemented"))
+		return
+	}
+	if record.Status == "created" {
+		err = state.RemoveCreated(record.ID)
+	} else {
+		err = state.Remove(record.ID)
+	}
+	if err != nil {
+		writeError(writer, http.StatusConflict, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func decodeContainerID(rawID string) (string, error) {
+	if rawID == "" || strings.Contains(rawID, "/") {
+		return "", fmt.Errorf("container ID is required")
+	}
+	query, err := url.PathUnescape(rawID)
+	if err != nil || strings.TrimSpace(query) == "" {
+		return "", fmt.Errorf("invalid container ID")
+	}
+	return query, nil
+}
+
+func dockerSignalName(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "KILL", nil
+	}
+	if number, err := strconv.Atoi(value); err == nil {
+		signals := map[int]string{
+			1: "HUP", 2: "INT", 3: "QUIT", 9: "KILL", 10: "USR1",
+			12: "USR2", 15: "TERM", 18: "CONT", 19: "STOP",
+		}
+		if name, ok := signals[number]; ok {
+			return name, nil
+		}
+		return "", fmt.Errorf("signal %q is not supported", value)
+	}
+	name := strings.ToUpper(strings.TrimPrefix(value, "SIG"))
+	switch name {
+	case "HUP", "INT", "QUIT", "KILL", "USR1", "USR2", "TERM", "CONT", "STOP":
+		return name, nil
+	default:
+		return "", fmt.Errorf("signal %q is not supported", value)
+	}
 }
 
 func (s *Server) handleContainer(writer http.ResponseWriter, request *http.Request, remainder string) {
@@ -891,6 +1011,19 @@ func requireMethod(writer http.ResponseWriter, request *http.Request, method str
 	}
 	writeMethodError(writer)
 	return false
+}
+
+func requireMethodAllow(writer http.ResponseWriter, request *http.Request, method, allow string) bool {
+	if request.Method == method {
+		return true
+	}
+	writeMethodErrorFor(writer, allow)
+	return false
+}
+
+func writeMethodErrorFor(writer http.ResponseWriter, allow string) {
+	writer.Header().Set("Allow", allow)
+	writeError(writer, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
 }
 
 func writeMethodError(writer http.ResponseWriter) {

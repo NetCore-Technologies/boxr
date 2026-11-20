@@ -3059,6 +3059,8 @@ var implementedFeatures = []string{
 	"Engine API exposes cgroup v2 CPU memory and PID stats with snapshot and streaming responses",
 	"Engine API streams persisted container lifecycle events and lists OCI image tags",
 	"unsupported Docker Engine mutations and TCP listeners are explicitly outside the API contract",
+	"Engine API sends validated Docker kill signals only to process-identity-verified running containers",
+	"Engine API removes created and stopped containers through Docker DELETE with safe conflict handling",
 }
 
 func printFeatures(stdout io.Writer) {
