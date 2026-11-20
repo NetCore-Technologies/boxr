@@ -318,7 +318,13 @@ func testRegistryLayer(t *testing.T, compressed bool, entries ...registryLayerEn
 		if kind == 0 {
 			kind = tar.TypeReg
 		}
-		header := &tar.Header{Name: entry.name, Mode: 0644, Typeflag: kind, Size: int64(len(entry.data)), ModTime: time.Unix(0, 0)}
+		header := &tar.Header{
+			Name:     entry.name,
+			Mode:     0644,
+			Typeflag: kind,
+			Size:     int64(len(entry.data)),
+			ModTime:  time.Unix(0, 0),
+		}
 		if kind == tar.TypeDir {
 			header.Mode, header.Size = 0755, 0
 		}
@@ -361,130 +367,6 @@ func testConfigWithDiffIDs(t *testing.T, arch string, diffIDs []string, runtimeC
 	if err != nil {
 		t.Fatal(err)
 	}
-	return data
-}
-
-func TestPullRejectsTamperedLayerDigest(t *testing.T) {
-	layer, diffID := testLayer(t)
-	configData := testConfig(t, "amd64", diffID)
-	configDescriptor := Descriptor{MediaType: "application/vnd.oci.image.config.v1+json", Digest: digestBytes(configData), Size: int64(len(configData))}
-	layerDescriptor := Descriptor{MediaType: boxrLayerMediaType, Digest: "sha256:" + strings.Repeat("0", 64), Size: int64(len(layer))}
-	manifestData, _ := json.Marshal(manifest{SchemaVersion: 2, MediaType: "application/vnd.oci.image.manifest.v1+json", Config: configDescriptor, Layers: []Descriptor{layerDescriptor}})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.Contains(r.URL.Path, "/manifests/"):
-			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
-			_, _ = w.Write(manifestData)
-		case strings.HasSuffix(r.URL.Path, configDescriptor.Digest):
-			_, _ = w.Write(configData)
-		case strings.HasSuffix(r.URL.Path, layerDescriptor.Digest):
-			_, _ = w.Write(layer)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	ref := strings.TrimPrefix(server.URL, "http://") + "/team/app:latest"
-	if _, err := Pull(context.Background(), ref, "linux/amd64", Credentials{}); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
-		t.Fatalf("expected layer digest mismatch, got %v", err)
-	}
-}
-
-func TestParseAuthParameters(t *testing.T) {
-	got := parseAuthParameters(`realm="https://auth.example/token",service="registry.example",scope="repository:team/app:pull,push"`)
-	for key, want := range map[string]string{"realm": "https://auth.example/token", "service": "registry.example", "scope": "repository:team/app:pull,push"} {
-		if got[key] != want {
-			t.Errorf("%s = %q, want %q", key, got[key], want)
-		}
-	}
-}
-
-func testLayer(t *testing.T) ([]byte, string) {
-	t.Helper()
-	var buffer bytes.Buffer
-	gz := gzip.NewWriter(&buffer)
-	tarWriter := tar.NewWriter(gz)
-	content := []byte("boxr registry test rootfs\n")
-	if err := tarWriter.WriteHeader(&tar.Header{Name: "etc/boxr-release", Mode: 0644, Size: int64(len(content)), Typeflag: tar.TypeReg, ModTime: time.Unix(0, 0)}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tarWriter.Write(content); err != nil {
-		t.Fatal(err)
-	}
-	if err := tarWriter.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := gz.Close(); err != nil {
-		t.Fatal(err)
-	}
-	reader, err := gzip.NewReader(bytes.NewReader(buffer.Bytes()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	plain, err := io.ReadAll(reader)
-	if closeErr := reader.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	diffID := sha256.Sum256(plain)
-	return buffer.Bytes(), "sha256:" + hex.EncodeToString(diffID[:])
-}
-
-func testConfig(t *testing.T, arch, diffID string, runtimeConfigs ...RuntimeConfig) []byte {
-	t.Helper()
-	config := imageConfig{OS: "linux", Architecture: arch}
-	if len(runtimeConfigs) > 0 {
-		config.Config = runtimeConfigs[0]
-	}
-	config.RootFS.Type = "layers"
-	config.RootFS.DiffIDs = []string{diffID}
-	data, err := json.Marshal(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
-}
-
-type registryLayerEntry struct {
-	name string
-	data []byte
-	kind byte
-}
-
-func testRegistryLayer(t *testing.T, compressed bool, entries ...registryLayerEntry) ([]byte, string) {
-	t.Helper()
-	var plain bytes.Buffer
-	writer := tar.NewWriter(&plain)
-	for _, entry := range entries {
-		kind := entry.kind
-		if kind == 0 { kind = tar.TypeReg }
-		header := &tar.Header{Name: entry.name, Mode: 0644, Typeflag: kind, Size: int64(len(entry.data)), ModTime: time.Unix(0, 0)}
-		if kind == tar.TypeDir { header.Mode, header.Size = 0755, 0 }
-		if kind == tar.TypeSymlink || kind == tar.TypeLink { header.Size = 0 }
-		if err := writer.WriteHeader(header); err != nil { t.Fatal(err) }
-		if len(entry.data) > 0 {
-			if _, err := writer.Write(entry.data); err != nil { t.Fatal(err) }
-		}
-	}
-	if err := writer.Close(); err != nil { t.Fatal(err) }
-	diffID := digestBytes(plain.Bytes())
-	if !compressed { return plain.Bytes(), diffID }
-	var result bytes.Buffer
-	gz := gzip.NewWriter(&result)
-	if _, err := gz.Write(plain.Bytes()); err != nil { t.Fatal(err) }
-	if err := gz.Close(); err != nil { t.Fatal(err) }
-	return result.Bytes(), diffID
-}
-
-func testConfigWithDiffIDs(t *testing.T, arch string, diffIDs []string, runtimeConfig RuntimeConfig) []byte {
-	t.Helper()
-	config := imageConfig{OS: "linux", Architecture: arch, Config: runtimeConfig}
-	config.RootFS.Type = "layers"
-	config.RootFS.DiffIDs = append([]string(nil), diffIDs...)
-	data, err := json.Marshal(config)
-	if err != nil { t.Fatal(err) }
 	return data
 }
 
