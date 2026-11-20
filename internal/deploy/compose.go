@@ -19,7 +19,7 @@ type composeDocument struct {
 	Version  yaml.Node                 `yaml:"version"`
 	Services map[string]composeService `yaml:"services"`
 	Networks map[string]composeNetwork `yaml:"networks"`
-	Volumes  map[string]composeVolume `yaml:"volumes"`
+	Volumes  map[string]composeVolume  `yaml:"volumes"`
 }
 
 type composeVolume struct {
