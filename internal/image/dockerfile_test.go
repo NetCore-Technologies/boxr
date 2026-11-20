@@ -287,7 +287,6 @@ func TestBuildDockerfileWithBuildArgsPassesOverridesOnlyToRun(t *testing.T) {
 	}
 }
 
-
 func TestParseDockerfileSupportsLocalADDAndRejectsRemoteSources(t *testing.T) {
 	spec, err := ParseDockerfile([]byte("FROM scratch\nADD payload.tar /opt/app/\nADD config.txt /etc/app.conf\n"))
 	if err != nil {
@@ -349,9 +348,9 @@ func TestBuildDockerfileADDExtractsPlainAndGzipTarArchives(t *testing.T) {
 				t.Fatal(err)
 			}
 			for relative, expected := range map[string]string{
-				"opt/service/bin/server": "binary payload\n",
+				"opt/service/bin/server":   "binary payload\n",
 				"opt/service/etc/app.conf": "mode=production\n",
-				"etc/plain.txt": "normal ADD file\n",
+				"etc/plain.txt":            "normal ADD file\n",
 			} {
 				actual, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relative)))
 				if err != nil {
