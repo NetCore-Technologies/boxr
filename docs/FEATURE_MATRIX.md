@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 470 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 478 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -476,3 +476,11 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 468. statistics watch rejects invalid intervals and counts
 469. statistics watch preserves the existing one-shot JSON interface
 470. statistics watch reports output and cgroup read errors
+471. live container event streaming
+472. event follow supports action and container filters
+473. event follow supports configurable polling intervals
+474. event follow supports bounded capture counts
+475. event follow streams compact JSON Lines or table rows
+476. event follow supports since-based historical catch-up
+477. event follow handles event log truncation by resuming
+478. event follow reports event source and output errors

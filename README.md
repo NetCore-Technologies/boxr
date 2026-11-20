@@ -336,3 +336,17 @@ boxr stats --watch --interval 2s --count 10 CONTAINER
 ```
 
 Watch mode emits a compact JSON object per sample with a UTC `sampledAt` timestamp and the existing statistics payload under `stats`. The default interval is one second (minimum 100 ms). A count of zero continues until the container exits; a positive count is useful for bounded scripts. The original one-shot JSON output remains unchanged. See [runtime monitoring](docs/runtime-monitoring.md).
+
+
+## Follow container events
+
+Stream new lifecycle events as they are recorded:
+
+```bash
+boxr events --follow
+boxr events --follow --action die --container web
+boxr events --follow --format json --interval 250ms --count 25
+boxr events --follow --since 10m --format json
+```
+
+Follow mode starts at the current end of the event log unless `--since` is supplied for a retained-history catch-up. JSON output is one event per line. The default poll interval is 500 ms (minimum 100 ms); a positive `--count` stops after that many matching events. See [event streaming](docs/event-streaming.md).

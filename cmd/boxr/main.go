@@ -813,11 +813,14 @@ func runEvents(args []string, stdout, stderr io.Writer) int {
 	sinceValue := flags.String("since", "", "include events since a duration (1h) or RFC3339 timestamp")
 	action := flags.String("action", "", "filter by create, start, die, remove, or prune")
 	containerQuery := flags.String("container", "", "filter by exact name or container ID prefix")
+	follow := flags.Bool("follow", false, "stream new events as they are recorded")
+	interval := flags.Duration("interval", 500*time.Millisecond, "poll interval for --follow (minimum 100ms)")
+	count := flags.Int("count", 0, "stop after N matching events (0 means continue until interrupted)")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	if flags.NArg() != 0 || *limit < 0 {
-		fmt.Fprintln(stderr, "Usage: boxr events [--limit N] [--since 1h|RFC3339] [--action ACTION] [--container ID|NAME] [--format table|json]")
+	if flags.NArg() != 0 || *limit < 0 || *count < 0 || (!*follow && *count != 0) || (*follow && *interval < 100*time.Millisecond) {
+		fmt.Fprintln(stderr, "Usage: boxr events [--follow] [--interval 500ms] [--count N] [--limit N] [--since 1h|RFC3339] [--action ACTION] [--container ID|NAME] [--format table|json]")
 		return 2
 	}
 	if *format != "table" && *format != "json" {
@@ -842,18 +845,40 @@ func runEvents(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "boxr events: %v\n", err)
 		return 1
 	}
-	filtered := make([]state.Event, 0, len(events))
-	for _, event := range events {
+	matches := func(event state.Event) bool {
 		if !since.IsZero() && event.Time.Before(since) {
-			continue
+			return false
 		}
 		if *action != "" && event.Action != *action {
-			continue
+			return false
 		}
 		if *containerQuery != "" && event.Name != *containerQuery && !strings.HasPrefix(event.ID, *containerQuery) {
-			continue
+			return false
 		}
-		filtered = append(filtered, event)
+		return true
+	}
+	if *follow {
+		initial := make([]state.Event, 0)
+		if !since.IsZero() {
+			for _, event := range events {
+				if matches(event) {
+					initial = append(initial, event)
+				}
+			}
+			if *limit > 0 && len(initial) > *limit {
+				initial = initial[len(initial)-*limit:]
+			}
+		}
+		return streamEvents(stdout, stderr, *interval, *count, *format, initial, len(events), matches, func() ([]state.Event, error) {
+			return state.Events(0)
+		})
+	}
+
+	filtered := make([]state.Event, 0, len(events))
+	for _, event := range events {
+		if matches(event) {
+			filtered = append(filtered, event)
+		}
 	}
 	if *limit > 0 && len(filtered) > *limit {
 		filtered = filtered[len(filtered)-*limit:]
@@ -866,6 +891,71 @@ func runEvents(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%-24s %-7s %-12s %-20s %d\n", event.Time.Format(time.RFC3339), event.Action, event.ID, event.Name, event.PID)
 	}
 	return 0
+}
+
+// streamEvents polls an event source and writes each matching event once. In
+// follow mode JSON is newline-delimited so consumers can process events live.
+func streamEvents(stdout, stderr io.Writer, interval time.Duration, count int, format string, initial []state.Event, cursor int, matches func(state.Event) bool, fetch func() ([]state.Event, error)) int {
+	if interval <= 0 || count < 0 || (format != "table" && format != "json") || matches == nil || fetch == nil {
+		fmt.Fprintln(stderr, "boxr events: invalid follow configuration")
+		return 2
+	}
+	encoder := json.NewEncoder(stdout)
+	headerWritten := false
+	emitted := 0
+	writeEvent := func(event state.Event) error {
+		if format == "json" {
+			return encoder.Encode(event)
+		}
+		if !headerWritten {
+			if _, err := fmt.Fprintln(stdout, "TIME                     ACTION  ID           NAME                 PID"); err != nil {
+				return err
+			}
+			headerWritten = true
+		}
+		_, err := fmt.Fprintf(stdout, "%-24s %-7s %-12s %-20s %d\n", event.Time.Format(time.RFC3339), event.Action, event.ID, event.Name, event.PID)
+		return err
+	}
+	for _, event := range initial {
+		if err := writeEvent(event); err != nil {
+			fmt.Fprintf(stderr, "boxr events: write event: %v\n", err)
+			return 1
+		}
+		emitted++
+		if count > 0 && emitted >= count {
+			return 0
+		}
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+	for {
+		time.Sleep(interval)
+		events, err := fetch()
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr events: follow: %v\n", err)
+			return 1
+		}
+		// A shorter log indicates truncation/rotation; resume from its start.
+		if len(events) < cursor {
+			cursor = 0
+		}
+		for cursor < len(events) {
+			event := events[cursor]
+			cursor++
+			if !matches(event) {
+				continue
+			}
+			if err := writeEvent(event); err != nil {
+				fmt.Fprintf(stderr, "boxr events: write event: %v\n", err)
+				return 1
+			}
+			emitted++
+			if count > 0 && emitted >= count {
+				return 0
+			}
+		}
+	}
 }
 
 func parseEventsSince(value string) (time.Time, error) {
@@ -1187,7 +1277,7 @@ Usage:
   boxr volume prune --force [--filter label=KEY=VALUE]
   boxr stats [--watch] [--interval 1s] [--count N] ID|NAME
   boxr rm ID|NAME [...]
-  boxr events [--limit N]
+  boxr events [--follow] [--interval 500ms] [--count N] [--limit N] [--since 1h|RFC3339] [--action ACTION] [--container ID|NAME] [--format table|json]
   boxr prune [--older-than 168h]
   boxr rootfs inspect PATH
   boxr rootfs verify PATH
@@ -2092,6 +2182,14 @@ var implementedFeatures = []string{
 	"statistics watch rejects invalid intervals and counts",
 	"statistics watch preserves the existing one-shot JSON interface",
 	"statistics watch reports output and cgroup read errors",
+	"live container event streaming",
+	"event follow supports action and container filters",
+	"event follow supports configurable polling intervals",
+	"event follow supports bounded capture counts",
+	"event follow streams compact JSON Lines or table rows",
+	"event follow supports since-based historical catch-up",
+	"event follow handles event log truncation by resuming",
+	"event follow reports event source and output errors",
 }
 
 func printFeatures(stdout io.Writer) {
