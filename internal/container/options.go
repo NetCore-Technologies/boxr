@@ -102,6 +102,7 @@ type TmpfsMount struct {
 // The callbacks run in the host-side Boxr process.
 type Hooks struct {
 	OnStart func(hostPID int) error
+	OnReady func(hostPID int)
 	OnExit  func(hostPID int, runErr error) error
 	Stdout  io.Writer
 	Stderr  io.Writer
