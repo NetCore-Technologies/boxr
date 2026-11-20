@@ -64,6 +64,7 @@ type Service struct {
 	StartTimeoutMS int               `json:"startTimeoutMs,omitempty"`
 	StopTimeoutMS  int               `json:"stopTimeoutMs,omitempty"`
 	Readiness     *ReadinessProbe   `json:"readiness,omitempty"`
+	Healthcheck   *Healthcheck     `json:"healthcheck,omitempty"`
 }
 
 // ServicePlan contains only safe-to-display metadata. It deliberately excludes
@@ -89,6 +90,12 @@ type ServicePlan struct {
 	EnvironmentFileCount  int           `json:"environmentFileCount"`
 	StartTimeoutMS        int           `json:"startTimeoutMs,omitempty"`
 	StopTimeoutMS         int           `json:"stopTimeoutMs,omitempty"`
+	HealthcheckConfigured bool          `json:"healthcheckConfigured,omitempty"`
+	HealthcheckType       string        `json:"healthcheckType,omitempty"`
+	HealthcheckIntervalMS int           `json:"healthcheckIntervalMs,omitempty"`
+	HealthcheckTimeoutMS  int           `json:"healthcheckTimeoutMs,omitempty"`
+	HealthcheckRetries    int           `json:"healthcheckRetries,omitempty"`
+	HealthcheckStartPeriodMS int        `json:"healthcheckStartPeriodMs,omitempty"`
 	LabelCount            int           `json:"labelCount"`
 }
 
@@ -396,6 +403,23 @@ func buildPlan(file File) (Plan, error) {
 			}
 			readinessType = service.Readiness.Type()
 		}
+		healthcheckType := ""
+		if service.Healthcheck != nil {
+			if err := service.Healthcheck.Validate(); err != nil {
+				return plan, fmt.Errorf("service %q has invalid healthcheck: %w", name, err)
+			}
+			securityProfile := strings.ToLower(strings.TrimSpace(service.Options.SecurityProfile))
+			if service.Options.NetworkMode == "none" || securityProfile == "restricted" || securityProfile == "untrusted" {
+				return plan, fmt.Errorf("service %q must use a host-networking security profile for a loopback healthcheck", name)
+			}
+			healthcheckType = service.Healthcheck.Probe.Type()
+		}
+		if service.Healthcheck != nil {
+			servicePlans[name].HealthcheckIntervalMS = service.Healthcheck.IntervalMS
+			servicePlans[name].HealthcheckTimeoutMS = service.Healthcheck.Probe.TimeoutMS
+			servicePlans[name].HealthcheckRetries = service.Healthcheck.Retries
+			servicePlans[name].HealthcheckStartPeriodMS = service.Healthcheck.StartPeriodMS
+		}
 		if configuredName := service.Options.Name; configuredName != "" {
 			if previous, exists := configuredNames[configuredName]; exists {
 				return plan, fmt.Errorf("services %q and %q use the same container name %q", previous, name, configuredName)
@@ -451,6 +475,8 @@ func buildPlan(file File) (Plan, error) {
 			EnvironmentFileCount:  len(service.EnvFiles),
 			StartTimeoutMS:        service.StartTimeoutMS,
 			StopTimeoutMS:         service.StopTimeoutMS,
+			HealthcheckConfigured: service.Healthcheck != nil,
+			HealthcheckType:       healthcheckType,
 			LabelCount:            len(service.Options.Labels),
 		}
 	}
