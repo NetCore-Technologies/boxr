@@ -3523,7 +3523,8 @@ var implementedFeatures = []string{
 	"state store renames containers with unique names and persists rename lifecycle events",
 	"native rename and container rename commands preserve container IDs while changing unique names",
 	"Engine API POST containers rename updates unique container names and returns Docker-compatible errors",
-	"compose command aliases the supported Compose YAML deployment validation planning pull and lifecycle workflows"
+	"compose command aliases the supported Compose YAML deployment validation planning pull and lifecycle workflows",
+	"Engine API POST containers wait blocks for not-running state and returns the persisted workload exit status"
 	"Engine API DELETE force true delegates to native safe forced removal for running or restarting containers"
 	"native create command records a verified image-backed container without starting it",
 	"native start command launches a created image-backed container through the detached supervisor",
