@@ -3149,3 +3149,95 @@ func TestRunDoesNotTreatCommandArgumentAsDetachFlag(t *testing.T) {
 	}
 }
 
+func TestRestartPolicyEvaluationHonorsExitStatusAndRetryBudget(t *testing.T) {
+	failed := state.Record{Status: "failed", ExitCode: intPointer(7)}
+	succeeded := state.Record{Status: "exited", ExitCode: intPointer(0)}
+	tests := []struct {
+		name    string
+		options container.Options
+		record  state.Record
+		want    bool
+	}{
+		{name: "no policy", options: container.Options{RestartPolicy: "no"}, record: failed, want: false},
+		{name: "always on success", options: container.Options{RestartPolicy: "always"}, record: succeeded, want: true},
+		{name: "unless stopped on failure", options: container.Options{RestartPolicy: "unless-stopped"}, record: failed, want: true},
+		{name: "on failure", options: container.Options{RestartPolicy: "on-failure"}, record: failed, want: true},
+		{name: "on failure ignores success", options: container.Options{RestartPolicy: "on-failure"}, record: succeeded, want: false},
+		{name: "unlimited on failure", options: container.Options{RestartPolicy: "on-failure"}, record: state.Record{ExitCode: intPointer(2), RestartCount: 1000}, want: true},
+		{name: "retry budget available", options: container.Options{RestartPolicy: "on-failure", RestartMaxRetries: 3}, record: state.Record{ExitCode: intPointer(2), RestartCount: 2}, want: true},
+		{name: "retry budget exhausted", options: container.Options{RestartPolicy: "on-failure", RestartMaxRetries: 3}, record: state.Record{ExitCode: intPointer(2), RestartCount: 3}, want: false},
+		{name: "manual stop suppresses always", options: container.Options{RestartPolicy: "always"}, record: state.Record{ExitCode: intPointer(2), StopRequested: true}, want: false},
+		{name: "manual stop suppresses unless stopped", options: container.Options{RestartPolicy: "unless-stopped"}, record: state.Record{ExitCode: intPointer(2), StopRequested: true}, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := restartPolicyApplies(test.options, test.record); got != test.want {
+				t.Fatalf("restartPolicyApplies() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestWaitForContainerRestartCanBeCancelledByStopRequest(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	record, err := state.Create("restart-delay-cancel", []string{"/bin/false"}, container.Options{RestartPolicy: "always"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, 5401); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(record.ID, &container.ExitError{Code: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.PrepareRestart(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan bool, 1)
+	go func() { result <- waitForContainerRestart(record.ID, 600*time.Millisecond) }()
+	time.Sleep(150 * time.Millisecond)
+	if err := state.RequestStop(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	if <-result {
+		t.Fatal("restart delay continued after manual stop intent")
+	}
+	loaded, err := state.Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status != "failed" || !loaded.StopRequested {
+		t.Fatalf("cancelled restart record = %+v", loaded)
+	}
+}
+
+func TestRestartPoliciesRequireDetachedRunsAndCannotAutoRemove(t *testing.T) {
+	for _, args := range [][]string{
+		{"run", "--restart", "always", "/bin/true"},
+		{"run", "--detach", "--restart", "on-failure", "--rm", "/bin/true"},
+	} {
+		var out, errOut bytes.Buffer
+		code := run(args, &out, &errOut)
+		if code != 2 {
+			t.Errorf("run(%v) returned %d, want 2: stdout=%q stderr=%q", args, code, out.String(), errOut.String())
+		}
+	}
+}
+
+func TestRunDryRunDescribesRestartPolicyAndDelay(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"run", "--dry-run", "--restart", "on-failure", "--restart-max-retries", "3", "--restart-delay", "1500ms", "/bin/true"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("restart dry-run returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	var plan runPlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.RestartPolicy != "on-failure" || plan.RestartMaxRetries != 3 || plan.RestartDelayMS != 1500 {
+		t.Fatalf("restart dry-run plan = %+v", plan)
+	}
+}
+
+func intPointer(value int) *int { return &value }
+
