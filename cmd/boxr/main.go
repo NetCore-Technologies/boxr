@@ -3049,6 +3049,16 @@ var implementedFeatures = []string{
 	"Compose-created volumes drivers options labels long-form mounts and propagation flags are rejected",
 	"Compose read_only maps image-backed services to a read-only root filesystem",
 	"Compose cap_drop validates and applies supported Linux capability drops",
+	"daemon serves the initial Docker Engine API through a local Unix domain socket only",
+	"daemon refuses TCP exposure symlinked ancestors shared writable socket directories and non-socket path replacement",
+	"daemon detects active and stale sockets uses owner-only 0600 permissions and removes only its own socket",
+	"Engine API implements Docker ping and negotiated version information within API v1.24 to v1.45",
+	"Engine API exposes runtime-backed info and filtered container list metadata",
+	"Engine API exposes container inspect state mounts network port bindings and restart metadata",
+	"Engine API streams bounded tail and follow container logs in Docker multiplexed stdout frames",
+	"Engine API exposes cgroup v2 CPU memory and PID stats with snapshot and streaming responses",
+	"Engine API streams persisted container lifecycle events and lists OCI image tags",
+	"unsupported Docker Engine mutations and TCP listeners are explicitly outside the API contract",
 }
 
 func printFeatures(stdout io.Writer) {
