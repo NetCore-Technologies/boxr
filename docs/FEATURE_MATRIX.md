@@ -640,7 +640,7 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 632. services assigned to multiple profiles appear in every matching group
 633. secret-free JSON and text profile inventory output
 634. per-service ordered environment file loading in deployments
-635. deployment environment files override earlier service environment values in declaration order
+635. deployment environment files override service-inherited values in declaration order
 636. explicit service environment entries override environment file values
 637. environment file path traversal and duplicate path rejection
 638. deployment environment file count and path length bounds
