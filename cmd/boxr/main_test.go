@@ -3297,3 +3297,54 @@ func TestRunKillTermCancelsContainerPendingRestart(t *testing.T) {
 		t.Fatalf("kill did not cancel restart: record=%+v stdout=%q", cancelled, out.String())
 	}
 }
+
+
+func TestDeferImageServiceBindMountsUsesRunFlagsAfterImageUnpack(t *testing.T) {
+	options := container.Options{
+		BindMounts: []container.BindMount{
+			{Source: "/srv/boxr/data", Target: "/var/lib/app", ReadOnly: true},
+			{Source: "/srv/boxr/config", Target: "/etc/app"},
+		},
+	}
+	args, err := deferImageServiceBindMounts("example:latest", &options)
+	if err != nil {
+		t.Fatalf("defer image service mounts: %v", err)
+	}
+	want := []string{
+		"--mount", "/srv/boxr/data:/var/lib/app:ro",
+		"--mount", "/srv/boxr/config:/etc/app:rw",
+	}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("deferred mount args = %#v, want %#v", args, want)
+	}
+	if len(options.BindMounts) != 0 {
+		t.Fatalf("bind mounts remain in config options: %#v", options.BindMounts)
+	}
+}
+
+func TestDeferImageServiceBindMountsLeavesNonImageOptionsUntouched(t *testing.T) {
+	options := container.Options{
+		BindMounts: []container.BindMount{{Source: "/srv/data", Target: "/data"}},
+	}
+	args, err := deferImageServiceBindMounts("", &options)
+	if err != nil {
+		t.Fatalf("defer non-image mounts: %v", err)
+	}
+	if len(args) != 0 || len(options.BindMounts) != 1 {
+		t.Fatalf("non-image mounts changed: args=%#v options=%+v", args, options)
+	}
+}
+
+func TestDeferImageServiceBindMountsRejectsUnrepresentablePaths(t *testing.T) {
+	for _, source := range []string{"/srv/data:with-colon", "/srv/data\\with-backslash", "/srv/data\x00invalid"} {
+		options := container.Options{
+			BindMounts: []container.BindMount{{Source: source, Target: "/data"}},
+		}
+		if _, err := deferImageServiceBindMounts("example:latest", &options); err == nil {
+			t.Errorf("unrepresentable mount source %q was accepted", source)
+		}
+		if len(options.BindMounts) != 1 {
+			t.Errorf("invalid mount source %q mutated options", source)
+		}
+	}
+}
