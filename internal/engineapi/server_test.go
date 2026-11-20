@@ -506,7 +506,6 @@ func TestDockerPortBindingsRejectEphemeralAndInvalidProtocols(t *testing.T) {
 	}
 }
 
-
 func TestEngineAPIContainerStopRollsBackFailedSignal(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record, err := state.Create("failed-stop-signal-test", []string{"/bin/sleep", "30"}, container.Options{}, nil)

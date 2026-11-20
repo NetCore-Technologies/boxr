@@ -838,5 +838,5 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 830. Engine API creates containers from verified local images using a strict supported Docker create subset
 831. Engine API starts created containers through the native Boxr detached supervisor
 832. Engine API gracefully stops containers with a bounded timeout and SIGKILL fallback
-830. Engine API sends validated Docker kill signals only to process-identity-verified running containers
-831. Engine API removes created and stopped containers through Docker DELETE with safe conflict handling
+833. Engine API sends validated Docker kill signals only to process-identity-verified running containers
+834. Engine API removes created and stopped containers through Docker DELETE with safe conflict handling
