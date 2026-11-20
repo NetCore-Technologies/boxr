@@ -3,7 +3,6 @@
 package main
 
 import (
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,4 +96,3 @@ func TestListenDaemonSocketDoesNotReplaceRegularFile(t *testing.T) {
 	}
 }
 
-var _ net.Listener
