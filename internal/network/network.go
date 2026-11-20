@@ -719,7 +719,7 @@ func addPortMappingRules(ctx context.Context, runner Runner, network Network, ad
 				deleteArgs[2] = "-D"
 			} else {
 				deleteArgs[0] = "-D"
-				deleteArgs = deleteArgs[1:]
+				deleteArgs = append(deleteArgs[:2], deleteArgs[3:]...)
 			}
 			if err := runner.Run(ctx, "iptables", deleteArgs...); err != nil && !missingFirewallObject(err) {
 				failures = append(failures, strings.Join(deleteArgs, " ")+": "+err.Error())
