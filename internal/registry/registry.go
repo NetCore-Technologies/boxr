@@ -9,9 +9,9 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
-	"errors"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -253,10 +253,9 @@ func ParseReference(value string) (Reference, error) {
 	return result, nil
 }
 
-// Pull fetches a Boxr-format image from an OCI Distribution-compatible registry.
-// platform must be OS/architecture[/variant]; an empty value uses the current Linux host.
-// The returned compressed layer is stored in a private temporary file and must
-// be removed by calling Artifact.Cleanup after importing it.
+// Pull fetches an OCI/Docker image for the requested Linux platform. Every
+// returned layer has a verified blob digest and uncompressed diff ID, is stored
+// in a private temporary file, and must be removed with Artifact.Cleanup.
 func Pull(ctx context.Context, reference, platform string, credentials Credentials) (Artifact, error) {
 	var result Artifact
 	parsed, err := ParseReference(reference)
@@ -275,7 +274,7 @@ func Pull(ctx context.Context, reference, platform string, credentials Credentia
 	if len(parts) == 3 {
 		requestedVariant = parts[2]
 	}
-	if strings.ContainsAny(platform, "\\ \r\n") {
+	if strings.ContainsAny(platform, "\\\x00\r\n") {
 		return result, fmt.Errorf("invalid platform")
 	}
 	baseURL := "https://" + parsed.Registry
