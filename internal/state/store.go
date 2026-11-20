@@ -393,7 +393,7 @@ func listRecordsLocked(all bool) ([]Record, error) {
 		if err := json.Unmarshal(data, &record); err != nil {
 			return nil, fmt.Errorf("decode state record %s: %w", entry.Name(), err)
 		}
-		if all || record.Status == "created" || record.Status == "running" {
+		if all || record.Status == "created" || record.Status == "running" || record.Status == "restarting" {
 			records = append(records, record)
 		}
 	}
