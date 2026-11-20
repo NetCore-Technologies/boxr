@@ -363,8 +363,12 @@ func CreateWithRunner(ctx context.Context, name string, options CreateOptions, r
 func provisionBridge(ctx context.Context, runner Runner, network Network) error {
 	prefix, _ := netip.ParsePrefix(network.Subnet)
 	gateway, _ := netip.ParseAddr(network.Gateway)
+	if err := runner.Run(ctx, "ip", "link", "add", "name", network.Bridge, "type", "bridge"); err != nil {
+		// The requested interface may already belong to the host. Never delete
+		// it when the create operation itself failed.
+		return fmt.Errorf("create bridge %q: %w", network.Bridge, err)
+	}
 	steps := [][]string{
-		{"link", "add", "name", network.Bridge, "type", "bridge"},
 		{"addr", "add", gateway.String() + "/" + fmt.Sprint(prefix.Bits()), "dev", network.Bridge},
 		{"link", "set", "dev", network.Bridge, "up"},
 	}
@@ -492,10 +496,13 @@ func JoinWithRunner(ctx context.Context, networkName string, pid int, containerI
 		return "", err
 	}
 	hostVeth, peerVeth := vethNames(containerID)
-	rollback := func(cause error) (string, error) {
-		_ = runner.Run(ctx, "ip", "link", "del", "dev", hostVeth)
+	releaseAllocation := func() {
 		delete(network.Allocations, containerID)
 		_ = saveStore(dir, current)
+	}
+	rollbackCreatedVeth := func(cause error) (string, error) {
+		_ = runner.Run(ctx, "ip", "link", "del", "dev", hostVeth)
+		releaseAllocation()
 		return "", cause
 	}
 	steps := []struct {
@@ -512,9 +519,16 @@ func JoinWithRunner(ctx context.Context, networkName string, pid int, containerI
 		{"nsenter", []string{"-t", fmt.Sprint(pid), "-n", "--", "ip", "link", "set", "dev", "eth0", "up"}},
 		{"nsenter", []string{"-t", fmt.Sprint(pid), "-n", "--", "ip", "route", "add", "default", "via", network.Gateway, "dev", "eth0"}},
 	}
-	for _, step := range steps {
+	for index, step := range steps {
 		if err := runner.Run(ctx, step.binary, step.args...); err != nil {
-			return rollback(fmt.Errorf("connect container to network %q (%s %s): %w", networkName, step.binary, strings.Join(step.args, " "), err))
+			wrapped := fmt.Errorf("connect container to network %q (%s %s): %w", networkName, step.binary, strings.Join(step.args, " "), err)
+			if index == 0 {
+				// A colliding veth name may refer to an unrelated host interface.
+				// The failed create did not give Boxr ownership of that link.
+				releaseAllocation()
+				return "", wrapped
+			}
+			return rollbackCreatedVeth(wrapped)
 		}
 	}
 	return address, nil
