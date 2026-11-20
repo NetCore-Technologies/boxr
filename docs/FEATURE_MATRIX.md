@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 492 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 498 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -498,3 +498,9 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 490. prune dry run excludes running and never-started containers
 491. prune supports machine-readable JSON planning output
 492. prune dry run leaves container records and logs untouched
+493. named volume prune supports non-mutating dry runs
+494. volume prune previews unused volume names and labels
+495. volume prune reports volumes protected by active containers
+496. volume prune dry run respects name and label filters
+497. volume prune supports machine-readable JSON plans
+498. volume prune requires force for destructive cleanup

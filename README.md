@@ -376,3 +376,14 @@ boxr prune --older-than 7d
 ```
 
 Dry-run mode reports candidate IDs, names, states and the selected age threshold without changing container records or logs. Running and never-started containers are excluded. The existing mutating prune behaviour remains the default. See [safe cleanup](docs/pruning.md).
+
+
+## Preview named-volume cleanup
+
+```bash
+boxr volume prune --dry-run
+boxr volume prune --dry-run --json --filter label=team=demo
+boxr volume prune --force
+```
+
+Dry-run mode lists eligible volumes and identifies volumes protected by active containers. It accepts the same name and label filters as the destructive operation, but does not require `--force` and never removes data. Actual cleanup still requires explicit `--force`. See [volume cleanup](docs/pruning.md).

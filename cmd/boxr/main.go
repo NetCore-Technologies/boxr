@@ -1319,7 +1319,7 @@ Usage:
   boxr volume export NAME ARCHIVE.tar.gz
   boxr volume import ARCHIVE.tar.gz NAME
   boxr volume rm NAME [...]
-  boxr volume prune --force [--filter label=KEY=VALUE]
+  boxr volume prune (--force|--dry-run) [--json] [--filter name=VALUE|label=KEY[=VALUE]]
   boxr stats [--watch] [--interval 1s] [--count N] ID|NAME
   boxr rm ID|NAME [...]
   boxr events [--follow] [--interval 500ms] [--count N] [--limit N] [--since 1h|RFC3339] [--action ACTION] [--container ID|NAME] [--format table|json]
@@ -2249,6 +2249,12 @@ var implementedFeatures = []string{
 	"prune dry run excludes running and never-started containers",
 	"prune supports machine-readable JSON planning output",
 	"prune dry run leaves container records and logs untouched",
+	"named volume prune supports non-mutating dry runs",
+	"volume prune previews unused volume names and labels",
+	"volume prune reports volumes protected by active containers",
+	"volume prune dry run respects name and label filters",
+	"volume prune supports machine-readable JSON plans",
+	"volume prune requires force for destructive cleanup",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -2915,13 +2921,15 @@ func runVolume(args []string, stdout, stderr io.Writer) int {
 		flags := flag.NewFlagSet("volume prune", flag.ContinueOnError)
 		flags.SetOutput(stderr)
 		force := flags.Bool("force", false, "confirm deletion of all unused volumes and their contents")
+		dryRun := flags.Bool("dry-run", false, "preview unused volumes without deleting them")
+		jsonOutput := flags.Bool("json", false, "write prune results as JSON")
 		var filters envList
 		flags.Var(&filters, "filter", "limit prune to name=VALUE or label=KEY[=VALUE]")
 		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}
-		if flags.NArg() != 0 || !*force {
-			fmt.Fprintln(stderr, "Usage: boxr volume prune --force (deletes all unused volumes and their data)")
+		if flags.NArg() != 0 || (!*force && !*dryRun) || (*force && *dryRun) {
+			fmt.Fprintln(stderr, "Usage: boxr volume prune (--force|--dry-run) [--json] [--filter name=VALUE|label=KEY[=VALUE]]")
 			return 2
 		}
 		items, err := volume.List()
@@ -2934,23 +2942,63 @@ func runVolume(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "boxr volume prune: %v\n", err)
 			return 2
 		}
-		removed := 0
+		report := volumePruneReport{
+			DryRun: *dryRun,
+			Candidates: make([]volumePruneCandidate, 0),
+			InUse: make([]volumePruneBlocked, 0),
+			Removed: make([]string, 0),
+		}
 		for _, item := range items {
 			if err := ensureVolumeUnused(item.Path); err != nil {
+				report.InUse = append(report.InUse, volumePruneBlocked{Name: item.Name, Reason: err.Error()})
+				continue
+			}
+			if *dryRun {
+				report.Candidates = append(report.Candidates, volumePruneCandidate{Name: item.Name, Labels: item.Labels, CreatedAt: item.CreatedAt})
 				continue
 			}
 			if err := volume.Remove(item.Name); err != nil {
 				fmt.Fprintf(stderr, "boxr volume prune: %s: %v\n", item.Name, err)
 				return 1
 			}
-			removed++
+			report.Removed = append(report.Removed, item.Name)
 		}
-		fmt.Fprintf(stdout, "removed %d unused volume(s)\n", removed)
+		if *jsonOutput {
+			report.RemovedCount = len(report.Removed)
+			return writeJSON(stdout, report, stderr, "boxr volume prune")
+		}
+		if *dryRun {
+			fmt.Fprintf(stdout, "would remove %d unused volume(s); protected %d volume(s)\n", len(report.Candidates), len(report.InUse))
+			for _, item := range report.Candidates {
+				fmt.Fprintf(stdout, "  %s\n", item.Name)
+			}
+			return 0
+		}
+		fmt.Fprintf(stdout, "removed %d unused volume(s)\n", len(report.Removed))
 		return 0
 	default:
 		fmt.Fprintf(stderr, "boxr volume: unknown action %q\n", args[0])
 		return 2
 	}
+}
+
+type volumePruneCandidate struct {
+	Name      string            `json:"name"`
+	Labels    map[string]string `json:"labels,omitempty"`
+	CreatedAt time.Time         `json:"createdAt"`
+}
+
+type volumePruneBlocked struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
+}
+
+type volumePruneReport struct {
+	DryRun      bool                  `json:"dryRun"`
+	Candidates  []volumePruneCandidate `json:"candidates"`
+	InUse       []volumePruneBlocked  `json:"inUse"`
+	Removed     []string              `json:"removed,omitempty"`
+	RemovedCount int                  `json:"removedCount"`
 }
 
 func parseLabels(values []string) (map[string]string, error) {

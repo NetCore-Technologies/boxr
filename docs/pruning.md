@@ -11,3 +11,16 @@ boxr prune --older-than 7d
 The dry-run report includes candidate IDs, names, lifecycle states, the cutoff timestamp and the selected age threshold. Running and never-started containers are never candidates. JSON mode is suitable for automation and does not change the command's default output when omitted.
 
 The original `boxr prune` behaviour still performs cleanup. Use `--dry-run` to inspect candidates first; dry-run mode never removes records or their logs.
+
+
+## Named-volume cleanup
+
+Preview unused named volumes and volumes protected by active containers:
+
+```bash
+boxr volume prune --dry-run
+boxr volume prune --dry-run --json --filter label=team=demo
+boxr volume prune --force
+```
+
+The dry-run output lists eligible volume names and labels and includes protection reasons for volumes mounted by active or not-yet-started containers. Name and label filters are applied before the preview. The destructive operation still requires `--force`; `--dry-run` and `--force` cannot be combined.
