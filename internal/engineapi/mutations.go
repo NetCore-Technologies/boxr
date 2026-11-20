@@ -26,6 +26,14 @@ import (
 
 const maxCreateBodyBytes = 1 << 20
 
+var launchEngineAPICreatedContainer = func(executable string, args []string) (stdout, stderr string, err error) {
+	command := exec.Command(executable, args...)
+	var stdoutBuffer, stderrBuffer bytes.Buffer
+	command.Stdout, command.Stderr = &stdoutBuffer, &stderrBuffer
+	err = command.Run()
+	return stdoutBuffer.String(), stderrBuffer.String(), err
+}
+
 type dockerCreateRequest struct {
 	Image        string                     `json:"Image"`
 	Cmd          []string                   `json:"Cmd"`
@@ -812,8 +820,8 @@ func (s *Server) handleContainerStart(writer http.ResponseWriter, request *http.
 		writeError(writer, http.StatusNotModified, fmt.Errorf("container is already running"))
 		return
 	}
-	if record.Status != "created" {
-		writeError(writer, http.StatusConflict, fmt.Errorf("container must be in created state before start (current state: %s)", record.Status))
+	if record.Status != "created" && record.Status != "exited" && record.Status != "failed" {
+		writeError(writer, http.StatusConflict, fmt.Errorf("container must be created or stopped before start (current state: %s)", record.Status))
 		return
 	}
 	image := record.Labels["io.boxr.image"]
@@ -831,19 +839,17 @@ func (s *Server) handleContainerStart(writer http.ResponseWriter, request *http.
 		writeError(writer, http.StatusInternalServerError, err)
 		return
 	}
-	command := exec.Command(executable,
+	stdout, stderr, launchErr := launchEngineAPICreatedContainer(executable, []string{
 		"run", "--config", configPath, "--image", image,
 		"--detach", "--internal-existing-id", record.ID,
-	)
-	var stdout, stderr bytes.Buffer
-	command.Stdout, command.Stderr = &stdout, &stderr
-	if err := command.Run(); err != nil {
-		message := strings.TrimSpace(stderr.String())
+	})
+	if launchErr != nil {
+		message := strings.TrimSpace(stderr)
 		if message == "" {
-			message = strings.TrimSpace(stdout.String())
+			message = strings.TrimSpace(stdout)
 		}
 		if message == "" {
-			message = err.Error()
+			message = launchErr.Error()
 		}
 		writeError(writer, http.StatusInternalServerError, fmt.Errorf("start container: %s", message))
 		return
