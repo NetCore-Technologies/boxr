@@ -504,16 +504,37 @@ func (s *Server) handleContainerDelete(writer http.ResponseWriter, request *http
 		writeError(writer, http.StatusNotFound, err)
 		return
 	}
-	if record.Status == "running" || record.Status == "restarting" {
-		if force {
-			writeError(writer, http.StatusNotImplemented, fmt.Errorf("forced removal is not implemented; stop the container before removal"))
-			return
-		}
-		writeError(writer, http.StatusConflict, fmt.Errorf("container %s is %s; stop it before removal", record.ID, record.Status))
-		return
-	}
 	if removeVolumes {
 		writeError(writer, http.StatusNotImplemented, fmt.Errorf("anonymous volume removal is not implemented"))
+		return
+	}
+	if record.Status == "running" || record.Status == "restarting" {
+		if !force {
+			writeError(writer, http.StatusConflict, fmt.Errorf("container %s is %s; stop it before removal or set force=true", record.ID, record.Status))
+			return
+		}
+		executable, err := os.Executable()
+		if err != nil {
+			writeError(writer, http.StatusInternalServerError, err)
+			return
+		}
+		stdout, stderr, launchErr := launchEngineAPICreatedContainer(executable, []string{"rm", "--force", record.ID})
+		if launchErr != nil {
+			message := strings.TrimSpace(stderr)
+			if message == "" {
+				message = strings.TrimSpace(stdout)
+			}
+			if message == "" {
+				message = launchErr.Error()
+			}
+			writeError(writer, http.StatusConflict, fmt.Errorf("force remove container: %s", message))
+			return
+		}
+		if _, err := state.Get(record.ID); err == nil {
+			writeError(writer, http.StatusInternalServerError, fmt.Errorf("forced removal command returned without removing container %s", record.ID))
+			return
+		}
+		writer.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if record.Status == "created" {
