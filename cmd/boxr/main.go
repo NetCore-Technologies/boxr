@@ -45,6 +45,7 @@ var (
 var (
 	joinExistingContainerNetwork = boxrnetwork.Join
 	leaveExistingContainerNetwork = boxrnetwork.Leave
+	pruneManagedNetworkAttachments = boxrnetwork.PruneStale
 	verifyContainerNamespacePID = verifyContainerRuntimePID
 )
 
@@ -1459,6 +1460,7 @@ Usage:
   boxr network inspect [--json] NAME
   boxr network connect [--publish SPEC] NETWORK CONTAINER
   boxr network disconnect NETWORK CONTAINER
+  boxr network prune [--dry-run|--force]
   boxr network rm NAME
   boxr volume create [--label KEY=VALUE] NAME
   boxr volume ls [--format table|json] [--filter label=KEY=VALUE]
@@ -4487,10 +4489,56 @@ func parseVolumeMount(value string) (string, container.BindMount, error) {
 
 func runNetwork(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "Usage: boxr network create --subnet CIDR [--gateway IP] [--bridge IFACE] [--no-nat] NAME | ls [--json] | inspect [--json] NAME | connect NETWORK CONTAINER | disconnect NETWORK CONTAINER | rm NAME")
+		fmt.Fprintln(stderr, "Usage: boxr network create --subnet CIDR [--gateway IP] [--bridge IFACE] [--no-nat] NAME | ls [--json] | inspect [--json] NAME | connect NETWORK CONTAINER | disconnect NETWORK CONTAINER | prune [--dry-run|--force] | rm NAME")
 		return 2
 	}
 	switch args[0] {
+	case "prune":
+		flags := flag.NewFlagSet("network prune", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		dryRun := flags.Bool("dry-run", false, "show stale attachments without changing the host")
+		force := flags.Bool("force", false, "remove stale Boxr-owned veth links, port rules and IPAM leases")
+		if err := flags.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if flags.NArg() != 0 || (*dryRun && *force) {
+			fmt.Fprintln(stderr, "Usage: boxr network prune [--dry-run|--force]")
+			return 2
+		}
+		records, err := state.List(true)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr network prune: list containers: %v\n", err)
+			return 1
+		}
+		live := make(map[string]struct{})
+		for _, record := range records {
+			if record.Status == "running" && containerNamespaceHelperAlive(record.PID) {
+				live[record.ID] = struct{}{}
+			}
+		}
+		stale, err := boxrnetwork.StaleAttachments(live)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr network prune: inspect network leases: %v\n", err)
+			return 1
+		}
+		if !*force {
+			fmt.Fprintln(stdout, "DRY RUN: no host network changes will be made")
+			for _, attachment := range stale {
+				fmt.Fprintf(stdout, "would remove %s/%s (%s, %d published port(s))\n",
+					attachment.Network, attachment.ContainerID, attachment.Address, len(attachment.PublishedPorts))
+			}
+			fmt.Fprintf(stdout, "stale attachments: %d\n", len(stale))
+			fmt.Fprintln(stdout, "Run 'boxr network prune --force' to remove verified Boxr-owned attachments.")
+			return 0
+		}
+		report, err := pruneManagedNetworkAttachments(live)
+		fmt.Fprintf(stdout, "removed attachments: %d\nreleased IPv4 addresses: %d\nremoved published ports: %d\n",
+			report.AttachmentsRemoved, report.AddressesReleased, report.PublishedPortsRemoved)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr network prune: %v\n", err)
+			return 1
+		}
+		return 0
 	case "create":
 		flags := flag.NewFlagSet("network create", flag.ContinueOnError)
 		flags.SetOutput(stderr)
@@ -4650,6 +4698,25 @@ func runNetwork(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "boxr network: unknown action %q\n", args[0])
 		return 2
 	}
+}
+
+func containerNamespaceHelperAlive(pid int) bool {
+	if pid <= 1 {
+		return false
+	}
+	procDir := filepath.Join("/proc", strconv.Itoa(pid))
+	commandLine, err := os.ReadFile(filepath.Join(procDir, "cmdline"))
+	if err != nil {
+		return false
+	}
+	arguments := strings.Split(string(commandLine), "\x00")
+	if len(arguments) < 3 || arguments[1] != "__boxr-init" {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(procDir, "ns", "net")); err != nil {
+		return false
+	}
+	return true
 }
 
 func verifyContainerRuntimePID(pid int) error {
