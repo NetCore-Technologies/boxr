@@ -3565,6 +3565,27 @@ func deploymentContainerOptions(service deploy.Service) (container.Options, erro
 	return options, nil
 }
 
+func deferImageServiceBindMounts(image string, options *container.Options) ([]string, error) {
+	if image == "" || len(options.BindMounts) == 0 {
+		return nil, nil
+	}
+	var args []string
+	for index, mount := range options.BindMounts {
+		if strings.ContainsAny(mount.Source+mount.Target, ":\\\x00") {
+			return nil, fmt.Errorf("mount %d paths cannot contain colons, backslashes, or NUL bytes", index+1)
+		}
+		mode := "rw"
+		if mount.ReadOnly {
+			mode = "ro"
+		}
+		args = append(args, "--mount", mount.Source+":"+mount.Target+":"+mode)
+	}
+	// config.Load validates options before --image unpacks its rootfs. Pass
+	// mounts as run flags so the CLI applies them after image extraction.
+	options.BindMounts = nil
+	return args, nil
+}
+
 func startDeploymentProcess(executable, stack string, order int, serviceName string, service deploy.Service, stdout, stderr io.Writer) (*deploymentProcess, error) {
 	options, err := deploymentContainerOptions(service)
 	if err != nil {
@@ -3581,21 +3602,9 @@ func startDeploymentProcess(executable, stack string, order int, serviceName str
 		internalLabels[deploy.StopTimeoutLabel] = strconv.Itoa(service.StopTimeoutMS)
 	}
 	options.Labels = mergeLabels(options.Labels, internalLabels)
-	var deferredMountArgs []string
-	if service.Image != "" && len(options.BindMounts) > 0 {
-		for index, mount := range options.BindMounts {
-			if strings.ContainsAny(mount.Source+mount.Target, ":\\\x00") {
-				return nil, fmt.Errorf("image service mount %d paths cannot contain colons, backslashes, or NUL bytes", index+1)
-			}
-			mode := "rw"
-			if mount.ReadOnly {
-				mode = "ro"
-			}
-			deferredMountArgs = append(deferredMountArgs, "--mount", mount.Source+":"+mount.Target+":"+mode)
-		}
-		// config.Load validates options before --image unpacks its rootfs. Pass
-		// mounts as run flags so the CLI applies them after image extraction.
-		options.BindMounts = nil
+	deferredMountArgs, err := deferImageServiceBindMounts(service.Image, &options)
+	if err != nil {
+		return nil, fmt.Errorf("prepare image service mounts: %w", err)
 	}
 	runFile := config.RunFile{
 		Version: 1,
