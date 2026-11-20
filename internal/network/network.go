@@ -200,6 +200,9 @@ func validateStoredNetworks(networks []Network) error {
 		if !networkNameRE.MatchString(network.Name) || len(network.ID) != 16 {
 			return fmt.Errorf("network store contains an invalid network identity")
 		}
+		if _, err := hex.DecodeString(network.ID); err != nil {
+			return fmt.Errorf("network store contains an invalid network ID")
+		}
 		if _, exists := names[network.Name]; exists {
 			return fmt.Errorf("network store contains duplicate network name %q", network.Name)
 		}
@@ -348,6 +351,9 @@ func CreateWithRunner(ctx context.Context, name string, options CreateOptions, r
 	}
 	current.Networks = append(current.Networks, network)
 	if err := saveStore(dir, current); err != nil {
+		if network.NAT {
+			_ = removeNAT(ctx, runner, network)
+		}
 		_ = removeBridge(ctx, runner, network)
 		return empty, err
 	}
@@ -414,7 +420,7 @@ func removeNAT(ctx context.Context, runner Runner, network Network) error {
 	}
 	var failures []string
 	for _, args := range steps {
-		if err := runner.Run(ctx, "iptables", args...); err != nil {
+		if err := runner.Run(ctx, "iptables", args...); err != nil && !missingFirewallObject(err) {
 			failures = append(failures, strings.Join(args, " ")+": "+err.Error())
 		}
 	}
@@ -425,10 +431,24 @@ func removeNAT(ctx context.Context, runner Runner, network Network) error {
 }
 
 func removeBridge(ctx context.Context, runner Runner, network Network) error {
-	if err := runner.Run(ctx, "ip", "link", "del", "dev", network.Bridge); err != nil {
+	if err := runner.Run(ctx, "ip", "link", "del", "dev", network.Bridge); err != nil && !missingNetworkInterface(err) {
 		return fmt.Errorf("remove bridge %q: %w", network.Bridge, err)
 	}
 	return nil
+}
+
+func missingFirewallObject(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "bad rule") ||
+		strings.Contains(message, "no chain/target/match") ||
+		strings.Contains(message, "does a matching rule exist")
+}
+
+func missingNetworkInterface(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "cannot find device") ||
+		strings.Contains(message, "does not exist") ||
+		strings.Contains(message, "no such device")
 }
 
 // Join allocates a stable IPv4 address and connects a paused container network
@@ -687,7 +707,7 @@ func vethNames(containerID string) (string, string) {
 }
 
 func validInterfaceName(value string) bool {
-	if len(value) == 0 || len(value) > 15 {
+	if value == "." || value == ".." || len(value) == 0 || len(value) > 15 {
 		return false
 	}
 	for _, character := range value {
