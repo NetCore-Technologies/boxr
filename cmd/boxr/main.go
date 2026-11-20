@@ -1843,7 +1843,7 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 			if _, statErr := os.Lstat(dockerfilePath); statErr == nil {
 				buildFile = dockerfilePath
 			} else if !os.IsNotExist(statErr) {
-				fmt.Fprintf(stderr, "boxr image build: inspect default Dockerfile: %v\\n", statErr)
+				fmt.Fprintf(stderr, "boxr image build: inspect default Dockerfile: %v\n", statErr)
 				return 1
 			} else {
 				buildFile = filepath.Join(contextDir, "Boxrfile.json")
