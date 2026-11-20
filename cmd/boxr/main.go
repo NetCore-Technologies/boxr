@@ -705,22 +705,104 @@ func runRemove(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+type statsWatchSample struct {
+	SampledAt time.Time   `json:"sampledAt"`
+	Stats     state.Stats `json:"stats"`
+}
+
 func runStats(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 {
-		fmt.Fprintln(stderr, "Usage: boxr stats ID|NAME")
+	flags := flag.NewFlagSet("stats", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	watch := flags.Bool("watch", false, "stream timestamped statistics until the container exits")
+	interval := flags.Duration("interval", time.Second, "sampling interval for --watch (minimum 100ms)")
+	count := flags.Int("count", 0, "stop after N samples (0 means until the container exits)")
+	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	record, err := state.Get(args[0])
+	if flags.NArg() != 1 || *count < 0 || (!*watch && *count != 0) || (*watch && *interval < 100*time.Millisecond) {
+		fmt.Fprintln(stderr, "Usage: boxr stats [--watch] [--interval 1s] [--count N] ID|NAME")
+		return 2
+	}
+
+	query := flags.Arg(0)
+	record, err := state.Get(query)
 	if err != nil {
 		fmt.Fprintf(stderr, "boxr stats: %v\n", err)
 		return 1
 	}
-	stats, err := state.ReadStats(record.PID)
-	if err != nil {
-		fmt.Fprintf(stderr, "boxr stats: %v\n", err)
-		return 1
+	if !*watch {
+		stats, err := state.ReadStats(record.PID)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr stats: %v\n", err)
+			return 1
+		}
+		return writeJSON(stdout, stats, stderr, "boxr stats")
 	}
-	return writeJSON(stdout, stats, stderr, "boxr stats")
+
+	current := record
+	isRunning := func() (bool, error) {
+		next, err := state.Get(query)
+		if err != nil {
+			if strings.Contains(err.Error(), "no container matches") {
+				return false, nil
+			}
+			return false, err
+		}
+		current = next
+		return current.Status == "running", nil
+	}
+	read := func() (state.Stats, error) {
+		return state.ReadStats(current.PID)
+	}
+	return streamStats(stdout, stderr, *interval, *count, isRunning, read)
+}
+
+// streamStats emits one compact JSON object per line so callers can pipe live
+// metrics into jq or monitoring tools without buffering a multi-line document.
+func streamStats(stdout, stderr io.Writer, interval time.Duration, count int, isRunning func() (bool, error), read func() (state.Stats, error)) int {
+	if interval <= 0 || count < 0 || isRunning == nil || read == nil {
+		fmt.Fprintln(stderr, "boxr stats: invalid watch configuration")
+		return 2
+	}
+	encoder := json.NewEncoder(stdout)
+	emitted := 0
+	for {
+		running, err := isRunning()
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr stats: check container status: %v\n", err)
+			return 1
+		}
+		if !running {
+			if emitted == 0 {
+				fmt.Fprintln(stderr, "boxr stats: container is not running")
+				return 1
+			}
+			return 0
+		}
+
+		stats, err := read()
+		if err != nil {
+			running, statusErr := isRunning()
+			if statusErr != nil {
+				fmt.Fprintf(stderr, "boxr stats: check container status: %v\n", statusErr)
+				return 1
+			}
+			if !running && emitted > 0 {
+				return 0
+			}
+			fmt.Fprintf(stderr, "boxr stats: %v\n", err)
+			return 1
+		}
+		if err := encoder.Encode(statsWatchSample{SampledAt: time.Now().UTC(), Stats: stats}); err != nil {
+			fmt.Fprintf(stderr, "boxr stats: write sample: %v\n", err)
+			return 1
+		}
+		emitted++
+		if count > 0 && emitted >= count {
+			return 0
+		}
+		time.Sleep(interval)
+	}
 }
 
 func runEvents(args []string, stdout, stderr io.Writer) int {
@@ -1103,7 +1185,7 @@ Usage:
   boxr volume import ARCHIVE.tar.gz NAME
   boxr volume rm NAME [...]
   boxr volume prune --force [--filter label=KEY=VALUE]
-  boxr stats ID|NAME
+  boxr stats [--watch] [--interval 1s] [--count N] ID|NAME
   boxr rm ID|NAME [...]
   boxr events [--limit N]
   boxr prune [--older-than 168h]
@@ -2002,6 +2084,14 @@ var implementedFeatures = []string{
 	"support bundle archive and entries use private file permissions",
 	"support bundle includes host kernel release metadata",
 	"support bundle reports cgroup v2 availability",
+	"live container statistics watch mode",
+	"configurable container statistics sampling interval",
+	"bounded container statistics sampling count",
+	"timestamped JSON-lines container statistics output",
+	"statistics watch exits cleanly when its container stops",
+	"statistics watch rejects invalid intervals and counts",
+	"statistics watch preserves the existing one-shot JSON interface",
+	"statistics watch reports output and cgroup read errors",
 }
 
 func printFeatures(stdout io.Writer) {
