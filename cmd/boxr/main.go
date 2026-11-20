@@ -30,6 +30,7 @@ import (
 	"github.com/manit6752025/boxr/internal/state"
 	"github.com/manit6752025/boxr/internal/support"
 	"github.com/manit6752025/boxr/internal/volume"
+	boxrnetwork "github.com/manit6752025/boxr/internal/network"
 )
 
 // These values are populated by the release build's -ldflags.
@@ -105,6 +106,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runLogs(args[1:], stdout, stderr)
 	case "volume":
 		return runVolume(args[1:], stdout, stderr)
+	case "network":
+		return runNetwork(args[1:], stdout, stderr)
 	case "inspect":
 		return runInspect(args[1:], stdout, stderr)
 	case "rm":
@@ -213,7 +216,8 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 	flags.Var(&mounts, "mount", "bind mount SOURCE:TARGET[:ro|rw] (repeatable; requires --rootfs)")
 	flags.Var(&volumes, "volume", "mount a named volume as NAME:TARGET[:ro|rw] (repeatable)")
 	flags.Var(&tmpfs, "tmpfs", "mount tmpfs at TARGET[:SIZE[:MODE]] (repeatable; requires --rootfs)")
-	flags.StringVar(&opts.NetworkMode, "network", opts.NetworkMode, "network namespace mode: host or none")
+	flags.StringVar(&opts.NetworkMode, "network", opts.NetworkMode, "network namespace mode: host, none, or bridge")
+	flags.StringVar(&opts.NetworkName, "network-name", opts.NetworkName, "managed bridge network to join when --network=bridge")
 	flags.BoolVar(&opts.UserNamespace, "userns", opts.UserNamespace, "map the invoking UID/GID to root inside a private user namespace")
 	flags.BoolVar(&opts.NoNewPrivileges, "no-new-privileges", opts.NoNewPrivileges, "prevent execve from gaining additional privileges")
 	flags.StringVar(&opts.SeccompProfile, "seccomp-profile", opts.SeccompProfile, "built-in syscall filter profile: baseline")
@@ -442,14 +446,33 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 		Stdout: io.MultiWriter(stdout, combinedLog),
 		Stderr: io.MultiWriter(stderr, combinedLog),
 		OnStart: func(pid int) error {
+			if opts.NetworkMode == "bridge" {
+				if _, err := boxrnetwork.Join(opts.NetworkName, pid, record.ID); err != nil {
+					return fmt.Errorf("attach bridge network %q: %w", opts.NetworkName, err)
+				}
+			}
 			if err := state.Start(record.ID, pid); err != nil {
+				if opts.NetworkMode == "bridge" {
+					_ = boxrnetwork.Leave(opts.NetworkName, record.ID)
+				}
 				return err
 			}
 			started = true
 			return nil
 		},
 		OnExit: func(_ int, executionErr error) error {
-			return state.Finish(record.ID, executionErr)
+			var networkErr error
+			if opts.NetworkMode == "bridge" {
+				networkErr = boxrnetwork.Leave(opts.NetworkName, record.ID)
+			}
+			stateErr := state.Finish(record.ID, executionErr)
+			if networkErr != nil && stateErr != nil {
+				return fmt.Errorf("disconnect bridge network: %v; finish container record: %w", networkErr, stateErr)
+			}
+			if networkErr != nil {
+				return fmt.Errorf("disconnect bridge network: %w", networkErr)
+			}
+			return stateErr
 		},
 	})
 	if !started {
@@ -492,6 +515,7 @@ type runPlan struct {
 	RootFSConfigured     bool     `json:"rootfsConfigured"`
 	OverlayConfigured    bool     `json:"overlayConfigured"`
 	NetworkMode          string   `json:"networkMode"`
+	NetworkName          string   `json:"networkName,omitempty"`
 	MemoryLimitBytes     int64    `json:"memoryLimitBytes,omitempty"`
 	MemoryHighBytes      int64    `json:"memoryHighBytes,omitempty"`
 	CPUs                 float64  `json:"cpus,omitempty"`
@@ -1413,6 +1437,10 @@ Usage:
   boxr kill [--signal KILL] ID|NAME [...]
   boxr wait [--condition running|stopped] [--timeout 30s] [--interval 100ms] [--json] ID|NAME [...]
   boxr logs [--tail 100] [--follow] ID|NAME
+  boxr network create --subnet CIDR [--gateway IP] [--internal] NAME
+  boxr network ls [--json]
+  boxr network inspect [--json] NAME
+  boxr network rm NAME
   boxr volume create [--label KEY=VALUE] NAME
   boxr volume ls [--format table|json] [--filter label=KEY=VALUE]
   boxr volume inspect NAME
@@ -2637,6 +2665,29 @@ var implementedFeatures = []string{
 	"healthcheck startup grace periods are bounded to 10 minutes",
 	"unhealthy services fail the attached deployment supervisor and trigger stack shutdown",
 	"healthcheck targets remain loopback-only and absent from deployment plans",
+	"managed bridge network creation with an owner-private persistent metadata store",
+	"versioned network store with bounded strict JSON decoding",
+	"network metadata writes are atomically published with private file permissions",
+	"IPv4 bridge subnets are canonical and bounded between /16 and /29",
+	"bridge network gateways are validated as usable in-subnet addresses",
+	"bridge networks reject overlapping IPv4 subnets",
+	"bridge interface names are validated against Linux interface length limits",
+	"bridge provisioning creates and raises a host Linux bridge interface",
+	"bridge networks optionally enable scoped IPv4 forwarding and NAT",
+	"network-specific firewall chains isolate Boxr forwarding and masquerade rules",
+	"network deletion removes only its own firewall chains and bridge interface",
+	"per-network IPv4 address allocation excludes network broadcast and gateway addresses",
+	"container network attachments reserve unique addresses by container ID",
+	"bridge attachments create host-side veth pairs and join container net namespaces",
+	"container bridge interfaces receive an eth0 address and default gateway",
+	"failed bridge attachment rolls back its veth and IPv4 allocation",
+	"container exit removes its bridge veth and releases its address",
+	"bridge network removal is blocked while container attachments remain",
+	"network list and inspect provide sorted secret-free JSON metadata",
+	"bridge mode requires an explicit managed network name",
+	"bridge mode creates a private network namespace before host-side attachment",
+	"container run joins and leaves bridge networks through lifecycle hooks",
+	"network metadata rejects duplicate IDs names bridges and invalid allocations",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -2687,7 +2738,7 @@ func runCompletion(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Usage: boxr completion bash|zsh|fish|powershell")
 		return 2
 	}
-	commands := "run ps inspect stop kill wait logs volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
+	commands := "run ps inspect stop kill wait logs network volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
 	switch args[0] {
 	case "bash":
 		fmt.Fprintf(stdout, `_boxr_complete() { COMPREPLY=($(compgen -W "%s" -- "${COMP_WORDS[COMP_CWORD]}")); }
@@ -4314,6 +4365,102 @@ func parseVolumeMount(value string) (string, container.BindMount, error) {
 		}
 	}
 	return name, mount, nil
+}
+
+func runNetwork(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "Usage: boxr network create --subnet CIDR [--gateway IP] [--bridge IFACE] [--internal] NAME | ls [--json] | inspect [--json] NAME | rm NAME")
+		return 2
+	}
+	switch args[0] {
+	case "create":
+		flags := flag.NewFlagSet("network create", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		subnet := flags.String("subnet", "", "non-overlapping IPv4 subnet in canonical CIDR form (/16 to /29)")
+		gateway := flags.String("gateway", "", "IPv4 gateway address (default: first usable address)")
+		bridge := flags.String("bridge", "", "host bridge interface name (default: generated)")
+		internal := flags.Bool("internal", false, "disable outbound IPv4 forwarding and NAT")
+		if err := flags.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if flags.NArg() != 1 || *subnet == "" {
+			fmt.Fprintln(stderr, "Usage: boxr network create --subnet CIDR [--gateway IP] [--bridge IFACE] [--internal] NAME")
+			return 2
+		}
+		created, err := boxrnetwork.Create(flags.Arg(0), boxrnetwork.CreateOptions{
+			Subnet: *subnet, Gateway: *gateway, Bridge: *bridge, NAT: !*internal,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr network create: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "created bridge network %s (%s)\n", created.Name, created.ID)
+		fmt.Fprintf(stdout, "bridge: %s\nsubnet: %s\ngateway: %s\nNAT: %t\n", created.Bridge, created.Subnet, created.Gateway, created.NAT)
+		return 0
+	case "ls":
+		flags := flag.NewFlagSet("network ls", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		jsonOutput := flags.Bool("json", false, "write network list as JSON")
+		if err := flags.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if flags.NArg() != 0 {
+			fmt.Fprintln(stderr, "Usage: boxr network ls [--json]")
+			return 2
+		}
+		items, err := boxrnetwork.List()
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr network ls: %v\n", err)
+			return 1
+		}
+		if *jsonOutput {
+			return writeJSON(stdout, items, stderr, "boxr network ls")
+		}
+		fmt.Fprintln(stdout, "NAME\tDRIVER\tBRIDGE\tSUBNET\tGATEWAY\tNAT\tCONTAINERS")
+		for _, item := range items {
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%t\t%d\n", item.Name, item.Driver, item.Bridge, item.Subnet, item.Gateway, item.NAT, item.ContainerCount)
+		}
+		if len(items) == 0 {
+			fmt.Fprintln(stdout, "No networks found.")
+		}
+		return 0
+	case "inspect":
+		flags := flag.NewFlagSet("network inspect", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		jsonOutput := flags.Bool("json", false, "write network metadata as JSON")
+		if err := flags.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if flags.NArg() != 1 {
+			fmt.Fprintln(stderr, "Usage: boxr network inspect [--json] NAME")
+			return 2
+		}
+		item, err := boxrnetwork.Inspect(flags.Arg(0))
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr network inspect: %v\n", err)
+			return 1
+		}
+		if *jsonOutput {
+			return writeJSON(stdout, item, stderr, "boxr network inspect")
+		}
+		fmt.Fprintf(stdout, "Network: %s\nID: %s\nDriver: %s\nBridge: %s\nSubnet: %s\nGateway: %s\nNAT: %t\nContainers: %d\n",
+			item.Name, item.ID, item.Driver, item.Bridge, item.Subnet, item.Gateway, item.NAT, item.ContainerCount)
+		return 0
+	case "rm":
+		if len(args) != 2 || strings.TrimSpace(args[1]) == "" {
+			fmt.Fprintln(stderr, "Usage: boxr network rm NAME")
+			return 2
+		}
+		if err := boxrnetwork.Remove(args[1]); err != nil {
+			fmt.Fprintf(stderr, "boxr network rm: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "removed network %s\n", args[1])
+		return 0
+	default:
+		fmt.Fprintf(stderr, "boxr network: unknown action %q\n", args[0])
+		return 2
+	}
 }
 
 func runVolume(args []string, stdout, stderr io.Writer) int {
