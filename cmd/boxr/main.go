@@ -3194,7 +3194,7 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 
 func runDeploy(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "Usage: boxr deploy validate [--profile NAME] FILE.json | plan [--profile NAME] [--json] FILE.json | pull [--profile NAME] [--platform ...] [--authfile PATH] FILE.json | up [--profile NAME] [--dry-run] FILE.json | ps [--json] STACK | logs [--tail N] [--follow] STACK [SERVICE] | wait [--condition running|stopped] STACK | down [--time 10s] [--remove] STACK | profiles [--json] FILE.json | example")
+		fmt.Fprintln(stderr, "Usage: boxr deploy validate [--profile NAME] FILE.json|FILE.yaml|FILE.yml | plan [--profile NAME] [--json] FILE.json|FILE.yaml|FILE.yml | pull [--profile NAME] [--platform ...] [--authfile PATH] FILE.json|FILE.yaml|FILE.yml | up [--profile NAME] [--dry-run] FILE.json|FILE.yaml|FILE.yml | ps [--json] STACK | logs [--tail N] [--follow] STACK [SERVICE] | wait [--condition running|stopped] STACK | down [--time 10s] [--remove] STACK | profiles [--json] FILE.json|FILE.yaml|FILE.yml | example")
 		return 2
 	}
 	switch args[0] {
@@ -3213,7 +3213,7 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		if flags.NArg() != 1 {
-			fmt.Fprintln(stderr, "Usage: boxr deploy profiles [--json] FILE.json")
+			fmt.Fprintln(stderr, "Usage: boxr deploy profiles [--json] FILE.json|FILE.yaml|FILE.yml")
 			return 2
 		}
 		file, err := deploy.Load(flags.Arg(0))
@@ -3264,7 +3264,7 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		if flags.NArg() != 1 {
-			fmt.Fprintf(stderr, "Usage: boxr deploy %s [--profile NAME] [--json] FILE.json\n", action)
+			fmt.Fprintf(stderr, "Usage: boxr deploy %s [--profile NAME] [--json] FILE.json|FILE.yaml|FILE.yml\n", action)
 			return 2
 		}
 		file, err := deploy.Load(flags.Arg(0))
@@ -3329,7 +3329,7 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		if flags.NArg() != 1 {
-			fmt.Fprintln(stderr, "Usage: boxr deploy pull [--profile NAME] [--platform linux/ARCH[/VARIANT]] [--authfile PATH] FILE.json")
+			fmt.Fprintln(stderr, "Usage: boxr deploy pull [--profile NAME] [--platform linux/ARCH[/VARIANT]] [--authfile PATH] FILE.json|FILE.yaml|FILE.yml")
 			return 2
 		}
 		file, plan, code := loadDeploymentPlan(flags.Arg(0), profiles, stderr)
@@ -3352,7 +3352,7 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		if flags.NArg() != 1 || *startTimeout <= 0 || *stopTimeout < 0 {
-			fmt.Fprintln(stderr, "Usage: boxr deploy up [--profile NAME] [--dry-run] [--start-timeout 30s] [--stop-timeout 10s] FILE.json")
+			fmt.Fprintln(stderr, "Usage: boxr deploy up [--profile NAME] [--dry-run] [--start-timeout 30s] [--stop-timeout 10s] FILE.json|FILE.yaml|FILE.yml")
 			return 2
 		}
 		file, plan, code := loadDeploymentPlan(flags.Arg(0), profiles, stderr)
