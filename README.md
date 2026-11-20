@@ -297,7 +297,7 @@ boxr deploy pull compose.yaml
 boxr deploy up compose.yaml
 ```
 
-Compose YAML supports image-based services, command arguments, environment values/files, dependency ordering, profiles, labels, working directories, hostnames and short IPv4 TCP/UDP port mappings on a pre-created external Boxr bridge. Services must explicitly choose `network_mode: none|host` or one external Boxr bridge network. This is not full Compose parity: builds, Compose volumes, implicit bridge networks, service DNS, arbitrary healthcheck commands, TTY, privileged mode and other unsupported semantics are rejected. See [the deployment guide](docs/deployments.md) for the exact supported subset and example.
+Compose YAML supports image-based services, command arguments, environment values/files, dependency ordering, profiles, labels, working directories, hostnames, short IPv4 TCP/UDP port mappings, pre-created external Boxr volumes, and existing host bind paths. Create named volumes with `boxr volume create NAME` before deployment; relative bind paths resolve from the Compose file directory and must already exist without symlink components. Services must explicitly choose `network_mode: none|host` or one pre-created external Boxr bridge. This is not full Compose parity: builds, automatic volume creation, volume drivers, long-form mounts, implicit bridge networks, service DNS, arbitrary healthcheck commands, TTY, privileged mode and other unsupported semantics are rejected. See [the deployment guide](docs/deployments.md) for the exact supported subset and example.
 
 
 ```sh
