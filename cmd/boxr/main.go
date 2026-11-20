@@ -3153,7 +3153,7 @@ func deploymentContainerOptions(service deploy.Service) (container.Options, erro
 func startDeploymentProcess(executable, stack string, order int, serviceName string, service deploy.Service, stdout, stderr io.Writer) (*deploymentProcess, error) {
 	options, err := deploymentContainerOptions(service)
 	if err != nil {
-		return nil, fmt.Errorf("prepare service %q volumes: %w", serviceName, err)
+		return nil, fmt.Errorf("prepare service %q configuration: %w", serviceName, err)
 	}
 	options.Name = deploy.ContainerName(stack, serviceName)
 	options.AutoRemove = false
@@ -3936,7 +3936,7 @@ func runDeploymentDown(stack string, timeout time.Duration, remove, dryRun bool,
 		service := record.Labels[deploy.ServiceLabel]
 		serviceTimeout, err := deploymentStopTimeout(record.Labels, timeout)
 		if err != nil {
-			fmt.Fprintf(stderr, "boxr deploy down: service %s: %v\\n", service, err)
+			fmt.Fprintf(stderr, "boxr deploy down: service %s: %v\n", service, err)
 			return 1
 		}
 		if dryRun {
@@ -3944,7 +3944,7 @@ func runDeploymentDown(stack string, timeout time.Duration, remove, dryRun bool,
 			if remove {
 				action = "stop and remove"
 			}
-			fmt.Fprintf(stdout, "would %s service %s (%s)\n", action, service, record.Name)
+			fmt.Fprintf(stdout, "would %s service %s (%s) with %s grace\n", action, service, record.Name, serviceTimeout)
 			continue
 		}
 		if record.Status == "running" {
