@@ -25,12 +25,12 @@ import (
 	"github.com/manit6752025/boxr/internal/container"
 	"github.com/manit6752025/boxr/internal/deploy"
 	imageStore "github.com/manit6752025/boxr/internal/image"
+	boxrnetwork "github.com/manit6752025/boxr/internal/network"
 	"github.com/manit6752025/boxr/internal/registry"
 	"github.com/manit6752025/boxr/internal/rootfs"
 	"github.com/manit6752025/boxr/internal/state"
 	"github.com/manit6752025/boxr/internal/support"
 	"github.com/manit6752025/boxr/internal/volume"
-	boxrnetwork "github.com/manit6752025/boxr/internal/network"
 )
 
 // These values are populated by the release build's -ldflags.
@@ -516,36 +516,36 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 }
 
 type runPlan struct {
-	Mode                 string   `json:"mode"`
-	Command              string   `json:"command"`
-	ArgumentCount        int      `json:"argumentCount"`
-	ContainerName        string   `json:"containerName,omitempty"`
-	ImageReference       string   `json:"imageReference,omitempty"`
-	WorkingDirectory     string   `json:"workingDirectory,omitempty"`
-	RootFSConfigured     bool     `json:"rootfsConfigured"`
-	OverlayConfigured    bool     `json:"overlayConfigured"`
-	NetworkMode          string   `json:"networkMode"`
-	NetworkName          string   `json:"networkName,omitempty"`
+	Mode                 string                  `json:"mode"`
+	Command              string                  `json:"command"`
+	ArgumentCount        int                     `json:"argumentCount"`
+	ContainerName        string                  `json:"containerName,omitempty"`
+	ImageReference       string                  `json:"imageReference,omitempty"`
+	WorkingDirectory     string                  `json:"workingDirectory,omitempty"`
+	RootFSConfigured     bool                    `json:"rootfsConfigured"`
+	OverlayConfigured    bool                    `json:"overlayConfigured"`
+	NetworkMode          string                  `json:"networkMode"`
+	NetworkName          string                  `json:"networkName,omitempty"`
 	PublishedPorts       []container.PortMapping `json:"publishedPorts,omitempty"`
-	MemoryLimitBytes     int64    `json:"memoryLimitBytes,omitempty"`
-	MemoryHighBytes      int64    `json:"memoryHighBytes,omitempty"`
-	CPUs                 float64  `json:"cpus,omitempty"`
-	CPUWeight            int      `json:"cpuWeight,omitempty"`
-	IOWeight             int      `json:"ioWeight,omitempty"`
-	PIDsLimit            int64    `json:"pidsLimit,omitempty"`
-	BindMountCount       int      `json:"bindMountCount"`
-	TmpfsMountCount      int      `json:"tmpfsMountCount"`
-	EnvironmentKeys      []string `json:"environmentKeys"`
-	EnvironmentValues    string   `json:"environmentValues"`
-	LabelKeys            []string `json:"labelKeys"`
-	LabelValues          string   `json:"labelValues"`
-	DropCapabilityCount  int      `json:"dropCapabilityCount"`
-	UserNamespace        bool     `json:"userNamespace"`
-	NoNewPrivileges      bool     `json:"noNewPrivileges"`
-	SeccompProfile       string   `json:"seccompProfile,omitempty"`
-	SecurityProfile      string   `json:"securityProfile,omitempty"`
-	ResourceProfile      string   `json:"resourceProfile,omitempty"`
-	NoContainerStateMade bool     `json:"noContainerStateCreated"`
+	MemoryLimitBytes     int64                   `json:"memoryLimitBytes,omitempty"`
+	MemoryHighBytes      int64                   `json:"memoryHighBytes,omitempty"`
+	CPUs                 float64                 `json:"cpus,omitempty"`
+	CPUWeight            int                     `json:"cpuWeight,omitempty"`
+	IOWeight             int                     `json:"ioWeight,omitempty"`
+	PIDsLimit            int64                   `json:"pidsLimit,omitempty"`
+	BindMountCount       int                     `json:"bindMountCount"`
+	TmpfsMountCount      int                     `json:"tmpfsMountCount"`
+	EnvironmentKeys      []string                `json:"environmentKeys"`
+	EnvironmentValues    string                  `json:"environmentValues"`
+	LabelKeys            []string                `json:"labelKeys"`
+	LabelValues          string                  `json:"labelValues"`
+	DropCapabilityCount  int                     `json:"dropCapabilityCount"`
+	UserNamespace        bool                    `json:"userNamespace"`
+	NoNewPrivileges      bool                    `json:"noNewPrivileges"`
+	SeccompProfile       string                  `json:"seccompProfile,omitempty"`
+	SecurityProfile      string                  `json:"securityProfile,omitempty"`
+	ResourceProfile      string                  `json:"resourceProfile,omitempty"`
+	NoContainerStateMade bool                    `json:"noContainerStateCreated"`
 }
 
 func buildRunPlan(command []string, opts container.Options) runPlan {
