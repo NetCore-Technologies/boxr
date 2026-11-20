@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -174,13 +175,70 @@ func loadStore() (store, string, error) {
 	if err := decoder.Decode(&result); err != nil {
 		return result, "", fmt.Errorf("decode network store: %w", err)
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return result, "", fmt.Errorf("network store must contain exactly one JSON value")
+	}
 	if result.Version != storeVersion {
 		return result, "", fmt.Errorf("unsupported network store version %d", result.Version)
 	}
 	if len(result.Networks) > maxNetworkCount {
 		return result, "", fmt.Errorf("network store exceeds %d networks", maxNetworkCount)
 	}
+	if err := validateStoredNetworks(result.Networks); err != nil {
+		return result, "", err
+	}
 	return result, dir, nil
+}
+
+func validateStoredNetworks(networks []Network) error {
+	names := make(map[string]struct{}, len(networks))
+	ids := make(map[string]struct{}, len(networks))
+	bridges := make(map[string]struct{}, len(networks))
+	prefixes := make([]netip.Prefix, 0, len(networks))
+	for _, network := range networks {
+		if !networkNameRE.MatchString(network.Name) || len(network.ID) != 16 {
+			return fmt.Errorf("network store contains an invalid network identity")
+		}
+		if _, exists := names[network.Name]; exists {
+			return fmt.Errorf("network store contains duplicate network name %q", network.Name)
+		}
+		if _, exists := ids[network.ID]; exists {
+			return fmt.Errorf("network store contains duplicate network ID")
+		}
+		if _, exists := bridges[network.Bridge]; exists || !validInterfaceName(network.Bridge) {
+			return fmt.Errorf("network store contains an invalid or duplicate bridge interface")
+		}
+		if network.Driver != "bridge" {
+			return fmt.Errorf("network store contains unsupported driver %q", network.Driver)
+		}
+		prefix, gateway, err := parseIPv4Network(network.Subnet, network.Gateway)
+		if err != nil || prefix.String() != network.Subnet || gateway.String() != network.Gateway {
+			return fmt.Errorf("network store contains invalid subnet or gateway for %q", network.Name)
+		}
+		for _, previous := range prefixes {
+			if prefixesOverlap(prefix, previous) {
+				return fmt.Errorf("network store contains overlapping IPv4 subnets")
+			}
+		}
+		prefixes = append(prefixes, prefix)
+		allocated := make(map[string]struct{}, len(network.Allocations))
+		for containerID, addressText := range network.Allocations {
+			address, err := netip.ParseAddr(addressText)
+			if containerID == "" || strings.ContainsAny(containerID, "/\\\x00") ||
+				err != nil || !address.Is4() || !prefix.Contains(address) || address == gateway || address == prefix.Addr() || address == broadcastAddress(prefix) {
+				return fmt.Errorf("network store contains an invalid IPAM allocation for %q", network.Name)
+			}
+			if _, exists := allocated[addressText]; exists {
+				return fmt.Errorf("network store contains a duplicate IPAM address")
+			}
+			allocated[addressText] = struct{}{}
+		}
+		names[network.Name] = struct{}{}
+		ids[network.ID] = struct{}{}
+		bridges[network.Bridge] = struct{}{}
+	}
+	return nil
 }
 
 func saveStore(dir string, value store) error {
