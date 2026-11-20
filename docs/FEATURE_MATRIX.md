@@ -2,7 +2,10 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 740 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+
+## Implemented capabilities
+
+**Inventory size: 746 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -746,3 +749,9 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 738. Zstandard decompression caps decoder memory and window at 256 MiB
 739. rootfs layer application auto-detects Zstandard-compressed tar archives
 740. pulled Zstandard layers are verified against OCI uncompressed diff IDs before application
+741. Linux detached run launches a dedicated Boxr supervisor in a new session
+742. detached run waits for a post-cgroup startup-barrier handshake before returning the container ID
+743. detached supervisor captures launch diagnostics in an owner-only state-directory log
+744. detached run reports container ID host PID and launch log path after successful startup
+745. detached supervisor uses the standard persistent container lifecycle record and log stream
+746. detached mode rejects dry-run and preserves workload arguments through the standard flag parser
