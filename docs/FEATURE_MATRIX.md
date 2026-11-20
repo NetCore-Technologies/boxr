@@ -2,10 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-
-## Implemented capabilities
-
-**Inventory size: 746 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 749 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -755,3 +752,6 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 744. detached run reports container ID host PID and launch log path after successful startup
 745. detached supervisor uses the standard persistent container lifecycle record and log stream
 746. detached mode rejects dry-run and preserves workload arguments through the standard flag parser
+747. registry pushes convert Boxr's private rootfs layer media type to standard OCI gzip layer media type
+748. registry pushes preserve compressed layer bytes and SHA-256 digest during OCI media type normalization
+749. registry push verifies the published digest of the portable normalized OCI manifest

@@ -598,7 +598,17 @@ func TestPushUploadsVerifiedBlobsAndManifestWithBearerScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifestDigest := digestBytes(manifestData)
+	var portableManifest manifest
+	if err := json.Unmarshal(manifestData, &portableManifest); err != nil {
+		t.Fatal(err)
+	}
+	portableManifest.Layers[0].MediaType = ociGzipLayerMediaType
+	portableManifestData, err := json.Marshal(portableManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestDigest := digestBytes(portableManifestData)
+	originalManifest := append([]byte(nil), manifestData...)
 	uploaded := map[string]bool{}
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -638,6 +648,12 @@ func TestPushUploadsVerifiedBlobsAndManifestWithBearerScope(t *testing.T) {
 			if got := digestBytes(body); got != manifestDigest {
 				t.Errorf("manifest digest = %q, want %q", got, manifestDigest)
 			}
+			var published manifest
+			if err := json.Unmarshal(body, &published); err != nil {
+				t.Errorf("decode published manifest: %v", err)
+			} else if got := published.Layers[0].MediaType; got != ociGzipLayerMediaType {
+				t.Errorf("published layer media type = %q, want %q", got, ociGzipLayerMediaType)
+			}
 			w.Header().Set("Docker-Content-Digest", manifestDigest)
 			w.WriteHeader(http.StatusCreated)
 		default:
@@ -651,6 +667,9 @@ func TestPushUploadsVerifiedBlobsAndManifestWithBearerScope(t *testing.T) {
 	}
 	if !uploaded[configDescriptor.Digest] || !uploaded[layerDescriptor.Digest] {
 		t.Fatalf("not all image blobs were uploaded: %#v", uploaded)
+	}
+	if !bytes.Equal(manifestData, originalManifest) {
+		t.Fatal("push mutated the local Boxr manifest")
 	}
 }
 

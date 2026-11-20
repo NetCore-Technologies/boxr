@@ -851,9 +851,19 @@ func Push(ctx context.Context, reference string, bundle PushBundle, credentials 
 	if err := fetcher.uploadFile(ctx, remote.Layers[0], bundle.LayerPath); err != nil {
 		return fmt.Errorf("upload rootfs layer: %w", err)
 	}
-	manifestDigest := digestBytes(bundle.Manifest)
+	// Translate Boxr's private local layer media type into the standard OCI
+	// gzip-layer media type before publishing for Docker/OCI interoperability.
+	remote.Layers[0].MediaType = ociGzipLayerMediaType
+	publishedManifest, err := json.Marshal(remote)
+	if err != nil {
+		return fmt.Errorf("encode portable OCI image manifest: %w", err)
+	}
+	if int64(len(publishedManifest)) > maxManifestBytes {
+		return fmt.Errorf("portable OCI manifest exceeds %d bytes", maxManifestBytes)
+	}
+	manifestDigest := digestBytes(publishedManifest)
 	endpoint := baseURL + "/v2/" + parsed.Repository + "/manifests/" + url.PathEscape(parsed.Tag)
-	request, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(bundle.Manifest))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(publishedManifest))
 	if err != nil {
 		return err
 	}

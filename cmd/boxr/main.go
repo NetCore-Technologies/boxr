@@ -2925,6 +2925,9 @@ var implementedFeatures = []string{
 	"detached run reports container ID host PID and launch log path after successful startup",
 	"detached supervisor uses the standard persistent container lifecycle record and log stream",
 	"detached mode rejects dry-run and preserves workload arguments through the standard flag parser",
+	"registry pushes convert Boxr's private rootfs layer media type to standard OCI gzip layer media type",
+	"registry pushes preserve compressed layer bytes and SHA-256 digest during OCI media type normalization",
+	"registry push verifies the published digest of the portable normalized OCI manifest",
 }
 
 func printFeatures(stdout io.Writer) {

@@ -47,4 +47,6 @@ These limits bound metadata and layer downloads; they are not a substitute for a
 
 ## Push compatibility
 
-Registry pushes continue to publish Boxr's canonical single-rootfs-layer OCI image representation. This avoids claiming support for arbitrary multi-layer local image graphs. A pulled Docker/OCI image can still be run and re-exported using `boxr image save`.
+Registry pushes publish an OCI image manifest with the standard `application/vnd.oci.image.layer.v1.tar+gzip` layer media type. Boxr's private local layer media type is translated at publication time; the compressed layer bytes and SHA-256 digest remain unchanged. OCI consumers and Docker-compatible registry clients therefore do not need to understand Boxr's private media type.
+
+The local image store currently flattens imported Docker/OCI layers into one canonical Boxr rootfs layer. Push therefore publishes one OCI layer and does not preserve arbitrary multi-layer history, build cache metadata, or original layer boundaries.
