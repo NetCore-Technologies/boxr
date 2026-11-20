@@ -1,6 +1,6 @@
 # Multi-service deployment manifests
 
-Boxr deployment manifests describe an application as a set of individually isolated services with an explicit dependency graph. The planner is deterministic and validates all services before any workload is started. The runtime supports attached service supervision, stack-scoped status and reverse-order shutdown.
+Boxr deployment manifests describe an application as a set of services with an explicit dependency graph. The planner is deterministic and validates all services before any workload is started. Boxr accepts strict version 1 JSON manifests and a deliberately limited Docker Compose YAML subset; both use the same planner, image prefetcher and attached lifecycle supervisor. The runtime supports stack-scoped status and reverse-order shutdown.
 
 ## Create and inspect a plan
 
@@ -11,7 +11,45 @@ boxr deploy plan boxr.deploy.json
 boxr deploy plan --json boxr.deploy.json
 ```
 
-Version 1 is strict JSON. Unknown fields, trailing JSON values, oversized files, unsupported versions, malformed names, invalid commands, invalid container options, missing dependencies, duplicate dependency declarations, self-dependencies and dependency cycles are rejected.
+JSON version 1 is strict: unknown fields, trailing JSON values, oversized files, unsupported versions, malformed names, invalid commands, invalid container options, missing dependencies, duplicate dependency declarations, self-dependencies and dependency cycles are rejected. Files ending in `.yaml` or `.yml` (and non-JSON manifests) are decoded as Compose YAML with unknown fields, duplicate keys and multiple YAML documents rejected.
+
+## Docker Compose YAML subset
+
+The same `deploy validate`, `deploy plan`, `deploy pull`, `deploy up`, and `deploy profiles` commands accept a Compose YAML file:
+
+```sh
+boxr deploy validate compose.yaml
+boxr deploy plan compose.yaml
+boxr deploy pull compose.yaml
+boxr deploy up compose.yaml
+```
+
+The current translator supports literal `image` references, string or array `command`, `environment` maps/lists, relative or absolute `env_file` paths, `depends_on` with `service_started`, `profiles`, `labels`, `working_dir`, `hostname`, and short-form IPv4 TCP/UDP `ports`. Command strings are tokenized with quote handling; they are not run through a shell and Compose variable interpolation is not performed. A service must explicitly select `network_mode: none`, `network_mode: host`, or one pre-created external Boxr bridge network. For the latter, declare an external network in Compose and create it first with `boxr network create`; published ports require that external bridge. The implicit Compose default bridge, multiple networks, network aliases and service-name DNS are not implemented.
+
+```yaml
+name: sample-stack
+services:
+  api:
+    image: ghcr.io/example/api:1.2.3
+    command: ["/app/server", "--listen", ":8080"]
+    environment:
+      APP_MODE: production
+    depends_on:
+      database:
+        condition: service_started
+    ports:
+      - "127.0.0.1:8080:8080/tcp"
+    networks: [app]
+  database:
+    image: postgres:16
+    network_mode: none
+networks:
+  app:
+    external: true
+    name: boxr-app
+```
+
+Before using the example, create `boxr-app` with `boxr network create` and attach any services that must share that bridge to it. Boxr does not yet provide Compose's service DNS, so containers cannot resolve one another by Compose service name. Named volumes, bind mounts in Compose YAML, build contexts, arbitrary healthcheck commands, custom entrypoints, container-name overrides, restart policies, TTY/stdin, privileged mode, and other unimplemented Compose fields are rejected with a diagnostic instead of being silently ignored. Use the JSON manifest format for Boxr-specific rootfs, named-volume and explicit loopback TCP/HTTP healthcheck settings.
 
 ## Manifest structure
 
@@ -117,4 +155,4 @@ A plan reports the number of command arguments, environment entries and labels w
 
 ## Scope and limitations
 
-This release provides validation, planning and an attached single-host lifecycle supervisor. It does not claim Compose compatibility or provide detached mode, restart policies, health checks, service DNS, bridge networking, port publishing, secret mounts, rolling updates or cross-host scheduling. A validated plan is not proof that its host resources or rootfs paths exist. Run workloads with `boxr run` after reviewing the plan.
+This release provides validation, planning and an attached single-host lifecycle supervisor plus a constrained Compose YAML importer. It is not a drop-in Docker Compose replacement: detached daemon operation, Compose build contexts, Compose-managed volumes, service DNS, implicit/default networks, multiple network attachments, arbitrary healthcheck commands, Compose secrets/configs, rolling updates and cross-host scheduling are not implemented. A validated plan is not proof that its host resources or rootfs paths exist. Run workloads with `boxr run` after reviewing the plan.
