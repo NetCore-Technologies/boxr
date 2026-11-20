@@ -1042,3 +1042,62 @@ func TestDockerContainerStartRequiresARealCreatedEngineRecord(t *testing.T) {
 		t.Fatalf("stop of created container status=%d", response.Code)
 	}
 }
+
+
+func TestDockerContainerStartRestartsStoppedEngineContainer(t *testing.T) {
+	server := setupEngineAPITest(t)
+	const reference = "registry.example/team/boxr-restart:v1"
+	importEngineAPITestImage(t, reference)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1.45/containers/create?name=restartable", strings.NewReader(`{"Image":"`+reference+`"}`))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created struct {
+		ID string `json:"Id"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	record, err := state.Get(created.ID)
+	if err != nil {
+		t.Fatalf("load created Engine API record: %v", err)
+	}
+
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatalf("model first start: %v", err)
+	}
+	if err := state.RequestStop(record.ID); err != nil {
+		t.Fatalf("model manual stop: %v", err)
+	}
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatalf("model completed workload: %v", err)
+	}
+
+	originalLauncher := launchEngineAPICreatedContainer
+	var launchedExecutable string
+	var launchedArgs []string
+	launchEngineAPICreatedContainer = func(executable string, args []string) (string, string, error) {
+		launchedExecutable = executable
+		launchedArgs = append([]string(nil), args...)
+		return "", "", nil
+	}
+	t.Cleanup(func() { launchEngineAPICreatedContainer = originalLauncher })
+
+	response = engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+record.ID+"/start")
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("restart stopped container status=%d body=%s", response.Code, response.Body.String())
+	}
+	if launchedExecutable == "" {
+		t.Fatal("Engine API start did not invoke the Boxr executable")
+	}
+	wantArgs := []string{"run", "--config"}
+	if len(launchedArgs) < len(wantArgs)+5 || launchedArgs[0] != wantArgs[0] || launchedArgs[1] != wantArgs[1] {
+		t.Fatalf("Engine API start arguments = %#v", launchedArgs)
+	}
+	if !strings.Contains(strings.Join(launchedArgs, " "), "--internal-existing-id "+record.ID) {
+		t.Fatalf("Engine API start did not target the existing stopped record: %#v", launchedArgs)
+	}
+}
