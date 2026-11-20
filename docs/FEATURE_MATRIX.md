@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 498 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 503 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -504,3 +504,8 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 496. volume prune dry run respects name and label filters
 497. volume prune supports machine-readable JSON plans
 498. volume prune requires force for destructive cleanup
+499. container inspect optionally reports state and log disk usage
+500. inspect size report includes separate state and log byte counts
+501. inspect size report includes total bytes
+502. inspect size scanner treats an absent log as zero bytes
+503. inspect size scanner rejects symlink and special-file targets

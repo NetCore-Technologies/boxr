@@ -387,3 +387,13 @@ boxr volume prune --force
 ```
 
 Dry-run mode lists eligible volumes and identifies volumes protected by active containers. It accepts the same name and label filters as the destructive operation, but does not require `--force` and never removes data. Actual cleanup still requires explicit `--force`. See [volume cleanup](docs/pruning.md).
+
+
+## Inspect container disk usage
+
+```bash
+boxr inspect CONTAINER
+boxr inspect --size CONTAINER
+```
+
+The optional size report includes separate state-record and log byte counts plus their total. It uses no-follow file metadata checks and treats a missing log as zero bytes; symlink and special-file targets are rejected. The original inspect JSON remains unchanged unless `--size` is supplied.

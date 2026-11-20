@@ -647,17 +647,74 @@ func runPS(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+type inspectSize struct {
+	StateBytes int64 `json:"stateBytes"`
+	LogBytes   int64 `json:"logBytes"`
+	TotalBytes int64 `json:"totalBytes"`
+}
+
+type inspectSizeReport struct {
+	Record state.Record `json:"record"`
+	Size   inspectSize  `json:"size"`
+}
+
 func runInspect(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 {
-		fmt.Fprintln(stderr, "Usage: boxr inspect ID|NAME")
+	flags := flag.NewFlagSet("inspect", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	withSize := flags.Bool("size", false, "include container state and log file sizes")
+	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	record, err := state.Get(args[0])
+	if flags.NArg() != 1 {
+		fmt.Fprintln(stderr, "Usage: boxr inspect [--size] ID|NAME")
+		return 2
+	}
+	record, err := state.Get(flags.Arg(0))
 	if err != nil {
 		fmt.Fprintf(stderr, "boxr inspect: %v\n", err)
 		return 1
 	}
-	return writeJSON(stdout, record, stderr, "boxr inspect")
+	if !*withSize {
+		return writeJSON(stdout, record, stderr, "boxr inspect")
+	}
+	stateDir, err := state.Dir()
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr inspect: state directory: %v\n", err)
+		return 1
+	}
+	stateBytes, err := inspectRegularFileSize(filepath.Join(stateDir, record.ID+".json"), true)
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr inspect: state file: %v\n", err)
+		return 1
+	}
+	logPath, err := state.LogPath(record.ID)
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr inspect: log path: %v\n", err)
+		return 1
+	}
+	logBytes, err := inspectRegularFileSize(logPath, false)
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr inspect: log file: %v\n", err)
+		return 1
+	}
+	size := inspectSize{StateBytes: stateBytes, LogBytes: logBytes, TotalBytes: stateBytes + logBytes}
+	return writeJSON(stdout, inspectSizeReport{Record: record, Size: size}, stderr, "boxr inspect")
+}
+
+// inspectRegularFileSize uses Lstat so inspect never follows a log or state
+// symlink while calculating on-disk metadata.
+func inspectRegularFileSize(path string, required bool) (int64, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) && !required {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return 0, fmt.Errorf("size target must be a regular file")
+	}
+	return info.Size(), nil
 }
 
 func runRemove(args []string, stdout, stderr io.Writer) int {
@@ -1306,7 +1363,7 @@ Usage:
   boxr doctor [--json] [--strict]
   boxr support-bundle --output PATH [--force] [--json]
   boxr ps [--all] [--last N] [--quiet] [--no-trunc] [--filter KEY=VALUE]
-  boxr inspect ID|NAME
+  boxr inspect [--size] ID|NAME
   boxr stop [--time 10s] ID|NAME [...]
   boxr kill [--signal KILL] ID|NAME [...]
   boxr wait [--condition running|stopped] [--timeout 30s] [--interval 100ms] [--json] ID|NAME [...]
@@ -2255,6 +2312,11 @@ var implementedFeatures = []string{
 	"volume prune dry run respects name and label filters",
 	"volume prune supports machine-readable JSON plans",
 	"volume prune requires force for destructive cleanup",
+	"container inspect optionally reports state and log disk usage",
+	"inspect size report includes separate state and log byte counts",
+	"inspect size report includes total bytes",
+	"inspect size scanner treats an absent log as zero bytes",
+	"inspect size scanner rejects symlink and special-file targets",
 }
 
 func printFeatures(stdout io.Writer) {
