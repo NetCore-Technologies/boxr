@@ -2630,6 +2630,13 @@ var implementedFeatures = []string{
 	"attached deployment rollback and interrupt shutdown honor service-specific grace periods",
 	"deploy down applies each service-specific shutdown deadline independently",
 	"only services exceeding their own shutdown grace are escalated to SIGKILL",
+	"recurring per-service TCP or HTTP healthchecks run after startup gates pass",
+	"healthcheck intervals are bounded from 10 milliseconds to 60 seconds",
+	"healthcheck retry budgets are bounded and count consecutive failures",
+	"successful healthchecks reset the consecutive failure counter",
+	"healthcheck startup grace periods are bounded to 10 minutes",
+	"unhealthy services fail the attached deployment supervisor and trigger stack shutdown",
+	"healthcheck targets remain loopback-only and absent from deployment plans",
 }
 
 func printFeatures(stdout io.Writer) {
