@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/manit6752025/boxr/internal/container"
+	volumeStore "github.com/manit6752025/boxr/internal/volume"
 	"gopkg.in/yaml.v3"
 )
 
@@ -18,7 +19,12 @@ type composeDocument struct {
 	Version  yaml.Node                 `yaml:"version"`
 	Services map[string]composeService `yaml:"services"`
 	Networks map[string]composeNetwork `yaml:"networks"`
-	Volumes  yaml.Node                 `yaml:"volumes"`
+	Volumes  map[string]composeVolume `yaml:"volumes"`
+}
+
+type composeVolume struct {
+	Name     string    `yaml:"name"`
+	External yaml.Node `yaml:"external"`
 }
 
 type composeNetwork struct {
@@ -79,9 +85,9 @@ func decodeCompose(data []byte, path string) (File, error) {
 	if len(document.Services) == 0 {
 		return result, fmt.Errorf("Compose file must define at least one service")
 	}
-	if document.Volumes.Kind != 0 && !(document.Volumes.Kind == yaml.SequenceNode && len(document.Volumes.Content) == 0) &&
-		!(document.Volumes.Kind == yaml.MappingNode && len(document.Volumes.Content) == 0) {
-		return result, fmt.Errorf("top-level Compose volumes are not supported yet; use Boxr-managed volumes in a JSON deployment manifest")
+	volumeNames, err := parseComposeExternalVolumes(document.Volumes)
+	if err != nil {
+		return result, err
 	}
 
 	networkNames := make(map[string]string, len(document.Networks))
@@ -108,7 +114,7 @@ func decodeCompose(data []byte, path string) (File, error) {
 		Services: make(map[string]Service, len(document.Services)),
 	}
 	for name, source := range document.Services {
-		service, err := convertComposeService(name, source, networkNames, document.Networks, baseDir)
+		service, err := convertComposeService(name, source, networkNames, document.Networks, volumeNames, baseDir)
 		if err != nil {
 			return File{}, fmt.Errorf("Compose service %q: %w", name, err)
 		}
@@ -201,7 +207,7 @@ func composeExternalNetworkName(key string, network composeNetwork) (string, err
 	return name, nil
 }
 
-func convertComposeService(name string, source composeService, networkNames map[string]string, networks map[string]composeNetwork, baseDir string) (Service, error) {
+func convertComposeService(name string, source composeService, networkNames map[string]string, networks map[string]composeNetwork, volumeNames map[string]string, baseDir string) (Service, error) {
 	var result Service
 	if source.Image == "" {
 		if source.Build.Kind != 0 {
@@ -217,9 +223,6 @@ func convertComposeService(name string, source composeService, networkNames map[
 	}
 	if source.Entrypoint.Kind != 0 {
 		return result, fmt.Errorf("entrypoint overrides are not supported yet")
-	}
-	if source.Volumes.Kind != 0 && len(source.Volumes.Content) > 0 {
-		return result, fmt.Errorf("service volumes are not supported in Compose YAML yet; use a JSON deployment manifest with an explicit rootfs")
 	}
 	if source.Healthcheck.Kind != 0 {
 		return result, fmt.Errorf("Compose healthcheck commands are not supported; Boxr deployment healthchecks currently require explicit loopback TCP/HTTP probes in JSON")
@@ -261,6 +264,10 @@ func convertComposeService(name string, source composeService, networkNames map[
 	if err != nil {
 		return result, err
 	}
+	namedVolumes, bindMounts, err := parseComposeVolumeMounts(&source.Volumes, volumeNames, baseDir)
+	if err != nil {
+		return result, err
+	}
 	networkMode, networkName, err := resolveComposeServiceNetwork(source, networkNames, networks)
 	if err != nil {
 		return result, err
@@ -273,6 +280,7 @@ func convertComposeService(name string, source composeService, networkNames map[
 		Hostname:       source.Hostname,
 		Env:            environment,
 		Labels:         labels,
+		BindMounts:     bindMounts,
 	}
 	return Service{
 		Image:     source.Image,
@@ -281,7 +289,147 @@ func convertComposeService(name string, source composeService, networkNames map[
 		DependsOn: dependencies,
 		Profiles:  append([]string(nil), source.Profiles...),
 		EnvFiles:  envFiles,
+		Volumes:   namedVolumes,
 	}, nil
+}
+
+func parseComposeExternalVolumes(definitions map[string]composeVolume) (map[string]string, error) {
+	result := make(map[string]string, len(definitions))
+	for key, definition := range definitions {
+		if key == "" {
+			return nil, fmt.Errorf("top-level Compose volume names cannot be empty")
+		}
+		if definition.External.Kind == 0 {
+			return nil, fmt.Errorf("Compose volume %q must set external: true; Boxr does not create or delete Compose volumes automatically", key)
+		}
+		externalName := ""
+		switch definition.External.Kind {
+		case yaml.ScalarNode:
+			value, err := strconv.ParseBool(strings.TrimSpace(definition.External.Value))
+			if err != nil || !value {
+				return nil, fmt.Errorf("Compose volume %q must set external: true", key)
+			}
+		case yaml.MappingNode:
+			for index := 0; index+1 < len(definition.External.Content); index += 2 {
+				field := definition.External.Content[index].Value
+				value := definition.External.Content[index+1]
+				if field != "name" || value.Kind != yaml.ScalarNode || strings.TrimSpace(value.Value) == "" {
+					return nil, fmt.Errorf("Compose volume %q external mapping supports only a non-empty name", key)
+				}
+				externalName = value.Value
+			}
+		default:
+			return nil, fmt.Errorf("Compose volume %q external must be true or an external name mapping", key)
+		}
+		name := definition.Name
+		if externalName != "" {
+			if name != "" && name != externalName {
+				return nil, fmt.Errorf("Compose volume %q name conflicts with external.name", key)
+			}
+			name = externalName
+		}
+		if name == "" {
+			name = key
+		}
+		if err := volumeStore.ValidateName(name); err != nil {
+			return nil, fmt.Errorf("Compose volume %q does not name a valid pre-created Boxr volume: %w", key, err)
+		}
+		result[key] = name
+	}
+	return result, nil
+}
+
+func parseComposeVolumeMounts(node *yaml.Node, volumeNames map[string]string, baseDir string) ([]VolumeMount, []container.BindMount, error) {
+	if node.Kind == 0 {
+		return nil, nil, nil
+	}
+	if node.Kind != yaml.SequenceNode {
+		return nil, nil, fmt.Errorf("service volumes must use short-form string entries; long syntax is not supported yet")
+	}
+	var named []VolumeMount
+	var binds []container.BindMount
+	for index, item := range node.Content {
+		if item.Kind != yaml.ScalarNode || strings.TrimSpace(item.Value) == "" {
+			return nil, nil, fmt.Errorf("volume mount %d must be a non-empty short-form string", index+1)
+		}
+		parts := strings.Split(item.Value, ":")
+		if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[1] == "" {
+			return nil, nil, fmt.Errorf("volume mount %d must use SOURCE:TARGET[:ro|rw]", index+1)
+		}
+		source, target := parts[0], parts[1]
+		readOnly := false
+		if len(parts) == 3 {
+			switch parts[2] {
+			case "ro":
+				readOnly = true
+			case "rw":
+			default:
+				return nil, nil, fmt.Errorf("volume mount %d mode must be ro or rw", index+1)
+			}
+		}
+		if !filepath.IsAbs(target) || filepath.Clean(target) == string(filepath.Separator) || strings.ContainsRune(target, '\\') {
+			return nil, nil, fmt.Errorf("volume mount %d target must be an absolute container path other than /", index+1)
+		}
+		for _, segment := range strings.Split(filepath.ToSlash(target), "/") {
+			if segment == ".." {
+				return nil, nil, fmt.Errorf("volume mount %d target cannot contain '..'", index+1)
+			}
+		}
+		if filepath.IsAbs(source) || source == "." || source == ".." || strings.HasPrefix(source, "./") || strings.HasPrefix(source, "../") {
+			resolved, err := resolveComposeBindSource(source, baseDir)
+			if err != nil {
+				return nil, nil, fmt.Errorf("volume mount %d bind source: %w", index+1, err)
+			}
+			binds = append(binds, container.BindMount{Source: resolved, Target: target, ReadOnly: readOnly})
+			continue
+		}
+		name, exists := volumeNames[source]
+		if !exists {
+			return nil, nil, fmt.Errorf("volume mount %d references %q, which is not declared as a pre-created external Compose volume", index+1, source)
+		}
+		named = append(named, VolumeMount{Name: name, Target: target, ReadOnly: readOnly})
+	}
+	return named, binds, nil
+}
+
+func resolveComposeBindSource(source, baseDir string) (string, error) {
+	path := source
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(baseDir, path)
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve host path: %w", err)
+	}
+	absolute = filepath.Clean(absolute)
+	volume := absolute
+	for current := string(filepath.Separator); ; {
+		relative := strings.TrimPrefix(strings.TrimPrefix(volume, current), string(filepath.Separator))
+		_ = relative
+		break
+	}
+	current := string(filepath.Separator)
+	parts := strings.Split(strings.TrimPrefix(absolute, string(filepath.Separator)), string(filepath.Separator))
+	for index, part := range parts {
+		if part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return "", fmt.Errorf("inspect %s: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("host bind source %q contains a symlink component", source)
+		}
+		if index < len(parts)-1 && !info.IsDir() {
+			return "", fmt.Errorf("host bind source parent %q is not a directory", current)
+		}
+		if index == len(parts)-1 && !info.IsDir() && !info.Mode().IsRegular() {
+			return "", fmt.Errorf("host bind source must be a regular file or directory")
+		}
+	}
+	return absolute, nil
 }
 
 func resolveComposeServiceNetwork(source composeService, networkNames map[string]string, networks map[string]composeNetwork) (string, string, error) {
