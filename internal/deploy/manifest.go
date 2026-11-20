@@ -54,50 +54,50 @@ type VolumeMount struct {
 }
 
 type Service struct {
-	Image     string            `json:"image,omitempty"`
-	Command   []string          `json:"command,omitempty"`
-	Options   container.Options `json:"options"`
-	DependsOn []string          `json:"dependsOn,omitempty"`
-	Volumes   []VolumeMount     `json:"volumes,omitempty"`
-	Profiles  []string          `json:"profiles,omitempty"`
-	EnvFiles      []string          `json:"envFiles,omitempty"`
+	Image          string            `json:"image,omitempty"`
+	Command        []string          `json:"command,omitempty"`
+	Options        container.Options `json:"options"`
+	DependsOn      []string          `json:"dependsOn,omitempty"`
+	Volumes        []VolumeMount     `json:"volumes,omitempty"`
+	Profiles       []string          `json:"profiles,omitempty"`
+	EnvFiles       []string          `json:"envFiles,omitempty"`
 	StartTimeoutMS int               `json:"startTimeoutMs,omitempty"`
 	StopTimeoutMS  int               `json:"stopTimeoutMs,omitempty"`
-	Readiness     *ReadinessProbe   `json:"readiness,omitempty"`
-	Healthcheck   *Healthcheck     `json:"healthcheck,omitempty"`
+	Readiness      *ReadinessProbe   `json:"readiness,omitempty"`
+	Healthcheck    *Healthcheck      `json:"healthcheck,omitempty"`
 }
 
 // ServicePlan contains only safe-to-display metadata. It deliberately excludes
 // command contents, environment values, labels and host paths.
 type ServicePlan struct {
-	Name                  string        `json:"name"`
-	ContainerName         string        `json:"containerName,omitempty"`
-	Image                 string        `json:"image,omitempty"`
-	DependsOn             []string      `json:"dependsOn,omitempty"`
-	Profiles              []string      `json:"profiles,omitempty"`
-	ReadinessType         string        `json:"readinessType,omitempty"`
-	Volumes               []VolumeMount          `json:"volumes,omitempty"`
-	PublishedPorts        []container.PortMapping `json:"publishedPorts,omitempty"`
-	NetworkMode           string                 `json:"networkMode"`
-	SecurityProfile       string        `json:"securityProfile,omitempty"`
-	ResourceProfile       string        `json:"resourceProfile,omitempty"`
-	RootFSConfigured      bool          `json:"rootfsConfigured"`
-	ReadOnlyRootFS        bool          `json:"readOnlyRootfs"`
-	MemoryLimitBytes      int64         `json:"memoryLimitBytes,omitempty"`
-	CPUs                  float64       `json:"cpus,omitempty"`
-	PidsLimit             int64         `json:"pidsLimit,omitempty"`
-	CommandArgumentCount  int           `json:"commandArgumentCount"`
-	EnvironmentEntryCount int           `json:"environmentEntryCount"`
-	EnvironmentFileCount  int           `json:"environmentFileCount"`
-	StartTimeoutMS        int           `json:"startTimeoutMs,omitempty"`
-	StopTimeoutMS         int           `json:"stopTimeoutMs,omitempty"`
-	HealthcheckConfigured bool          `json:"healthcheckConfigured,omitempty"`
-	HealthcheckType       string        `json:"healthcheckType,omitempty"`
-	HealthcheckIntervalMS int           `json:"healthcheckIntervalMs,omitempty"`
-	HealthcheckTimeoutMS  int           `json:"healthcheckTimeoutMs,omitempty"`
-	HealthcheckRetries    int           `json:"healthcheckRetries,omitempty"`
-	HealthcheckStartPeriodMS int        `json:"healthcheckStartPeriodMs,omitempty"`
-	LabelCount            int           `json:"labelCount"`
+	Name                     string                  `json:"name"`
+	ContainerName            string                  `json:"containerName,omitempty"`
+	Image                    string                  `json:"image,omitempty"`
+	DependsOn                []string                `json:"dependsOn,omitempty"`
+	Profiles                 []string                `json:"profiles,omitempty"`
+	ReadinessType            string                  `json:"readinessType,omitempty"`
+	Volumes                  []VolumeMount           `json:"volumes,omitempty"`
+	PublishedPorts           []container.PortMapping `json:"publishedPorts,omitempty"`
+	NetworkMode              string                  `json:"networkMode"`
+	SecurityProfile          string                  `json:"securityProfile,omitempty"`
+	ResourceProfile          string                  `json:"resourceProfile,omitempty"`
+	RootFSConfigured         bool                    `json:"rootfsConfigured"`
+	ReadOnlyRootFS           bool                    `json:"readOnlyRootfs"`
+	MemoryLimitBytes         int64                   `json:"memoryLimitBytes,omitempty"`
+	CPUs                     float64                 `json:"cpus,omitempty"`
+	PidsLimit                int64                   `json:"pidsLimit,omitempty"`
+	CommandArgumentCount     int                     `json:"commandArgumentCount"`
+	EnvironmentEntryCount    int                     `json:"environmentEntryCount"`
+	EnvironmentFileCount     int                     `json:"environmentFileCount"`
+	StartTimeoutMS           int                     `json:"startTimeoutMs,omitempty"`
+	StopTimeoutMS            int                     `json:"stopTimeoutMs,omitempty"`
+	HealthcheckConfigured    bool                    `json:"healthcheckConfigured,omitempty"`
+	HealthcheckType          string                  `json:"healthcheckType,omitempty"`
+	HealthcheckIntervalMS    int                     `json:"healthcheckIntervalMs,omitempty"`
+	HealthcheckTimeoutMS     int                     `json:"healthcheckTimeoutMs,omitempty"`
+	HealthcheckRetries       int                     `json:"healthcheckRetries,omitempty"`
+	HealthcheckStartPeriodMS int                     `json:"healthcheckStartPeriodMs,omitempty"`
+	LabelCount               int                     `json:"labelCount"`
 }
 
 // Plan is deterministic for the same deployment file. Services are listed in
@@ -111,7 +111,6 @@ type Plan struct {
 	Services       []ServicePlan `json:"services"`
 }
 
- 
 // ProfileGroup describes the services enabled by one opt-in profile.
 type ProfileGroup struct {
 	Name     string   `json:"name"`
@@ -471,27 +470,27 @@ func buildPlan(file File) (Plan, error) {
 			containerName = ContainerName(file.Name, name)
 		}
 		servicePlans[name] = ServicePlan{
-			Name:                  name,
-			ContainerName:         containerName,
-			Image:                 service.Image,
-			DependsOn:             deps,
-			Profiles:              append([]string(nil), service.Profiles...),
-			ReadinessType:         readinessType,
-			Volumes:               append([]VolumeMount(nil), service.Volumes...),
-			PublishedPorts:        normalizePublishedPorts(service.Options.PublishedPorts),
-			NetworkMode:           networkMode,
-			SecurityProfile:       service.Options.SecurityProfile,
-			ResourceProfile:       service.Options.ResourceProfile,
-			RootFSConfigured:      service.Options.RootFS != "",
-			ReadOnlyRootFS:        service.Options.ReadOnlyRootFS,
-			MemoryLimitBytes:      service.Options.MemoryLimitBytes,
-			CPUs:                  service.Options.CPUs,
-			PidsLimit:             service.Options.PidsLimit,
-			CommandArgumentCount:  len(service.Command),
-			EnvironmentEntryCount: len(service.Options.Env),
-			EnvironmentFileCount:  len(service.EnvFiles),
-			StartTimeoutMS:        service.StartTimeoutMS,
-			StopTimeoutMS:         service.StopTimeoutMS,
+			Name:                     name,
+			ContainerName:            containerName,
+			Image:                    service.Image,
+			DependsOn:                deps,
+			Profiles:                 append([]string(nil), service.Profiles...),
+			ReadinessType:            readinessType,
+			Volumes:                  append([]VolumeMount(nil), service.Volumes...),
+			PublishedPorts:           normalizePublishedPorts(service.Options.PublishedPorts),
+			NetworkMode:              networkMode,
+			SecurityProfile:          service.Options.SecurityProfile,
+			ResourceProfile:          service.Options.ResourceProfile,
+			RootFSConfigured:         service.Options.RootFS != "",
+			ReadOnlyRootFS:           service.Options.ReadOnlyRootFS,
+			MemoryLimitBytes:         service.Options.MemoryLimitBytes,
+			CPUs:                     service.Options.CPUs,
+			PidsLimit:                service.Options.PidsLimit,
+			CommandArgumentCount:     len(service.Command),
+			EnvironmentEntryCount:    len(service.Options.Env),
+			EnvironmentFileCount:     len(service.EnvFiles),
+			StartTimeoutMS:           service.StartTimeoutMS,
+			StopTimeoutMS:            service.StopTimeoutMS,
 			HealthcheckConfigured:    service.Healthcheck != nil,
 			HealthcheckType:          healthcheckType,
 			HealthcheckIntervalMS:    healthcheckIntervalMS,
