@@ -46,6 +46,10 @@ func TestBuildPlanOrdersServicesDeterministicallyAndRedactsSecrets(t *testing.T)
 	if !reflect.DeepEqual(plan.ExecutionOrder, wantOrder) {
 		t.Fatalf("execution order = %v, want %v", plan.ExecutionOrder, wantOrder)
 	}
+	wantGroups := [][]string{{"database"}, {"web", "worker"}, {"proxy"}}
+	if !reflect.DeepEqual(plan.StartGroups, wantGroups) {
+		t.Fatalf("parallel start groups = %v, want %v", plan.StartGroups, wantGroups)
+	}
 	again, err := BuildPlan(file)
 	if err != nil {
 		t.Fatal(err)

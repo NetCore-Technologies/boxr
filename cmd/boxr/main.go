@@ -2553,6 +2553,7 @@ var implementedFeatures = []string{
 	"deployment stop timeout escalation",
 	"safe optional deployment record and log removal",
 	"deployment lifecycle dry-run planning",
+	"parallel startup of dependency-independent deployment services",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -2760,6 +2761,7 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 		if action == "validate" {
 			fmt.Fprintf(stdout, "valid Boxr deployment v%d (%d services)\n", plan.Version, len(plan.Services))
 			fmt.Fprintf(stdout, "execution order: %s\n", strings.Join(plan.ExecutionOrder, " -> "))
+			fmt.Fprintf(stdout, "parallel start groups: %s\n", formatDeploymentStartGroups(plan.StartGroups))
 			return 0
 		}
 		fmt.Fprintf(stdout, "Deployment: %s\nServices: %d\nExecution order: %s\n\n", plan.Name, len(plan.Services), strings.Join(plan.ExecutionOrder, " -> "))
@@ -2805,6 +2807,7 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 		if *dryRun {
 			fmt.Fprintf(stdout, "Deployment %s: %d services\n", plan.Name, len(plan.Services))
 			fmt.Fprintf(stdout, "Execution order: %s\n", strings.Join(plan.ExecutionOrder, " -> "))
+			fmt.Fprintf(stdout, "Parallel start groups: %s\n", formatDeploymentStartGroups(plan.StartGroups))
 			fmt.Fprintln(stdout, "Dry run: no image was unpacked and no service was started.")
 			return 0
 		}
@@ -2860,6 +2863,14 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "boxr deploy: unknown action %q\n", args[0])
 		return 2
 	}
+}
+
+func formatDeploymentStartGroups(groups [][]string) string {
+	labels := make([]string, 0, len(groups))
+	for _, group := range groups {
+		labels = append(labels, strings.Join(group, ", "))
+	}
+	return strings.Join(labels, " | ")
 }
 
 func loadDeploymentPlan(path string, stderr io.Writer) (deploy.File, deploy.Plan, int) {
@@ -3022,29 +3033,51 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 		}
 	}()
 
+	plannedByName := make(map[string]deploy.ServicePlan, len(plan.Services))
+	orderIndex := make(map[string]int, len(plan.Services))
 	for index, planned := range plan.Services {
-		service := file.Services[planned.Name]
-		process, err := startDeploymentProcess(executable, file.Name, index, planned.Name, service, stdout, stderr)
-		if err != nil {
-			fmt.Fprintf(stderr, "boxr deploy up: %v\n", err)
-			stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
-			return 1
+		plannedByName[planned.Name] = planned
+		orderIndex[planned.Name] = index
+	}
+	startGroups := plan.StartGroups
+	if len(startGroups) == 0 {
+		startGroups = [][]string{plan.ExecutionOrder}
+	}
+	for _, group := range startGroups {
+		groupProcesses := make([]*deploymentProcess, 0, len(group))
+		for _, serviceName := range group {
+			planned, exists := plannedByName[serviceName]
+			if !exists {
+				fmt.Fprintf(stderr, "boxr deploy up: start plan references unknown service %q\n", serviceName)
+				stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
+				return 1
+			}
+			process, err := startDeploymentProcess(executable, file.Name, orderIndex[serviceName], serviceName, file.Services[serviceName], stdout, stderr)
+			if err != nil {
+				fmt.Fprintf(stderr, "boxr deploy up: %v\n", err)
+				stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
+				return 1
+			}
+			processes = append(processes, process)
+			groupProcesses = append(groupProcesses, process)
+			go func(serviceName string, command *exec.Cmd) {
+				exits <- deploymentProcessExit{service: serviceName, err: command.Wait()}
+			}(process.service, process.command)
+			fmt.Fprintf(stdout, "starting service %s (%s)\n", process.service, process.name)
 		}
-		processes = append(processes, process)
-		go func(serviceName string, command *exec.Cmd) {
-			exits <- deploymentProcessExit{service: serviceName, err: command.Wait()}
-		}(process.service, process.command)
-		fmt.Fprintf(stdout, "starting service %s (%s)\n", process.service, process.name)
-		_, unexpectedExit, err := waitForDeploymentStart(ctx, process.name, startTimeout, exits)
-		if unexpectedExit != nil {
-			exited[unexpectedExit.service] = *unexpectedExit
+		// Launch all services in a dependency wave before waiting for any one.
+		for _, process := range groupProcesses {
+			_, unexpectedExit, err := waitForDeploymentStart(ctx, process.name, startTimeout, exits)
+			if unexpectedExit != nil {
+				exited[unexpectedExit.service] = *unexpectedExit
+			}
+			if err != nil {
+				fmt.Fprintf(stderr, "boxr deploy up: %v\n", err)
+				stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
+				return 1
+			}
+			fmt.Fprintf(stdout, "started service %s\n", process.service)
 		}
-		if err != nil {
-			fmt.Fprintf(stderr, "boxr deploy up: %v\n", err)
-			stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
-			return 1
-		}
-		fmt.Fprintf(stdout, "started service %s\n", process.service)
 	}
 	fmt.Fprintf(stdout, "deployment %s is running; press Ctrl+C to stop all services\n", file.Name)
 	var terminalExit *deploymentProcessExit

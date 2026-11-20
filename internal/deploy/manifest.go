@@ -76,6 +76,7 @@ type Plan struct {
 	Version        int           `json:"version"`
 	Name           string        `json:"name,omitempty"`
 	ExecutionOrder []string      `json:"executionOrder"`
+	StartGroups    [][]string    `json:"startGroups"`
 	Services       []ServicePlan `json:"services"`
 }
 
@@ -246,17 +247,21 @@ func BuildPlan(file File) (Plan, error) {
 		}
 	}
 	order := make([]string, 0, len(names))
+	startGroups := make([][]string, 0, len(names))
 	for len(ready) > 0 {
-		name := ready[0]
-		ready = ready[1:]
-		order = append(order, name)
-		for _, dependent := range dependents[name] {
-			indegree[dependent]--
-			if indegree[dependent] == 0 {
-				ready = append(ready, dependent)
-				sort.Strings(ready)
+		current := append([]string(nil), ready...)
+		startGroups = append(startGroups, current)
+		ready = ready[:0]
+		for _, name := range current {
+			order = append(order, name)
+			for _, dependent := range dependents[name] {
+				indegree[dependent]--
+				if indegree[dependent] == 0 {
+					ready = append(ready, dependent)
+				}
 			}
 		}
+		sort.Strings(ready)
 	}
 	if len(order) != len(names) {
 		blocked := make([]string, 0, len(names)-len(order))
@@ -269,6 +274,7 @@ func BuildPlan(file File) (Plan, error) {
 	}
 
 	plan.ExecutionOrder = order
+	plan.StartGroups = startGroups
 	plan.Services = make([]ServicePlan, 0, len(order))
 	for _, name := range order {
 		plan.Services = append(plan.Services, servicePlans[name])

@@ -54,7 +54,7 @@ boxr deploy down sample-app
 boxr deploy down --time 20s --remove sample-app
 ```
 
-`deploy up` runs in the foreground, creates a private temporary run config for each service, and starts services in dependency-first order using the existing `boxr run` runtime. It waits for each service to reach the runtime's `running` state before starting the next service. It does not claim that an application-level health check has passed. A service exit is fail-fast: the supervisor stops the remaining services in reverse startup order and exits with the service's status where available. Ctrl+C or SIGTERM requests graceful shutdown; services that exceed the stop timeout are killed.
+`deploy up` runs in the foreground, creates a private temporary run config for each service, and starts services using the existing `boxr run` runtime. Services whose dependencies are satisfied form deterministic startup waves and are launched concurrently. Boxr waits for every service in a wave to reach the runtime's `running` state before starting the next wave. It does not claim that an application-level health check has passed. A service exit is fail-fast: the supervisor stops the remaining services in reverse startup order and exits with the service's status where available. Ctrl+C or SIGTERM requests graceful shutdown; services that exceed the stop timeout are killed.
 
 Each service receives a stable stack-scoped container name and reserved metadata labels so `deploy ps` and `deploy down` only operate on that deployment. `deploy ps --json` omits command text, environment values, labels and host paths. Existing records with the same generated names must be removed with `deploy down --remove` before reusing a stack name. `deploy down` keeps completed records and logs by default; use `--remove` to delete them.
 
@@ -62,7 +62,7 @@ The supervisor is attached and must remain running to monitor unexpected service
 
 ## Deterministic ordering
 
-Boxr uses a stable topological sort. A service is ordered after each dependency, and independent services are ordered lexically when they are ready at the same time. This makes repeated plans for the same file identical and suitable for review and automation. A cycle is rejected before a plan is returned.
+Boxr uses a stable topological sort and exposes both the flattened execution order and parallel start groups. Services in the same group have no unmet dependencies and are ordered lexically. This makes repeated plans for the same file identical and allows independent services to start concurrently. A cycle is rejected before a plan is returned.
 
 ## Secret handling
 

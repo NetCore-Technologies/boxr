@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 580 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 581 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -586,3 +586,4 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 578. deployment stop timeout escalation
 579. safe optional deployment record and log removal
 580. deployment lifecycle dry-run planning
+581. parallel startup of dependency-independent deployment services
