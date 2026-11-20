@@ -138,6 +138,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runImage(args[1:], stdout, stderr)
 	case "pull":
 		return runImage(append([]string{"pull"}, args[1:]...), stdout, stderr)
+	case "build":
+		return runImage(append([]string{"build"}, args[1:]...), stdout, stderr)
+	case "images":
+		return runImage(append([]string{"ls"}, args[1:]...), stdout, stderr)
+	case "tag":
+		return runImage(append([]string{"tag"}, args[1:]...), stdout, stderr)
+	case "rmi":
+		return runImage(append([]string{"rm"}, args[1:]...), stdout, stderr)
 	case "push":
 		return runImage(append([]string{"push"}, args[1:]...), stdout, stderr)
 	case "features":
@@ -1881,6 +1889,10 @@ Usage:
   boxr daemon [--host unix:///absolute/path/engine.sock]
   boxr pull [--platform linux/ARCH[/VARIANT]] [--authfile PATH] IMAGE
   boxr push [--authfile PATH] LOCAL:TAG [REGISTRY/IMAGE:TAG]
+  boxr build -t NAME:TAG [-f Dockerfile] [CONTEXT]
+  boxr images [--format table|json] [--quiet]
+  boxr tag SOURCE:TAG TARGET:TAG
+  boxr rmi NAME:TAG [...]
   boxr create [options] IMAGE [COMMAND [ARG...]]
   boxr start ID|NAME
   boxr restart [--time 10s] ID|NAME
@@ -2129,6 +2141,7 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 			return nil
 		})
 		tag := flags.String("tag", "", "image reference to create (required)")
+		flags.StringVar(tag, "t", "", "alias for --tag")
 		jsonOutput := flags.Bool("json", false, "write image metadata as JSON")
 		quiet := flags.Bool("quiet", false, "print only the resulting image reference")
 		if err := flags.Parse(args[1:]); err != nil {
@@ -3353,6 +3366,10 @@ var implementedFeatures = []string{
 	"Engine API creates Docker image tag aliases from verified OCI content and protects tags referenced by containers",
 	"top-level pull command reuses verified OCI and Docker registry image downloads",
 	"top-level push command reuses verified OCI and Docker registry image uploads",
+	"top-level build command supports Docker-style -t image tagging and reuses the verified Dockerfile builder",
+	"top-level images command lists the verified local image store using Docker-style output flags",
+	"top-level tag command creates local image aliases without copying content-addressed blobs",
+	"top-level rmi command removes unused local image tags while preserving shared content-addressed blobs",
 	"native create command records a verified image-backed container without starting it",
 	"native start command launches a created image-backed container through the detached supervisor",
 	"native start command restarts stopped image-backed containers through the detached supervisor",
@@ -3409,7 +3426,7 @@ func runCompletion(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Usage: boxr completion bash|zsh|fish|powershell")
 		return 2
 	}
-	commands := "daemon pull push create start restart run exec ps inspect stop kill wait logs network volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
+	commands := "daemon pull push build images tag rmi create start restart run exec ps inspect stop kill wait logs network volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
 	switch args[0] {
 	case "bash":
 		fmt.Fprintf(stdout, `_boxr_complete() { COMPREPLY=($(compgen -W "%s" -- "${COMP_WORDS[COMP_CWORD]}")); }
