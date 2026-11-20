@@ -604,3 +604,83 @@ func TestBuildPlanCarriesPerServiceStopTimeout(t *testing.T) {
 	}
 }
 
+func TestBuildPlanIncludesSanitizedHealthcheckMetadata(t *testing.T) {
+	file := File{
+		Version: 1,
+		Services: map[string]Service{
+			"api": {
+				Command: []string{"/bin/api"},
+				Healthcheck: &Healthcheck{
+					Probe:         ReadinessProbe{HTTPURL: "http://127.0.0.1:8080/private-health", TimeoutMS: 500},
+					IntervalMS:    5000,
+					Retries:       4,
+					StartPeriodMS: 10000,
+				},
+			},
+		},
+	}
+	plan, err := BuildPlan(file)
+	if err != nil {
+		t.Fatalf("BuildPlan(): %v", err)
+	}
+	service := plan.Services[0]
+	if !service.HealthcheckConfigured || service.HealthcheckType != "http" ||
+		service.HealthcheckIntervalMS != 5000 || service.HealthcheckTimeoutMS != 500 ||
+		service.HealthcheckRetries != 4 || service.HealthcheckStartPeriodMS != 10000 {
+		t.Fatalf("sanitized healthcheck metadata = %+v", service)
+	}
+	encoded, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "/private-health") || strings.Contains(string(encoded), "127.0.0.1") {
+		t.Fatalf("deployment plan leaked healthcheck target: %s", encoded)
+	}
+}
+
+func TestBuildPlanRejectsUnsafeHealthcheckConfigurations(t *testing.T) {
+	tests := map[string]Service{
+		"external target": {
+			Command: []string{"/bin/api"},
+			Healthcheck: &Healthcheck{
+				Probe: ReadinessProbe{HTTPURL: "https://example.com/health"},
+			},
+		},
+		"network none": {
+			Command: []string{"/bin/api"},
+			Options: container.Options{NetworkMode: "none"},
+			Healthcheck: &Healthcheck{
+				Probe: ReadinessProbe{TCPAddress: "127.0.0.1:8080"},
+			},
+		},
+		"untrusted security profile": {
+			Command: []string{"/bin/api"},
+			Options: container.Options{SecurityProfile: "untrusted", RootFS: "/srv/boxr/api"},
+			Healthcheck: &Healthcheck{
+				Probe: ReadinessProbe{TCPAddress: "127.0.0.1:8080"},
+			},
+		},
+		"multiple probes": {
+			Command: []string{"/bin/api"},
+			Healthcheck: &Healthcheck{
+				Probe: ReadinessProbe{TCPAddress: "127.0.0.1:8080", HTTPURL: "http://127.0.0.1/health"},
+			},
+		},
+		"retry budget exceeded": {
+			Command: []string{"/bin/api"},
+			Healthcheck: &Healthcheck{
+				Probe:   ReadinessProbe{TCPAddress: "127.0.0.1:8080"},
+				Retries: 11,
+			},
+		},
+	}
+	for name, service := range tests {
+		t.Run(name, func(t *testing.T) {
+			file := File{Version: 1, Services: map[string]Service{"api": service}}
+			if _, err := BuildPlan(file); err == nil {
+				t.Fatal("unsafe healthcheck configuration unexpectedly validated")
+			}
+		})
+	}
+}
+
