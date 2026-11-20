@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 845 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 847 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -851,3 +851,5 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 843. native start command launches a created image-backed container through the detached supervisor
 844. native start restarts stopped image-backed containers and clears stale manual-stop intent
 845. Engine API start restarts stopped image-backed containers through the native detached supervisor
+846. native restart performs a bounded graceful stop then starts the same image-backed container again
+847. Docker Engine API POST containers restart runs the bounded native restart workflow
