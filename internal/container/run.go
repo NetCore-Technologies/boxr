@@ -84,7 +84,7 @@ func RunWithHooks(command string, args []string, options Options, hooks Hooks) e
 		cmd.Env = mergeEnvironment(os.Environ(), options.Env)
 	}
 	cloneFlags := uintptr(syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS | syscall.CLONE_NEWNS | syscall.CLONE_NEWIPC)
-	if options.NetworkMode == "none" {
+	if options.NetworkMode == "none" || options.NetworkMode == "bridge" {
 		cloneFlags |= syscall.CLONE_NEWNET
 	}
 	if options.UserNamespace {
