@@ -926,7 +926,6 @@ func TestDeployLogsFollowDrainsFinalServiceOutput(t *testing.T) {
 	}
 }
 
- 
 func TestDeployLogsFollowWaitsForCreatedServiceToStart(t *testing.T) {
 	t.Setenv("BOXR_STATE_DIR", t.TempDir())
 	record, err := state.Create("logs-created-api", []string{"/bin/service"}, container.Options{}, map[string]string{
@@ -2653,7 +2652,7 @@ func TestDeploymentEnvironmentFilesMergeInDeclarationOrder(t *testing.T) {
 	}
 	options, err := deploymentContainerOptions(deploy.Service{
 		EnvFiles: []string{first, second},
-		Options: container.Options{Env: []string{"SHARED=explicit", "DIRECT=value"}},
+		Options:  container.Options{Env: []string{"SHARED=explicit", "DIRECT=value"}},
 	})
 	if err != nil {
 		t.Fatalf("deploymentContainerOptions(): %v", err)
@@ -2922,4 +2921,3 @@ func TestRunRejectsPublishedPortsOutsideBridgeMode(t *testing.T) {
 		t.Fatalf("published port without bridge returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
 	}
 }
-
