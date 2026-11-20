@@ -269,11 +269,11 @@ func newEngineAPITestRegistry(t *testing.T) (*httptest.Server, string) {
 		"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
 		"config": map[string]any{
 			"mediaType": "application/vnd.oci.image.config.v1+json",
-			"digest": configDigest, "size": len(configBytes),
+			"digest":    configDigest, "size": len(configBytes),
 		},
 		"layers": []map[string]any{{
 			"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
-			"digest": layerDigest, "size": compressed.Len(),
+			"digest":    layerDigest, "size": compressed.Len(),
 		}},
 	})
 	if err != nil {
