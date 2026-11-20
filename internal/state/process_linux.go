@@ -28,6 +28,9 @@ func parseProcessStartTicks(stat string) (uint64, error) {
 		return 0, fmt.Errorf("malformed /proc stat record")
 	}
 	fields := strings.Fields(stat[end+1:])
+	if len(fields) == 0 || fields[0] == "Z" || fields[0] == "X" {
+		return 0, fmt.Errorf("process has already exited")
+	}
 	// Remaining fields begin at field 3 (state); starttime is field 22.
 	if len(fields) <= 19 {
 		return 0, fmt.Errorf("short /proc stat record")

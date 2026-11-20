@@ -26,6 +26,12 @@ func TestParseProcessStartTicksHandlesParenthesesInCommandName(t *testing.T) {
 	}
 }
 
+func TestParseProcessStartTicksRejectsExitedProcesses(t *testing.T) {
+	if _, err := parseProcessStartTicks("123 (already-exited) Z 1 2 3"); err == nil {
+		t.Fatal("zombie process was accepted as alive")
+	}
+}
+
 func TestVerifyProcessIdentityRejectsChangedStartTicks(t *testing.T) {
 	ticks, err := ReadProcessStartTicks(os.Getpid())
 	if err != nil {

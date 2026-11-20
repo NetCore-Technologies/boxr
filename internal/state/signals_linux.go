@@ -35,11 +35,16 @@ func Signal(query, name string) error {
 }
 
 func ProcessAlive(pid int) bool {
-	if pid <= 0 {
+	if pid <= 1 {
 		return false
 	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || err == syscall.EPERM
+	if err := syscall.Kill(pid, 0); err != nil && err != syscall.EPERM {
+		return false
+	}
+	// kill(pid, 0) also succeeds for zombies. Requiring a readable, non-zombie
+	// /proc identity prevents exec from entering namespaces after container exit.
+	_, err := processStartTicks(pid)
+	return err == nil
 }
 
 func parseSignal(name string) (os.Signal, error) {
