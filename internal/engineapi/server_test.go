@@ -3,8 +3,9 @@ package engineapi
 import (
 	"encoding/base64"
 	"encoding/binary"
+	"bufio"
 	"encoding/json"
-	"io"
+	"strconv"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -167,11 +168,11 @@ func TestEventsStreamDockerContainerEventShape(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record := createEngineAPITestContainer(t, "event-test", container.Options{})
 	until := time.Now().Add(time.Minute).Unix()
-	response := engineAPIRequest(server, http.MethodGet, "/v1.45/events?until="+strconvFormatInt(until))
+	response := engineAPIRequest(server, http.MethodGet, "/v1.45/events?until="+strconv.FormatInt(until, 10))
 	if response.Code != http.StatusOK {
 		t.Fatalf("events status=%d body=%s", response.Code, response.Body.String())
 	}
-	scanner := bufioNewScanner(strings.NewReader(response.Body.String()))
+	scanner := bufio.NewScanner(strings.NewReader(response.Body.String()))
 	found := false
 	for scanner.Scan() {
 		var event map[string]any
@@ -184,7 +185,7 @@ func TestEventsStreamDockerContainerEventShape(t *testing.T) {
 			break
 		}
 	}
-	if err := scanner.Err(); err != nil && err != io.EOF {
+	if err := scanner.Err(); err != nil {
 		t.Fatal(err)
 	}
 	if !found {
