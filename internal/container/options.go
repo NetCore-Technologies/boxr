@@ -19,6 +19,9 @@ type Options struct {
 	Name               string            `json:"name,omitempty"`
 	Labels             map[string]string `json:"labels,omitempty"`
 	AutoRemove         bool              `json:"autoRemove,omitempty"`
+	RestartPolicy      string            `json:"restartPolicy,omitempty"`
+	RestartMaxRetries  int               `json:"restartMaxRetries,omitempty"`
+	RestartDelayMS     int               `json:"restartDelayMs,omitempty"`
 	Hostname           string            `json:"hostname,omitempty"`
 	MemoryLimitBytes   int64             `json:"memoryLimitBytes,omitempty"`
 	MemoryHighBytes    int64             `json:"memoryHighBytes,omitempty"`
@@ -120,6 +123,24 @@ func (e *ExitError) Error() string {
 // Validate rejects configurations that cannot be represented safely by the
 // runtime. It does not check privileges or mutate the host.
 func (o Options) Validate() error {
+	policy := o.RestartPolicy
+	if policy == "" {
+		policy = "no"
+	}
+	switch policy {
+	case "no", "always", "unless-stopped", "on-failure":
+	default:
+		return fmt.Errorf("restart policy must be no, always, unless-stopped, or on-failure")
+	}
+	if o.RestartMaxRetries < 0 || o.RestartMaxRetries > 1000 {
+		return fmt.Errorf("restart max retries must be between 0 and 1000")
+	}
+	if o.RestartMaxRetries > 0 && policy != "on-failure" {
+		return fmt.Errorf("restart max retries can only be set with on-failure")
+	}
+	if o.RestartDelayMS < 0 || o.RestartDelayMS > 300000 || (o.RestartDelayMS > 0 && o.RestartDelayMS < 100) {
+		return fmt.Errorf("restart delay must be 0 (default) or between 100 and 300000 milliseconds")
+	}
 	if o.ResourceProfile != "" {
 		switch o.ResourceProfile {
 		case "default", "micro", "small", "medium", "large":
