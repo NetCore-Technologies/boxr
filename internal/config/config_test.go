@@ -1,10 +1,10 @@
 package config
 
 import (
-	"reflect"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
