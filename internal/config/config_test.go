@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,5 +64,41 @@ func TestExampleIsLoadable(t *testing.T) {
 	}
 	if _, err := Load(file); err != nil {
 		t.Fatalf("generated example is invalid: %v", err)
+	}
+}
+
+func TestJSONSchemaIsStrictAndDescribesSecurityProfiles(t *testing.T) {
+	var schema struct {
+		Schema               string                     `json:"$schema"`
+		Type                 string                     `json:"type"`
+		Required             []string                   `json:"required"`
+		AdditionalProperties bool                       `json:"additionalProperties"`
+		Properties           map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal([]byte(JSONSchema()), &schema); err != nil {
+		t.Fatalf("JSONSchema() returned invalid JSON: %v", err)
+	}
+	if schema.Type != "object" || schema.AdditionalProperties {
+		t.Fatalf("root schema is not strict: %#v", schema)
+	}
+	for _, required := range []string{"version", "options"} {
+		found := false
+		for _, item := range schema.Required {
+			if item == required {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("schema required list is missing %q", required)
+		}
+	}
+	var options struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(schema.Properties["options"], &options); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := options.Properties["securityProfile"]; !ok {
+		t.Fatal("schema does not describe securityProfile")
 	}
 }

@@ -192,3 +192,99 @@ func TestSeccompProfileValidation(t *testing.T) {
 		t.Fatal("unknown profile unexpectedly accepted")
 	}
 }
+
+func TestApplySecurityProfiles(t *testing.T) {
+	tests := []struct {
+		name         string
+		options      Options
+		wantErr      string
+		wantNetwork  string
+		wantUserNS   bool
+		wantNNP      bool
+		wantSeccomp  string
+		wantReadOnly bool
+		wantCaps     []string
+	}{
+		{name: "default", options: Options{SecurityProfile: "default", NetworkMode: "host"}, wantNetwork: "host"},
+		{name: "baseline", options: Options{SecurityProfile: "baseline", DropCapabilities: []string{"NET_RAW", "CHOWN"}}, wantNetwork: "", wantNNP: true, wantSeccomp: "baseline", wantCaps: []string{"NET_RAW", "CHOWN"}},
+		{name: "restricted", options: Options{SecurityProfile: "restricted", NetworkMode: "host", DropCapabilities: []string{"CHOWN"}}, wantNetwork: "none", wantUserNS: true, wantNNP: true, wantSeccomp: "baseline", wantCaps: []string{"CHOWN", "SYS_ADMIN", "SYS_MODULE", "SYS_RAWIO", "SYS_PTRACE", "NET_ADMIN", "NET_RAW", "SYS_BOOT", "SYSLOG", "MKNOD", "DAC_OVERRIDE", "DAC_READ_SEARCH"}},
+		{name: "untrusted requires rootfs", options: Options{SecurityProfile: "untrusted"}, wantErr: "requires --rootfs"},
+		{name: "untrusted", options: Options{SecurityProfile: "untrusted", RootFS: "/tmp/rootfs", NetworkMode: "host"}, wantNetwork: "none", wantUserNS: true, wantNNP: true, wantSeccomp: "baseline", wantReadOnly: true, wantCaps: []string{"ALL"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := test.options
+			err := got.ApplySecurityProfile()
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("ApplySecurityProfile() error = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ApplySecurityProfile(): %v", err)
+			}
+			if got.NetworkMode != test.wantNetwork || got.UserNamespace != test.wantUserNS || got.NoNewPrivileges != test.wantNNP || got.SeccompProfile != test.wantSeccomp || got.ReadOnlyRootFS != test.wantReadOnly {
+				t.Fatalf("unexpected profile options: %#v", got)
+			}
+			if !reflect.DeepEqual(got.DropCapabilities, test.wantCaps) {
+				t.Fatalf("capabilities = %#v, want %#v", got.DropCapabilities, test.wantCaps)
+			}
+		})
+	}
+}
+
+func TestApplySecurityProfileRejectsUnknownProfile(t *testing.T) {
+	options := Options{SecurityProfile: "super-secure"}
+	if err := options.ApplySecurityProfile(); err == nil {
+		t.Fatal("unknown security profile unexpectedly accepted")
+	}
+}
+
+func TestApplyResourceProfilesFillOnlyUnsetLimits(t *testing.T) {
+	tests := []struct {
+		name      string
+		memory    int64
+		cpus      float64
+		pids      int64
+		cpuWeight int
+		ioWeight  int
+	}{
+		{name: "micro", memory: 64 << 20, cpus: 0.25, pids: 64, cpuWeight: 50, ioWeight: 50},
+		{name: "small", memory: 256 << 20, cpus: 0.5, pids: 128, cpuWeight: 100, ioWeight: 100},
+		{name: "medium", memory: 512 << 20, cpus: 1, pids: 256, cpuWeight: 100, ioWeight: 100},
+		{name: "large", memory: 1 << 30, cpus: 2, pids: 512, cpuWeight: 200, ioWeight: 200},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options := Options{ResourceProfile: test.name}
+			if err := options.ApplyResourceProfile(); err != nil {
+				t.Fatal(err)
+			}
+			if options.MemoryLimitBytes != test.memory || options.CPUs != test.cpus || options.PidsLimit != test.pids || options.CPUWeight != test.cpuWeight || options.IOWeight != test.ioWeight {
+				t.Fatalf("unexpected resource profile: %#v", options)
+			}
+		})
+	}
+}
+
+func TestApplyResourceProfilePreservesExplicitLimits(t *testing.T) {
+	options := Options{ResourceProfile: "small", MemoryLimitBytes: 128 << 20, CPUs: 1.5, PidsLimit: 300, CPUWeight: 400}
+	if err := options.ApplyResourceProfile(); err != nil {
+		t.Fatal(err)
+	}
+	if options.MemoryLimitBytes != 128<<20 || options.CPUs != 1.5 || options.PidsLimit != 300 || options.CPUWeight != 400 || options.IOWeight != 100 {
+		t.Fatalf("resource profile overwrote explicit settings or failed to fill unset value: %#v", options)
+	}
+}
+
+func TestApplyResourceProfileRejectsUnknownAndNil(t *testing.T) {
+	options := Options{ResourceProfile: "unlimited"}
+	if err := options.ApplyResourceProfile(); err == nil {
+		t.Fatal("unknown resource profile unexpectedly accepted")
+	}
+	var nilOptions *Options
+	if err := nilOptions.ApplyResourceProfile(); err == nil {
+		t.Fatal("nil options unexpectedly accepted")
+	}
+}

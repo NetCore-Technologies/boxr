@@ -1,8 +1,8 @@
 # Implemented feature inventory
 
-The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is regenerated from the feature registry and checked by the CLI test suite.
+The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 408 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 452 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -414,3 +414,47 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 406. rootfs archive normalizes UID and GID metadata
 407. rootfs archive omits host account names
 408. rootfs archives are byte-identical for equivalent trees with different mtimes
+409. named runtime security profiles
+410. default security profile preserves explicit runtime settings
+411. baseline security profile enforces no-new-privileges
+412. baseline security profile enables the built-in seccomp filter
+413. baseline security profile drops NET_RAW
+414. restricted security profile disables container networking
+415. restricted security profile enables a private user namespace
+416. restricted security profile enforces no-new-privileges and seccomp
+417. restricted security profile drops high-risk Linux capabilities
+418. untrusted security profile requires an explicit root filesystem
+419. untrusted security profile enforces read-only rootfs
+420. security profiles apply after user flags so weaker flags cannot relax mandatory controls
+421. security profile is recorded in container metadata and dry-run plans
+422. strict JSON Schema for versioned run configuration
+423. config schema command emits a JSON Schema document
+424. config schema rejects unknown top-level properties
+425. config schema describes security profile options
+426. system storage usage summary
+427. system storage usage includes verified image-store bytes
+428. system storage usage includes named volume logical bytes
+429. system storage usage includes container metadata and logs
+430. system storage usage JSON output
+431. system storage scanner does not follow symlink entries
+432. system storage scanner rejects symlinked roots
+433. system storage scanner treats absent directories as empty
+434. named resource sizing profiles
+435. micro resource profile defaults
+436. small resource profile defaults
+437. medium resource profile defaults
+438. large resource profile defaults
+439. resource profiles fill only unset memory limits
+440. resource profiles fill only unset CPU quotas
+441. resource profiles fill only unset PID limits
+442. resource profiles fill CPU and I/O weights
+443. resource profile preserves explicit config limits
+444. resource profile preserves explicit command-line overrides
+445. resource profile name is validated
+446. resource profile appears in dry-run plans
+447. image list filter by ARM variant
+448. image list filter by digest prefix
+449. image list filter by metadata label presence
+450. image list filter by exact metadata label value
+451. image list filters combine with AND semantics across platform and metadata
+452. image list rejects empty metadata label filter keys

@@ -1691,3 +1691,184 @@ func TestImageSBOMCommandReportsFileHashesAndPlatform(t *testing.T) {
 		t.Fatalf("unexpected SBOM result: %+v", report)
 	}
 }
+
+func TestRunRestrictedSecurityProfileCannotBeRelaxedByFlags(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{
+		"run", "--dry-run", "--security-profile", "restricted",
+		"--network", "host", "--userns=false", "--no-new-privileges=false",
+		"--seccomp-profile=", "--cap-drop", "CHOWN", "/bin/true",
+	}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("restricted dry-run returned %d: %s", code, errOut.String())
+	}
+	var plan runPlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatalf("decode dry-run plan: %v", err)
+	}
+	if plan.SecurityProfile != "restricted" || plan.NetworkMode != "none" || !plan.UserNamespace || !plan.NoNewPrivileges || plan.SeccompProfile != "baseline" || plan.DropCapabilityCount < 10 {
+		t.Fatalf("restricted profile was not enforced: %#v", plan)
+	}
+}
+
+func TestRunUntrustedSecurityProfileRequiresRootFSAndLocksItDown(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"run", "--dry-run", "--security-profile", "untrusted", "/bin/true"}, &out, &errOut); code != 2 {
+		t.Fatalf("untrusted profile without rootfs returned %d: %s", code, errOut.String())
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"run", "--dry-run", "--security-profile", "untrusted", "--rootfs", "/tmp/boxr-test-rootfs", "--network", "host", "--read-only-rootfs=false", "/bin/true"}, &out, &errOut); code != 0 {
+		t.Fatalf("untrusted profile dry-run returned %d: %s", code, errOut.String())
+	}
+	var plan struct {
+		SecurityProfile     string `json:"securityProfile"`
+		NetworkMode         string `json:"networkMode"`
+		RootFSConfigured    bool   `json:"rootfsConfigured"`
+		UserNamespace       bool   `json:"userNamespace"`
+		NoNewPrivileges     bool   `json:"noNewPrivileges"`
+		SeccompProfile      string `json:"seccompProfile"`
+		DropCapabilityCount int    `json:"dropCapabilityCount"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.SecurityProfile != "untrusted" || plan.NetworkMode != "none" || !plan.RootFSConfigured || !plan.UserNamespace || !plan.NoNewPrivileges || plan.SeccompProfile != "baseline" || plan.DropCapabilityCount != 1 {
+		t.Fatalf("untrusted profile was not enforced: %#v", plan)
+	}
+}
+
+func TestConfigSchemaCommand(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"config", "schema"}, &out, &errOut); code != 0 {
+		t.Fatalf("config schema returned %d: %s", code, errOut.String())
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(out.Bytes(), &schema); err != nil {
+		t.Fatalf("config schema is invalid JSON: %v", err)
+	}
+	if schema["$schema"] == nil || schema["properties"] == nil {
+		t.Fatalf("config schema is incomplete: %#v", schema)
+	}
+}
+
+func TestSystemDiskUsageJSONIncludesImageVolumeAndContainerState(t *testing.T) {
+	base := t.TempDir()
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(base, "images"))
+	t.Setenv("BOXR_DATA_DIR", filepath.Join(base, "data"))
+	t.Setenv("BOXR_STATE_DIR", filepath.Join(base, "state"))
+	root := filepath.Join(base, "rootfs")
+	if err := os.MkdirAll(filepath.Join(root, "etc"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "etc", "release"), []byte("boxr\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := imageStore.ImportRootFS(root, "df-demo:latest"); err != nil {
+		t.Fatal(err)
+	}
+	vol, err := volume.Create("df-volume", map[string]string{"purpose": "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vol.Path, "data.bin"), []byte("volume-data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.Create("df-container", []string{"/bin/true"}, container.Options{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"system", "df", "--json"}, &out, &errOut); code != 0 {
+		t.Fatalf("system df returned %d: %s", code, errOut.String())
+	}
+	var report struct {
+		Images struct {
+			Images     int   `json:"images"`
+			TotalBytes int64 `json:"totalBytes"`
+		} `json:"images"`
+		Volumes        []volume.Usage `json:"volumes"`
+		ContainerState directoryUsage `json:"containerState"`
+		VolumeBytes    int64          `json:"volumeBytes"`
+		TotalBytes     int64          `json:"totalBytes"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("decode df report: %v", err)
+	}
+	if report.Images.Images != 1 || report.Images.TotalBytes <= 0 || len(report.Volumes) != 1 || report.VolumeBytes != report.Volumes[0].TotalBytes || report.ContainerState.Files == 0 || report.TotalBytes <= report.Images.TotalBytes {
+		t.Fatalf("unexpected system df report: %#v", report)
+	}
+}
+
+func TestMeasureDirectoryDoesNotFollowSymlinks(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret"), []byte("not counted"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	usage, err := measureDirectory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Symlinks != 1 || usage.Files != 0 || usage.Bytes != int64(len(outside)) {
+		t.Fatalf("symlink was followed or not measured safely: %#v", usage)
+	}
+	if _, err := measureDirectory(filepath.Join(root, "missing")); err != nil {
+		t.Fatalf("missing directory should be empty: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "root-link")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := measureDirectory(filepath.Join(root, "root-link")); err == nil {
+		t.Fatal("symlinked root was accepted")
+	}
+}
+
+func TestRunResourceProfileFillsUnsetLimitsButKeepsExplicitFlags(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"run", "--dry-run", "--resource-profile", "micro", "--memory", "128m", "--cpus", "1.5", "/bin/true"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("resource profile dry-run returned %d: %s", code, errOut.String())
+	}
+	var plan runPlan
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.ResourceProfile != "micro" || plan.MemoryLimitBytes != 128<<20 || plan.CPUs != 1.5 || plan.PIDsLimit != 64 || plan.CPUWeight != 50 || plan.IOWeight != 50 {
+		t.Fatalf("resource profile did not preserve explicit values and fill defaults: %#v", plan)
+	}
+}
+
+func TestImageListFiltersVariantDigestAndLabels(t *testing.T) {
+	items := []imageStore.Image{
+		{Reference: "team/api:latest", Digest: "sha256:abcdef012345", OS: "linux", Arch: "arm64", Variant: "v8", RuntimeConfig: imageStore.ImageRuntimeConfig{Labels: map[string]string{"team": "platform", "tier": "prod"}}},
+		{Reference: "team/api:dev", Digest: "sha256:123456abcdef", OS: "linux", Arch: "amd64", RuntimeConfig: imageStore.ImageRuntimeConfig{Labels: map[string]string{"team": "platform", "tier": "dev"}}},
+	}
+	for _, test := range []struct {
+		filter string
+		want   int
+	}{
+		{filter: "variant=v8", want: 1},
+		{filter: "digest=sha256:abcdef", want: 1},
+		{filter: "label=team", want: 2},
+		{filter: "label=tier=prod", want: 1},
+		{filter: "arch=arm64", want: 1},
+	} {
+		got, err := filterImageList(items, []string{test.filter})
+		if err != nil {
+			t.Errorf("filter %q: %v", test.filter, err)
+			continue
+		}
+		if len(got) != test.want {
+			t.Errorf("filter %q returned %d images, want %d", test.filter, len(got), test.want)
+		}
+	}
+	if _, err := filterImageList(items, []string{"unknown=value"}); err == nil {
+		t.Fatal("unknown filter unexpectedly accepted")
+	}
+	if _, err := filterImageList(items, []string{"label==bad"}); err == nil {
+		t.Fatal("empty label key unexpectedly accepted")
+	}
+}

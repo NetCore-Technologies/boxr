@@ -13,6 +13,8 @@ import (
 // default filesystem and network modes intentionally preserve the original
 // boxr v0.1 behaviour unless a root filesystem or isolated network is asked for.
 type Options struct {
+	SecurityProfile    string            `json:"securityProfile,omitempty"`
+	ResourceProfile    string            `json:"resourceProfile,omitempty"`
 	Name               string            `json:"name,omitempty"`
 	Labels             map[string]string `json:"labels,omitempty"`
 	AutoRemove         bool              `json:"autoRemove,omitempty"`
@@ -77,6 +79,20 @@ func (e *ExitError) Error() string {
 // Validate rejects configurations that cannot be represented safely by the
 // runtime. It does not check privileges or mutate the host.
 func (o Options) Validate() error {
+	if o.ResourceProfile != "" {
+		switch o.ResourceProfile {
+		case "default", "micro", "small", "medium", "large":
+		default:
+			return fmt.Errorf("unknown resource profile %q (supported: default, micro, small, medium, large)", o.ResourceProfile)
+		}
+	}
+	if o.SecurityProfile != "" {
+		switch o.SecurityProfile {
+		case "default", "baseline", "restricted", "untrusted":
+		default:
+			return fmt.Errorf("unknown security profile %q (supported: default, baseline, restricted, untrusted)", o.SecurityProfile)
+		}
+	}
 	if o.Name != "" {
 		if len(o.Name) > 64 {
 			return fmt.Errorf("container name must be at most 64 characters")
@@ -223,4 +239,105 @@ func MergeEnvironment(groups ...[]string) []string {
 		merged = mergeEnvironment(merged, group)
 	}
 	return merged
+}
+
+// ApplySecurityProfile makes a named security profile a set of mandatory
+// restrictions. It is intentionally applied after config and CLI parsing so
+// less restrictive individual flags cannot silently override the profile.
+// The profile is a convenience baseline, not a claim that a workload is safe.
+func (o *Options) ApplySecurityProfile() error {
+	if o == nil {
+		return fmt.Errorf("options cannot be nil")
+	}
+	switch strings.ToLower(strings.TrimSpace(o.SecurityProfile)) {
+	case "", "default":
+		o.SecurityProfile = "default"
+		return nil
+	case "baseline":
+		o.NoNewPrivileges = true
+		o.SeccompProfile = "baseline"
+		o.DropCapabilities = appendUniqueCapabilities(o.DropCapabilities, "NET_RAW")
+	case "restricted":
+		o.NetworkMode = "none"
+		o.UserNamespace = true
+		o.NoNewPrivileges = true
+		o.SeccompProfile = "baseline"
+		o.DropCapabilities = appendUniqueCapabilities(o.DropCapabilities,
+			"SYS_ADMIN", "SYS_MODULE", "SYS_RAWIO", "SYS_PTRACE", "NET_ADMIN", "NET_RAW", "SYS_BOOT", "SYSLOG", "MKNOD", "DAC_OVERRIDE", "DAC_READ_SEARCH")
+	case "untrusted":
+		if o.RootFS == "" {
+			return fmt.Errorf("untrusted security profile requires --rootfs or --image")
+		}
+		o.NetworkMode = "none"
+		o.UserNamespace = true
+		o.NoNewPrivileges = true
+		o.SeccompProfile = "baseline"
+		o.ReadOnlyRootFS = true
+		o.DropCapabilities = []string{"ALL"}
+	default:
+		return fmt.Errorf("unknown security profile %q (supported: default, baseline, restricted, untrusted)", o.SecurityProfile)
+	}
+	o.SecurityProfile = strings.ToLower(strings.TrimSpace(o.SecurityProfile))
+	return nil
+}
+
+func appendUniqueCapabilities(existing []string, additions ...string) []string {
+	seen := make(map[string]struct{}, len(existing)+len(additions))
+	result := make([]string, 0, len(existing)+len(additions))
+	for _, value := range append(append([]string(nil), existing...), additions...) {
+		key := strings.ToUpper(strings.TrimPrefix(value, "CAP_"))
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+// ApplyResourceProfile fills only unset resource limits. Explicit config or
+// command-line values always win over profile defaults.
+func (o *Options) ApplyResourceProfile() error {
+	if o == nil {
+		return fmt.Errorf("options cannot be nil")
+	}
+	profile := strings.ToLower(strings.TrimSpace(o.ResourceProfile))
+	type preset struct {
+		memory    int64
+		cpus      float64
+		pids      int64
+		cpuWeight int
+		ioWeight  int
+	}
+	presets := map[string]preset{
+		"micro":  {memory: 64 << 20, cpus: 0.25, pids: 64, cpuWeight: 50, ioWeight: 50},
+		"small":  {memory: 256 << 20, cpus: 0.5, pids: 128, cpuWeight: 100, ioWeight: 100},
+		"medium": {memory: 512 << 20, cpus: 1, pids: 256, cpuWeight: 100, ioWeight: 100},
+		"large":  {memory: 1 << 30, cpus: 2, pids: 512, cpuWeight: 200, ioWeight: 200},
+	}
+	if profile == "" || profile == "default" {
+		o.ResourceProfile = "default"
+		return nil
+	}
+	selected, ok := presets[profile]
+	if !ok {
+		return fmt.Errorf("unknown resource profile %q (supported: default, micro, small, medium, large)", profile)
+	}
+	if o.MemoryLimitBytes == 0 {
+		o.MemoryLimitBytes = selected.memory
+	}
+	if o.CPUs == 0 {
+		o.CPUs = selected.cpus
+	}
+	if o.PidsLimit == 0 {
+		o.PidsLimit = selected.pids
+	}
+	if o.CPUWeight == 0 {
+		o.CPUWeight = selected.cpuWeight
+	}
+	if o.IOWeight == 0 {
+		o.IOWeight = selected.ioWeight
+	}
+	o.ResourceProfile = profile
+	return nil
 }

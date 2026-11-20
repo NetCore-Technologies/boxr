@@ -106,6 +106,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runEvents(args[1:], stdout, stderr)
 	case "info":
 		return runInfo(args[1:], stdout, stderr)
+	case "system":
+		return runSystem(args[1:], stdout, stderr)
 	case "prune":
 		return runPrune(args[1:], stdout, stderr)
 	case "run":
@@ -206,6 +208,8 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 	flags.BoolVar(&opts.UserNamespace, "userns", opts.UserNamespace, "map the invoking UID/GID to root inside a private user namespace")
 	flags.BoolVar(&opts.NoNewPrivileges, "no-new-privileges", opts.NoNewPrivileges, "prevent execve from gaining additional privileges")
 	flags.StringVar(&opts.SeccompProfile, "seccomp-profile", opts.SeccompProfile, "built-in syscall filter profile: baseline")
+	flags.StringVar(&opts.SecurityProfile, "security-profile", opts.SecurityProfile, "mandatory security preset: default, baseline, restricted, or untrusted")
+	flags.StringVar(&opts.ResourceProfile, "resource-profile", opts.ResourceProfile, "resource defaults: default, micro, small, medium, or large")
 	flags.Var(&capDrop, "cap-drop", "drop a Linux capability by name or ALL (repeatable)")
 	flags.Var(&env, "env", "environment assignment (repeatable, KEY=VALUE)")
 	flags.Var(&envFiles, "env-file", "load KEY=VALUE entries from a file (repeatable)")
@@ -393,6 +397,14 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 		}
 		opts.Labels["io.boxr.image"] = imageReference
 	}
+	if err := opts.ApplyResourceProfile(); err != nil {
+		fmt.Fprintf(stderr, "boxr run: resource profile: %v\n", err)
+		return 2
+	}
+	if err := opts.ApplySecurityProfile(); err != nil {
+		fmt.Fprintf(stderr, "boxr run: security profile: %v\n", err)
+		return 2
+	}
 	if err := opts.Validate(); err != nil {
 		fmt.Fprintf(stderr, "boxr run: %v\n", err)
 		return 2
@@ -487,6 +499,8 @@ type runPlan struct {
 	UserNamespace        bool     `json:"userNamespace"`
 	NoNewPrivileges      bool     `json:"noNewPrivileges"`
 	SeccompProfile       string   `json:"seccompProfile,omitempty"`
+	SecurityProfile      string   `json:"securityProfile,omitempty"`
+	ResourceProfile      string   `json:"resourceProfile,omitempty"`
 	NoContainerStateMade bool     `json:"noContainerStateCreated"`
 }
 
@@ -522,7 +536,7 @@ func buildRunPlan(command []string, opts container.Options) runPlan {
 		TmpfsMountCount: len(opts.TmpfsMounts), EnvironmentKeys: envKeys, EnvironmentValues: "redacted",
 		LabelKeys: labelKeys, LabelValues: "redacted", DropCapabilityCount: len(opts.DropCapabilities),
 		UserNamespace: opts.UserNamespace, NoNewPrivileges: opts.NoNewPrivileges,
-		SeccompProfile: opts.SeccompProfile, NoContainerStateMade: true,
+		SeccompProfile: opts.SeccompProfile, SecurityProfile: opts.SecurityProfile, ResourceProfile: opts.ResourceProfile, NoContainerStateMade: true,
 	}
 	return plan
 }
@@ -811,6 +825,129 @@ func runInfo(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+type directoryUsage struct {
+	Path         string `json:"path"`
+	Files        int64  `json:"files"`
+	Directories  int64  `json:"directories"`
+	Symlinks     int64  `json:"symlinks"`
+	OtherEntries int64  `json:"otherEntries"`
+	Bytes        int64  `json:"bytes"`
+}
+
+type systemDiskUsage struct {
+	Images       imageStore.StoreUsage `json:"images"`
+	Volumes      []volume.Usage        `json:"volumes"`
+	ContainerDir directoryUsage        `json:"containerState"`
+	VolumeBytes  int64                 `json:"volumeBytes"`
+	TotalBytes   int64                 `json:"totalBytes"`
+}
+
+func runSystem(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "df" {
+		fmt.Fprintln(stderr, "Usage: boxr system df [--json]")
+		return 2
+	}
+	flags := flag.NewFlagSet("system df", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	jsonOutput := flags.Bool("json", false, "write storage usage as JSON")
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "Usage: boxr system df [--json]")
+		return 2
+	}
+	report := systemDiskUsage{Volumes: []volume.Usage{}}
+	images, err := imageStore.Usage()
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr system df: image store: %v\n", err)
+		return 1
+	}
+	report.Images = images
+	volumes, err := volume.List()
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr system df: volumes: %v\n", err)
+		return 1
+	}
+	for _, item := range volumes {
+		usage, err := volume.Measure(item.Name)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr system df: volume %s: %v\n", item.Name, err)
+			return 1
+		}
+		report.Volumes = append(report.Volumes, usage)
+		report.VolumeBytes += usage.TotalBytes
+	}
+	stateDir, err := state.Dir()
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr system df: state directory: %v\n", err)
+		return 1
+	}
+	report.ContainerDir, err = measureDirectory(stateDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr system df: container state: %v\n", err)
+		return 1
+	}
+	report.TotalBytes = report.Images.TotalBytes + report.VolumeBytes + report.ContainerDir.Bytes
+	if *jsonOutput {
+		return writeJSON(stdout, report, stderr, "boxr system df")
+	}
+	fmt.Fprintln(stdout, "TYPE             COUNT      SIZE")
+	fmt.Fprintf(stdout, "Images           %-10d %d bytes\n", report.Images.Images, report.Images.TotalBytes)
+	fmt.Fprintf(stdout, "Volumes          %-10d %d bytes\n", len(report.Volumes), report.VolumeBytes)
+	fmt.Fprintf(stdout, "Container state  %-10d %d bytes\n", report.ContainerDir.Files, report.ContainerDir.Bytes)
+	fmt.Fprintf(stdout, "Total                       %d bytes\n", report.TotalBytes)
+	return 0
+}
+
+// measureDirectory snapshots regular-file bytes without following symlinks.
+// Missing directories are treated as empty; symlinked roots are rejected.
+func measureDirectory(root string) (directoryUsage, error) {
+	usage := directoryUsage{Path: root}
+	info, err := os.Lstat(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return usage, nil
+	}
+	if err != nil {
+		return usage, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return usage, fmt.Errorf("storage path must be a real directory")
+	}
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == root {
+			return nil
+		}
+		if entry.IsDir() {
+			usage.Directories++
+			return nil
+		}
+		entryInfo, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		switch {
+		case entryInfo.Mode()&os.ModeSymlink != 0:
+			usage.Symlinks++
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			usage.Bytes += int64(len(target))
+		case entryInfo.Mode().IsRegular():
+			usage.Files++
+			usage.Bytes += entryInfo.Size()
+		default:
+			usage.OtherEntries++
+		}
+		return nil
+	})
+	return usage, err
+}
+
 func runPrune(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("prune", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -899,6 +1036,7 @@ Usage:
   boxr run [options] [--dry-run] COMMAND [ARG...]
   boxr version [--json]
   boxr info [--json]
+  boxr system df [--json]
   boxr doctor [--json] [--strict]
   boxr ps [--all] [--last N] [--quiet] [--no-trunc] [--filter KEY=VALUE]
   boxr inspect ID|NAME
@@ -966,6 +1104,7 @@ Run options:
   --cap-drop NAME   remove a Linux capability, or ALL (repeatable)
   --no-new-privileges block privilege gain through execve
   --seccomp-profile baseline deny selected high-risk syscalls (Linux)
+  --security-profile default|baseline|restricted|untrusted apply mandatory security presets
   --memory-high N   set the cgroup v2 memory.high threshold
   --memory-low N    set the cgroup v2 memory.low protection
   --memory-min N    set the cgroup v2 memory.min protection
@@ -1237,12 +1376,12 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 		format := flags.String("format", "table", "output format: table or json")
 		quiet := flags.Bool("quiet", false, "print image references only")
 		var filters envList
-		flags.Var(&filters, "filter", "filter by reference=PREFIX, os=VALUE or arch=VALUE")
+		flags.Var(&filters, "filter", "filter by reference, os, arch, variant, digest prefix, or label")
 		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}
 		if flags.NArg() != 0 || (*format != "table" && *format != "json") || (*quiet && *format == "json") {
-			fmt.Fprintln(stderr, "Usage: boxr image ls [--format table|json] [--quiet] [--filter reference=PREFIX|os=VALUE|arch=VALUE]")
+			fmt.Fprintln(stderr, "Usage: boxr image ls [--format table|json] [--quiet] [--filter reference=PREFIX|os=VALUE|arch=VALUE|variant=VALUE|digest=PREFIX|label=KEY[=VALUE]]")
 			return 2
 		}
 		items, err := imageStore.List()
@@ -1521,10 +1660,13 @@ func filterImageList(items []imageStore.Image, filters []string) ([]imageStore.I
 	for _, filter := range filters {
 		key, value, ok := strings.Cut(filter, "=")
 		if !ok || value == "" {
-			return nil, fmt.Errorf("invalid filter %q (expected reference=PREFIX, os=VALUE or arch=VALUE)", filter)
+			return nil, fmt.Errorf("invalid filter %q (expected reference=PREFIX, os=VALUE, arch=VALUE, variant=VALUE, digest=PREFIX or label=KEY[=VALUE])", filter)
 		}
-		if key != "reference" && key != "os" && key != "arch" {
+		if key != "reference" && key != "os" && key != "arch" && key != "variant" && key != "digest" && key != "label" {
 			return nil, fmt.Errorf("unsupported filter key %q", key)
+		}
+		if key == "label" && strings.TrimSpace(strings.SplitN(value, "=", 2)[0]) == "" {
+			return nil, fmt.Errorf("invalid filter %q (label key cannot be empty)", filter)
 		}
 		next := filtered[:0]
 		for _, item := range filtered {
@@ -1536,6 +1678,18 @@ func filterImageList(items []imageStore.Image, filters []string) ([]imageStore.I
 				match = item.OS == value
 			case "arch":
 				match = item.Arch == value
+			case "variant":
+				match = item.Variant == value
+			case "digest":
+				match = strings.HasPrefix(item.Digest, value)
+			case "label":
+				labelKey, labelValue, hasValue := strings.Cut(value, "=")
+				stored, exists := item.RuntimeConfig.Labels[labelKey]
+				if hasValue {
+					match = exists && stored == labelValue
+				} else {
+					match = exists
+				}
 			}
 			if match {
 				next = append(next, item)
@@ -1786,6 +1940,8 @@ var implementedFeatures = []string{
 	"image lock pins a tag to its immutable manifest digest", "image lock records OS architecture and variant", "image lock uses a versioned strict JSON schema", "image lock file is written atomically", "image lock file is private mode 0600", "image lock rejects symlinked destinations and parents", "image lock rejects non-regular and oversized files", "image lock verification detects mutable tag drift", "image lock rejects unknown JSON fields and trailing data", "image lock supports JSON CLI output",
 	"image SBOM inventories the verified rootfs filesystem", "image SBOM records the manifest digest and target platform", "image SBOM records regular file sizes and permission modes", "image SBOM generates per-file SHA-256 checksums", "image SBOM records symlink targets without following links", "image SBOM reports directories and symlinks separately", "image SBOM deterministic path ordering", "image SBOM configurable entry limit", "image SBOM rejects non-positive entry limits", "image SBOM fails rather than return a partial inventory", "image SBOM private temporary extraction cleanup",
 	"rootfs archive normalizes entry modification timestamps", "rootfs archive normalizes access and change timestamps", "rootfs archive normalizes UID and GID metadata", "rootfs archive omits host account names", "rootfs archives are byte-identical for equivalent trees with different mtimes",
+	"named runtime security profiles", "default security profile preserves explicit runtime settings", "baseline security profile enforces no-new-privileges", "baseline security profile enables the built-in seccomp filter", "baseline security profile drops NET_RAW", "restricted security profile disables container networking", "restricted security profile enables a private user namespace", "restricted security profile enforces no-new-privileges and seccomp", "restricted security profile drops high-risk Linux capabilities", "untrusted security profile requires an explicit root filesystem", "untrusted security profile enforces read-only rootfs", "security profiles apply after user flags so weaker flags cannot relax mandatory controls", "security profile is recorded in container metadata and dry-run plans", "strict JSON Schema for versioned run configuration", "config schema command emits a JSON Schema document", "config schema rejects unknown top-level properties", "config schema describes security profile options", "system storage usage summary", "system storage usage includes verified image-store bytes", "system storage usage includes named volume logical bytes", "system storage usage includes container metadata and logs", "system storage usage JSON output", "system storage scanner does not follow symlink entries", "system storage scanner rejects symlinked roots", "system storage scanner treats absent directories as empty",
+	"named resource sizing profiles", "micro resource profile defaults", "small resource profile defaults", "medium resource profile defaults", "large resource profile defaults", "resource profiles fill only unset memory limits", "resource profiles fill only unset CPU quotas", "resource profiles fill only unset PID limits", "resource profiles fill CPU and I/O weights", "resource profile preserves explicit config limits", "resource profile preserves explicit command-line overrides", "resource profile name is validated", "resource profile appears in dry-run plans", "image list filter by ARM variant", "image list filter by digest prefix", "image list filter by metadata label presence", "image list filter by exact metadata label value", "image list filters combine with AND semantics across platform and metadata", "image list rejects empty metadata label filter keys",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -1836,7 +1992,7 @@ func runCompletion(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Usage: boxr completion bash|zsh|fish|powershell")
 		return 2
 	}
-	commands := "run ps inspect stop kill wait logs volume image stats rm events prune info doctor rootfs config features version help completion"
+	commands := "run ps inspect stop kill wait logs volume image stats rm events prune info system doctor rootfs config features version help completion"
 	switch args[0] {
 	case "bash":
 		fmt.Fprintf(stdout, `_boxr_complete() { COMPREPLY=($(compgen -W "%s" -- "${COMP_WORDS[COMP_CWORD]}")); }
@@ -1912,10 +2068,17 @@ func readEnvFile(path string) ([]string, error) {
 
 func runConfig(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "Usage: boxr config validate FILE.json | example")
+		fmt.Fprintln(stderr, "Usage: boxr config validate FILE.json | example | schema")
 		return 2
 	}
 	switch args[0] {
+	case "schema":
+		if len(args) != 1 {
+			fmt.Fprintln(stderr, "Usage: boxr config schema")
+			return 2
+		}
+		fmt.Fprintln(stdout, config.JSONSchema())
+		return 0
 	case "example":
 		if len(args) != 1 {
 			fmt.Fprintln(stderr, "Usage: boxr config example")
