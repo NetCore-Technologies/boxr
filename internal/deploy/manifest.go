@@ -48,6 +48,7 @@ type Service struct {
 	Command   []string          `json:"command,omitempty"`
 	Options   container.Options `json:"options"`
 	DependsOn []string          `json:"dependsOn,omitempty"`
+	Readiness *ReadinessProbe   `json:"readiness,omitempty"`
 }
 
 // ServicePlan contains only safe-to-display metadata. It deliberately excludes
@@ -57,6 +58,7 @@ type ServicePlan struct {
 	ContainerName         string   `json:"containerName,omitempty"`
 	Image                 string   `json:"image,omitempty"`
 	DependsOn             []string `json:"dependsOn,omitempty"`
+	ReadinessType         string   `json:"readinessType,omitempty"`
 	NetworkMode           string   `json:"networkMode"`
 	SecurityProfile       string   `json:"securityProfile,omitempty"`
 	ResourceProfile       string   `json:"resourceProfile,omitempty"`
@@ -175,6 +177,16 @@ func BuildPlan(file File) (Plan, error) {
 		if err := service.Options.Validate(); err != nil {
 			return plan, fmt.Errorf("service %q has invalid container options: %w", name, err)
 		}
+		readinessType := ""
+		if service.Readiness != nil {
+			if err := service.Readiness.Validate(); err != nil {
+				return plan, fmt.Errorf("service %q has invalid readiness probe: %w", name, err)
+			}
+			if service.Options.NetworkMode == "none" {
+				return plan, fmt.Errorf("service %q must use host networking for a loopback readiness probe", name)
+			}
+			readinessType = service.Readiness.Type()
+		}
 		if configuredName := service.Options.Name; configuredName != "" {
 			if previous, exists := configuredNames[configuredName]; exists {
 				return plan, fmt.Errorf("services %q and %q use the same container name %q", previous, name, configuredName)
@@ -214,6 +226,7 @@ func BuildPlan(file File) (Plan, error) {
 			ContainerName:         containerName,
 			Image:                 service.Image,
 			DependsOn:             deps,
+			ReadinessType:         readinessType,
 			NetworkMode:           networkMode,
 			SecurityProfile:       service.Options.SecurityProfile,
 			ResourceProfile:       service.Options.ResourceProfile,
@@ -320,6 +333,12 @@ func Example() string {
         "securityProfile": "baseline",
         "memoryLimitBytes": 268435456,
         "pidsLimit": 64
+      },
+      "readiness": {
+        "tcpAddress": "127.0.0.1:8080",
+        "intervalMs": 250,
+        "timeoutMs": 500,
+        "attempts": 40
       },
       "dependsOn": ["database"]
     }
