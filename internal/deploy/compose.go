@@ -310,6 +310,9 @@ func parseComposeExternalVolumes(definitions map[string]composeVolume) (map[stri
 				return nil, fmt.Errorf("Compose volume %q must set external: true", key)
 			}
 		case yaml.MappingNode:
+			if len(definition.External.Content) == 0 {
+				return nil, fmt.Errorf("Compose volume %q external mapping must provide a non-empty name", key)
+			}
 			for index := 0; index+1 < len(definition.External.Content); index += 2 {
 				field := definition.External.Content[index].Value
 				value := definition.External.Content[index+1]
@@ -402,11 +405,8 @@ func resolveComposeBindSource(source, baseDir string) (string, error) {
 		return "", fmt.Errorf("resolve host path: %w", err)
 	}
 	absolute = filepath.Clean(absolute)
-	volume := absolute
-	for current := string(filepath.Separator); ; {
-		relative := strings.TrimPrefix(strings.TrimPrefix(volume, current), string(filepath.Separator))
-		_ = relative
-		break
+	if absolute == string(filepath.Separator) {
+		return "", fmt.Errorf("host bind source must not be the filesystem root")
 	}
 	current := string(filepath.Separator)
 	parts := strings.Split(strings.TrimPrefix(absolute, string(filepath.Separator)), string(filepath.Separator))
