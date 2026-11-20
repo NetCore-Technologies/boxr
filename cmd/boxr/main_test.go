@@ -3545,3 +3545,88 @@ func TestTopLevelPullAliasRequiresImageReference(t *testing.T) {
 		t.Fatalf("unexpected pull usage output: %q", stderr.String())
 	}
 }
+
+
+func TestRestartRestartsStoppedImageBackedContainer(t *testing.T) {
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	t.Setenv("BOXR_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bin", "app"), []byte("restart test image\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	const reference = "local/restart-test:latest"
+	if _, err := imageStore.ImportRootFSWithConfig(root, reference, "linux", runtime.GOARCH, "", imageStore.ImageRuntimeConfig{
+		Entrypoint: []string{"/bin/app"},
+	}); err != nil {
+		t.Fatalf("import test image: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"create", "--name", "restart-test", reference}, &stdout, &stderr); code != 0 {
+		t.Fatalf("create returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	record, err := state.Get("restart-test")
+	if err != nil {
+		t.Fatalf("load created record: %v", err)
+	}
+	defer state.RemoveCreated(record.ID)
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatalf("model initial start: %v", err)
+	}
+	if err := state.RequestStop(record.ID); err != nil {
+		t.Fatalf("model manual stop: %v", err)
+	}
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatalf("model completed workload: %v", err)
+	}
+
+	originalLauncher := launchCreatedContainer
+	var launchedArgs []string
+	launchCreatedContainer = func(executable string, args []string, childStdout, childStderr io.Writer) error {
+		launchedArgs = append([]string(nil), args...)
+		// Model the detached supervisor persisting its successful start.
+		return state.Start(record.ID, os.Getpid())
+	}
+	t.Cleanup(func() { launchCreatedContainer = originalLauncher })
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"restart", "--time", "3s", "restart-test"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("restart returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if len(launchedArgs) != 8 || launchedArgs[0] != "run" || launchedArgs[1] != "--config" ||
+		launchedArgs[3] != "--image" || launchedArgs[4] != reference ||
+		launchedArgs[5] != "--detach" || launchedArgs[7] != record.ID {
+		t.Fatalf("restart launch arguments = %#v", launchedArgs)
+	}
+	restarted, err := state.Get(record.ID)
+	if err != nil {
+		t.Fatalf("read restarted record: %v", err)
+	}
+	if restarted.Status != "running" || restarted.StopRequested {
+		t.Fatalf("restart did not clear manual-stop state: %+v", restarted)
+	}
+	if code := run([]string{"restart", "missing-container"}, &stdout, &stderr); code == 0 {
+		t.Fatal("restart unexpectedly accepted a missing container")
+	}
+}
+
+func TestRestartRejectsAutoRemoveContainers(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+	record, err := state.Create("auto-remove", []string{"/bin/true"}, container.Options{AutoRemove: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"restart", record.ID}, &stdout, &stderr); code == 0 {
+		t.Fatal("restart accepted an auto-remove container")
+	}
+	if !strings.Contains(stderr.String(), "automatic removal") {
+		t.Fatalf("unexpected restart error: %q", stderr.String())
+	}
+	_ = state.RemoveCreated(record.ID)
+}
