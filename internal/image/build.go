@@ -577,6 +577,21 @@ func applyCopy(contextRoot, root string, instruction CopyInstruction, ignorePatt
 	if err != nil {
 		return err
 	}
+	if !info.IsDir() {
+		destinationInfo, statErr := os.Lstat(destination)
+		switch {
+		case statErr == nil && destinationInfo.IsDir():
+			destination, err = ensureRootfsDirectory(root, destination)
+			if err != nil {
+				return fmt.Errorf("prepare COPY directory destination: %w", err)
+			}
+			destination = filepath.Join(destination, filepath.Base(source))
+		case statErr == nil && destinationInfo.Mode()&os.ModeSymlink != 0:
+			return fmt.Errorf("COPY destination may not be a symlink")
+		case statErr != nil && !errors.Is(statErr, os.ErrNotExist):
+			return fmt.Errorf("inspect COPY destination: %w", statErr)
+		}
+	}
 	if info.IsDir() {
 		destination, err = ensureRootfsDirectory(root, destination)
 		if err != nil {
