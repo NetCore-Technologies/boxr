@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 749 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 761 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -755,3 +755,15 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 747. registry pushes convert Boxr's private rootfs layer media type to standard OCI gzip layer media type
 748. registry pushes preserve compressed layer bytes and SHA-256 digest during OCI media type normalization
 749. registry push verifies the published digest of the portable normalized OCI manifest
+750. detached container restart policies support no on-failure always and unless-stopped modes
+751. on-failure restart policy evaluates persisted non-zero container exit status
+752. on-failure restart policy supports a bounded retry count with zero meaning unlimited
+753. detached restart delay defaults to one second and is bounded from 100 milliseconds to five minutes
+754. restarted container attempts retain one persistent container ID and one log stream
+755. container state records persist restart attempt count and previous exit status
+756. manual stop intent is persisted before termination signals and suppresses restart policies
+757. boxr stop cancels a pending restart delay without signalling a non-existent process
+758. terminating boxr kill signals cancel a pending restart delay and suppress future attempts
+759. restarting containers remain visible in active container listings during backoff
+760. container removal is blocked while a restart attempt is pending
+761. restart policies require detached execution and reject automatic record removal
