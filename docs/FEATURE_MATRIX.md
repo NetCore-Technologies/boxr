@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 799 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 819 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -823,3 +823,5 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 815. Compose bind and external volume mounts support explicit read-only and read-write modes
 816. image-backed deployments defer bind mounts until after image rootfs extraction
 817. Compose-created volumes drivers options labels long-form mounts and propagation flags are rejected
+818. Compose read_only maps image-backed services to a read-only root filesystem
+819. Compose cap_drop validates and applies supported Linux capability drops
