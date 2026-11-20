@@ -108,7 +108,6 @@ func TestVolumePruneRequiresForceOrDryRun(t *testing.T) {
 	}
 }
 
-
 func TestVolumePruneStopsOnUnreadableContainerState(t *testing.T) {
 	t.Setenv("BOXR_DATA_DIR", t.TempDir())
 	stateDir := t.TempDir()

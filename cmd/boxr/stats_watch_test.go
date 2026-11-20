@@ -116,7 +116,6 @@ func TestStatsWatchRejectsCreatedContainer(t *testing.T) {
 	}
 }
 
-
 func TestStatsTableOneShotAndWatchOutput(t *testing.T) {
 	stats := state.Stats{PID: 321, MemoryCurrent: 4096, MemoryMax: "8192", PIDsCurrent: 5, CPUUsageUsec: 900, CPUUserUsec: 600, CPUSystemUsec: 300}
 	var oneShot bytes.Buffer
