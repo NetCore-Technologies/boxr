@@ -2561,6 +2561,12 @@ var implementedFeatures = []string{
 	"canonical local image reference resolution before service start",
 	"deployment pull validates cached image architecture and variant",
 	"image-backed service startup enforces the host Linux platform",
+	"deployment TCP readiness probes for loopback services",
+	"deployment HTTP readiness probes for loopback services",
+	"readiness targets reject non-loopback destinations and URL credentials",
+	"readiness probe intervals timeouts attempts and status codes are bounded",
+	"readiness retries honor supervisor cancellation and startup deadlines",
+	"secret-redacted readiness metadata in deployment plans",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -2611,7 +2617,7 @@ func runCompletion(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Usage: boxr completion bash|zsh|fish|powershell")
 		return 2
 	}
-	commands := "run ps inspect stop kill wait logs volume image stats rm events prune info system doctor support-bundle rootfs config features version help completion"
+	commands := "run ps inspect stop kill wait logs volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
 	switch args[0] {
 	case "bash":
 		fmt.Fprintf(stdout, `_boxr_complete() { COMPREPLY=($(compgen -W "%s" -- "${COMP_WORDS[COMP_CWORD]}")); }
@@ -2772,17 +2778,18 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 			return 0
 		}
 		fmt.Fprintf(stdout, "Deployment: %s\nServices: %d\nExecution order: %s\n\n", plan.Name, len(plan.Services), strings.Join(plan.ExecutionOrder, " -> "))
-		fmt.Fprintln(stdout, "SERVICE\tCONTAINER\tIMAGE\tDEPENDS ON\tNETWORK\tSECURITY\tROOTFS")
+		fmt.Fprintln(stdout, "SERVICE\tCONTAINER\tIMAGE\tDEPENDS ON\tREADINESS\tNETWORK\tSECURITY\tROOTFS")
 		for _, service := range plan.Services {
 			rootfsConfigured := "no"
 			if service.RootFSConfigured {
 				rootfsConfigured = "yes"
 			}
-			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				service.Name,
 				service.ContainerName,
 				service.Image,
 				strings.Join(service.DependsOn, ","),
+				service.ReadinessType,
 				service.NetworkMode,
 				service.SecurityProfile,
 				rootfsConfigured,
@@ -2982,19 +2989,23 @@ func startDeploymentProcess(executable, stack string, order int, serviceName str
 	}, nil
 }
 
-func waitForDeploymentStart(ctx context.Context, name string, timeout time.Duration, exits <-chan deploymentProcessExit) (state.Record, *deploymentProcessExit, error) {
+func waitForDeploymentStart(ctx context.Context, name string, timeout time.Duration, probe *deploy.ReadinessProbe, exits <-chan deploymentProcessExit) (state.Record, *deploymentProcessExit, error) {
 	var empty state.Record
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+	startCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
 		case exited := <-exits:
 			return empty, &exited, fmt.Errorf("service %q exited while another service was starting", exited.service)
-		case <-ctx.Done():
-			return empty, nil, ctx.Err()
-		case <-timer.C:
+		case <-startCtx.Done():
+			if ctx.Err() != nil {
+				return empty, nil, ctx.Err()
+			}
+			if probe != nil {
+				return empty, nil, fmt.Errorf("timed out waiting for service %q readiness", name)
+			}
 			return empty, nil, fmt.Errorf("timed out waiting for service %q to start", name)
 		case <-ticker.C:
 			record, err := state.Get(name)
@@ -3003,10 +3014,42 @@ func waitForDeploymentStart(ctx context.Context, name string, timeout time.Durat
 			}
 			switch record.Status {
 			case "running":
+				unexpectedExit, err := waitForDeploymentReadiness(startCtx, name, probe, exits)
+				if unexpectedExit != nil {
+					return empty, unexpectedExit, err
+				}
+				if err != nil {
+					if errors.Is(err, context.DeadlineExceeded) {
+						return empty, nil, fmt.Errorf("timed out waiting for service %q readiness: %w", name, err)
+					}
+					return empty, nil, fmt.Errorf("service %q readiness failed: %w", name, err)
+				}
 				return record, nil, nil
 			case "exited", "failed":
 				return record, nil, fmt.Errorf("service %q exited before entering the running state", name)
 			}
+		}
+	}
+}
+
+// waitForDeploymentReadiness races the probe against supervisor cancellation
+// and service exits so a failed sibling cannot remain hidden behind a slow probe.
+func waitForDeploymentReadiness(ctx context.Context, name string, probe *deploy.ReadinessProbe, exits <-chan deploymentProcessExit) (*deploymentProcessExit, error) {
+	if probe == nil {
+		return nil, nil
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- deploy.WaitForReadiness(ctx, probe)
+	}()
+	for {
+		select {
+		case err := <-result:
+			return nil, err
+		case exited := <-exits:
+			return &exited, fmt.Errorf("service %q exited while waiting for service %q readiness", exited.service, name)
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
 	}
 }
@@ -3204,7 +3247,7 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 		}
 		// Launch all services in a dependency wave before waiting for any one.
 		for _, process := range groupProcesses {
-			_, unexpectedExit, err := waitForDeploymentStart(ctx, process.name, startTimeout, exits)
+			_, unexpectedExit, err := waitForDeploymentStart(ctx, process.name, startTimeout, file.Services[serviceName].Readiness, exits)
 			if unexpectedExit != nil {
 				exited[unexpectedExit.service] = *unexpectedExit
 			}
