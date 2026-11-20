@@ -238,10 +238,17 @@ func SaveDockerMany(references []string, archivePath string) error {
 	sort.Strings(layerIDs)
 
 	parent := filepath.Dir(destination)
+	resolvedParent, err := resolveDockerSavePath(parent)
+	if err != nil {
+		return fmt.Errorf("resolve Docker archive destination directory: %w", err)
+	}
+	if err := validateDockerArchiveDestination(storeResolved, filepath.Join(resolvedParent, filepath.Base(destination))); err != nil {
+		return fmt.Errorf("Docker archive destination resolves inside image store: %w", err)
+	}
 	if err := os.MkdirAll(parent, 0755); err != nil {
 		return err
 	}
-	resolvedParent, err := filepath.EvalSymlinks(parent)
+	resolvedParent, err = filepath.EvalSymlinks(parent)
 	if err != nil {
 		return fmt.Errorf("resolve Docker archive destination directory: %w", err)
 	}
@@ -305,6 +312,29 @@ func SaveDockerMany(references []string, archivePath string) error {
 	}
 	committed = true
 	return nil
+}
+
+func resolveDockerSavePath(pathname string) (string, error) {
+	absolute, err := filepath.Abs(pathname)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err == nil {
+		return resolved, nil
+	}
+	if !os.IsNotExist(err) {
+		return "", err
+	}
+	parent := filepath.Dir(absolute)
+	if parent == absolute {
+		return "", err
+	}
+	resolvedParent, err := resolveDockerSavePath(parent)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(resolvedParent, filepath.Base(absolute)), nil
 }
 
 func validateDockerArchiveDestination(storeDir, destination string) error {

@@ -568,6 +568,13 @@ func TestSaveDockerArchiveRoundTrip(t *testing.T) {
 	if err := SaveDocker("example.com/demo:stable", filepath.Join(storeAlias, "symlink-escape.tar")); err == nil {
 		t.Fatal("Docker export followed a symlinked destination directory into the image store")
 	}
+	nestedDestination := filepath.Join(storeAlias, "new", "nested", "escape.tar")
+	if err := SaveDockerMany([]string{"example.com/demo:stable"}, nestedDestination); err == nil {
+		t.Fatal("Docker export accepted a nested symlink destination inside the image store")
+	}
+	if _, err := os.Lstat(filepath.Join(os.Getenv("BOXR_IMAGE_DIR"), "new")); !os.IsNotExist(err) {
+		t.Fatalf("rejected Docker export created directories in the image store: %v", err)
+	}
 	loaded, err := Load(archive)
 	if err != nil {
 		t.Fatalf("Load exported Docker archive: %v", err)
