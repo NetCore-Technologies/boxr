@@ -348,3 +348,29 @@ func TestRequestStopCancelsPendingRestartWithoutSignallingPID(t *testing.T) {
 	}
 }
 
+func TestRemoveRefusesContainerDuringRestartBackoff(t *testing.T) {
+	useTempState(t)
+	record, err := Create("remove-restarting", []string{"/bin/true"}, container.Options{RestartPolicy: "always"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Start(record.ID, 5701); err != nil {
+		t.Fatal(err)
+	}
+	if err := Finish(record.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareRestart(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(record.ID); err == nil || !strings.Contains(err.Error(), "restarting") {
+		t.Fatalf("Remove() during restart backoff error = %v, want restarting guard", err)
+	}
+	if err := RequestStop(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(record.ID); err != nil {
+		t.Fatalf("Remove() after restart cancellation: %v", err)
+	}
+}
+
