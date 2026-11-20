@@ -2685,3 +2685,23 @@ func TestDeploymentEnvironmentFilesFailClosedWhenMissing(t *testing.T) {
 	}
 }
 
+func TestDeploymentServiceStartTimeoutOverridesStackDefault(t *testing.T) {
+	fallback := 30 * time.Second
+	tests := []struct {
+		name    string
+		service deploy.Service
+		want    time.Duration
+	}{
+		{name: "inherit", service: deploy.Service{}, want: fallback},
+		{name: "short override", service: deploy.Service{StartTimeoutMS: 1500}, want: 1500 * time.Millisecond},
+		{name: "maximum override", service: deploy.Service{StartTimeoutMS: 600000}, want: 10 * time.Minute},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := deploymentServiceStartTimeout(test.service, fallback); got != test.want {
+				t.Fatalf("deploymentServiceStartTimeout() = %s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
