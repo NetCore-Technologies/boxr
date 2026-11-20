@@ -21,7 +21,7 @@ It is an early-stage runtime and **not a hardened security boundary or Docker re
 
 ## Capabilities
 
-- **Namespaces and networking:** PID, UTS, mount, IPC, optional user namespace with a single UID/GID mapping, host or isolated networking, and managed IPv4 Linux bridge networks with veth attachment, per-network IPAM, gateway routes and optional per-network NAT.
+- **Namespaces and networking:** PID, UTS, mount, IPC, optional user namespace with a single UID/GID mapping, host or isolated networking, and managed IPv4 Linux bridge networks with veth attachment, per-network IPAM, gateway routes, optional per-network NAT, and TCP/UDP host port publishing with scoped DNAT rules.
 - **Filesystem:** optional chroot rootfs, private mount propagation, read-only rootfs, proc, recursive bind mounts, read-only bind mounts, bounded tmpfs mounts and optional persistent OverlayFS writable layers (`--overlay-dir`).
 - **Security controls:** capability drops, `no_new_privileges`, and an opt-in architecture-guarded seccomp baseline denylist. These are defense-in-depth controls, not a sandbox guarantee.
 - **cgroup v2:** memory max/high/low/min/swap, CPU quota/weight, I/O weight, PID limits and group OOM policy. The blocked helper is attached before workload execution.
@@ -330,7 +330,18 @@ sudo boxr network rm app-net
 
 Boxr creates a host Linux bridge, assigns the gateway address, allocates a unique container IPv4 address, creates a veth pair, moves one peer into the container network namespace, renames it to `eth0`, and configures the default route. Outbound NAT is set up with network-specific iptables chains unless `--no-nat` is supplied. Removing a network is refused while it has attached containers. The network metadata and address leases are stored in the private Boxr data directory.
 
-Bridge networking currently provides host-local IPv4 connectivity only. It does not yet configure DNS inside containers, publish host ports, support IPv6 or multi-host overlays, or attach networks to already-running containers. The `--no-nat` option only omits Boxr's NAT rules; host routing and firewall policy still govern any other forwarding path. Treat this as an early runtime feature, not a hardened multi-tenant network boundary.
+Publish host ports with repeatable `--publish` (or `-p`) flags. The accepted form is `[HOST_IP:]HOST_PORT:CONTAINER_PORT[/tcp|udp]`; omitting the host IP binds the port on all IPv4 addresses and omitting the protocol defaults to TCP:
+
+```bash
+sudo boxr run --network bridge --network-name app-net \
+  --publish 127.0.0.1:8080:80/tcp \
+  --publish 5353:53/udp \
+  -- /bin/sh
+```
+
+Boxr installs per-container DNAT rules for incoming traffic and host-originated connections, plus a forwarding allow rule limited to the allocated container address, protocol and destination port. Host port reservations are checked across all Boxr-managed networks; wildcard binds conflict with a specific address on the same protocol/port. The mapping metadata is stored alongside the IP lease, and its firewall rules are removed when the container leaves the network. If attachment or firewall setup fails, Boxr rolls back the port rules, veth and IP lease. Port publishing currently supports IPv4 TCP and UDP only; it does not reserve the host socket against unrelated host applications, so avoid assigning a port already used by a host service.
+
+Bridge networking currently provides host-local IPv4 connectivity only. It does not yet configure DNS inside containers, support IPv6 or multi-host overlays, or attach networks to already-running containers. The `--no-nat` option only omits Boxr's NAT rules; host routing and firewall policy still govern any other forwarding path. Treat this as an early runtime feature, not a hardened multi-tenant network boundary.
 
 ## Runtime requirements and security limits
 
@@ -339,7 +350,7 @@ Bridge networking currently provides host-local IPv4 connectivity only. It does 
 - `--rootfs` is an existing directory owned/prepared by the operator. `boxr image pull` supports schema-2 OCI and Docker distribution manifests with up to 128 verified tar or gzip layers; the merged filesystem is flattened into Boxr's canonical local image layer. `boxr image push` still publishes the canonical single-layer format. For offline transfers, import and export Docker-compatible archives with `docker save`/`docker load` and `boxr image load`/`boxr image save --format docker`.
 - `--network none` creates a private network namespace with loopback only; `host` is the default. Managed bridge mode is selected with `--network bridge --network-name NAME` and requires an existing network from `boxr network create`. Bridge networking is IPv4-only and currently has no IPv6, published host ports, embedded DNS/service-name discovery, multi-host overlay, or network attach/detach for already-running containers. Outbound NAT is enabled by default for managed bridges; `boxr network create --no-nat` disables Boxr's NAT rules but does not override the host's other routing/firewall policy. Bridge setup requires `ip` (iproute2), `nsenter`, `iptables`, `sysctl`, and the necessary host privileges. `--seccomp-profile baseline` enables a fixed architecture-specific denylist and automatically enables no-new-privileges; it is defense-in-depth, not a sandbox policy.
 - Named volumes require `--rootfs`; they are not a host-wide container filesystem abstraction and must not be treated as encrypted storage.
-- OverlayFS provides a persistent writable rootfs view. Registry pulls validate and apply each OCI/Docker layer before flattening the merged filesystem into the local OCI-layout image store; registry pushes still emit Boxr's canonical single-rootfs-layer representation. Boxr does not preserve arbitrary multi-layer graphs for push or provide Docker-daemon integration, customizable seccomp profiles, device filtering, LSM policy management, bridge-network DNS/service discovery, port publishing, IPv6 networking, daemonized detached containers, or an OCI runtime-spec bundle interface.
+- OverlayFS provides a persistent writable rootfs view. Registry pulls validate and apply each OCI/Docker layer before flattening the merged filesystem into the local OCI-layout image store; registry pushes still emit Boxr's canonical single-rootfs-layer representation. Boxr does not preserve arbitrary multi-layer graphs for push or provide Docker-daemon integration, customizable seccomp profiles, device filtering, LSM policy management, bridge-network DNS/service discovery, IPv6 networking, daemonized detached containers, or an OCI runtime-spec bundle interface.
 - Host kernel bugs, namespace escape vulnerabilities, privileged mounts and workload arguments remain outside boxr's guarantees. Do not use it for hostile multi-tenant workloads.
 
 Read [SECURITY.md](SECURITY.md) before using the runtime. See [how it works](docs/how-it-works.md), the [implemented feature matrix](docs/FEATURE_MATRIX.md), and [toolchain review](docs/TOOLCHAIN.md).
