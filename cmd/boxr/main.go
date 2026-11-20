@@ -512,13 +512,15 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 				return err
 			}
 			started = true
+			return nil
+		},
+		OnReady: func(pid int) {
 			if detachedReadyWriter != nil && !detachedReadySent {
 				_, _ = fmt.Fprintf(detachedReadyWriter, "READY %s %d\\n", record.ID, pid)
 				detachedReadySent = true
 				_ = detachedReadyWriter.Close()
 				detachedReadyWriter = nil
 			}
-			return nil
 		},
 		OnExit: func(_ int, executionErr error) error {
 			var networkErr error
