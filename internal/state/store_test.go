@@ -443,3 +443,60 @@ func TestEngineConfigRejectsOversizedAndUnsafeFiles(t *testing.T) {
 		t.Fatalf("failed removal unexpectedly deleted symlink: %v", err)
 	}
 }
+
+
+func TestRenamePersistsUniqueContainerNamesAndEvents(t *testing.T) {
+	useTempState(t)
+	first, err := Create("before-rename", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Create("already-used", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	renamed, err := Rename(first.ID, "after-rename")
+	if err != nil {
+		t.Fatalf("Rename(): %v", err)
+	}
+	if renamed.ID != first.ID || renamed.Name != "after-rename" {
+		t.Fatalf("renamed record = %+v", renamed)
+	}
+	if _, err := Get("before-rename"); err == nil {
+		t.Fatal("old container name still resolves after rename")
+	}
+	loaded, err := Get("after-rename")
+	if err != nil || loaded.ID != first.ID {
+		t.Fatalf("new container name lookup = %+v, err=%v", loaded, err)
+	}
+
+	if _, err := Rename(first.ID, "already-used"); err == nil {
+		t.Fatal("duplicate container name was accepted")
+	}
+	for _, invalid := range []string{"", "../escape", "contains space", strings.Repeat("x", 65)} {
+		if _, err := Rename(first.ID, invalid); err == nil {
+			t.Errorf("invalid container name %q was accepted", invalid)
+		}
+	}
+	if _, err := Rename(first.ID, "after-rename"); err != nil {
+		t.Fatalf("renaming to the existing name should be idempotent: %v", err)
+	}
+
+	events, err := Events(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, event := range events {
+		if event.ID == first.ID && event.Action == "rename" && event.Name == "after-rename" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("container rename event was not persisted")
+	}
+	if _, err := Get(second.ID); err != nil {
+		t.Fatalf("unrelated container record changed: %v", err)
+	}
+}
