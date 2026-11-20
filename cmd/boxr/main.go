@@ -413,8 +413,8 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 			fmt.Fprintf(stderr, "boxr run: load existing container %s: %v\n", existingID, getErr)
 			return 1
 		}
-		if existingRecord.Status != "created" {
-			fmt.Fprintf(stderr, "boxr run: existing container %s must be in created state (state: %s)\n", existingID, existingRecord.Status)
+		if existingRecord.Status != "created" && existingRecord.Status != "exited" && existingRecord.Status != "failed" {
+			fmt.Fprintf(stderr, "boxr run: existing container %s must be created or stopped (state: %s)\n", existingID, existingRecord.Status)
 			return 1
 		}
 		savedImage := existingRecord.Labels["io.boxr.image"]
@@ -669,8 +669,8 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 	var err error
 	if existingID != "" {
 		record, err = state.Get(existingID)
-		if err == nil && record.Status != "created" {
-			err = fmt.Errorf("existing container is no longer in created state (state: %s)", record.Status)
+		if err == nil && record.Status != "created" && record.Status != "exited" && record.Status != "failed" {
+			err = fmt.Errorf("existing container is no longer created or stopped (state: %s)", record.Status)
 		}
 		if err == nil && !equalStringSlices(commandArgs, record.Command) {
 			err = fmt.Errorf("resolved image command does not match the created container command")
@@ -968,8 +968,8 @@ func runStart(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "container %s is already running\n", record.ID)
 		return 0
 	}
-	if record.Status != "created" {
-		fmt.Fprintf(stderr, "boxr start: container %s must be in created state (current state: %s)\n", record.ID, record.Status)
+	if record.Status != "created" && record.Status != "exited" && record.Status != "failed" {
+		fmt.Fprintf(stderr, "boxr start: container %s must be created or stopped (current state: %s)\n", record.ID, record.Status)
 		return 1
 	}
 	image := record.Labels["io.boxr.image"]
@@ -3328,7 +3328,8 @@ var implementedFeatures = []string{
 	"Engine API creates Docker image tag aliases from verified OCI content and protects tags referenced by containers",
 	"top-level pull command reuses verified OCI and Docker registry image downloads",
 	"native create command records a verified image-backed container without starting it",
-	"native start command launches a created image-backed container through the detached supervisor"
+	"native start command launches a created image-backed container through the detached supervisor",
+	"native start command restarts stopped image-backed containers through the detached supervisor"
 }
 
 func printFeatures(stdout io.Writer) {
