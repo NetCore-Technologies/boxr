@@ -34,6 +34,7 @@ The default API version advertised is `1.45` (minimum `1.24`). Implemented endpo
 | GET | `/containers/{id}/stats` | cgroup v2 CPU, memory and PID samples (snapshot or stream) |
 | POST | `/containers/create` | Create a container from a verified image already in the local Boxr image store |
 | POST | `/containers/{id}/start` | Start a created container or restart an exited/failed container through the native detached supervisor |
+| POST | `/containers/{id}/rename` | Rename a container while preserving its ID and rejecting duplicate names |
 | POST | `/containers/{id}/restart` | Gracefully stop and restart a created or existing image-backed container with a bounded timeout |
 | POST | `/containers/{id}/stop` | Graceful stop with a bounded timeout and SIGKILL fallback |
 | POST | `/containers/{id}/kill` | Deliver a validated Docker signal to a verified running process |
