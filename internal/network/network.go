@@ -44,9 +44,40 @@ type Network struct {
 	Bridge      string            `json:"bridge"`
 	Subnet      string            `json:"subnet"`
 	Gateway     string            `json:"gateway"`
-	NAT         bool              `json:"nat"`
-	CreatedAt   time.Time         `json:"createdAt"`
-	Allocations map[string]string `json:"allocations,omitempty"`
+	NAT         bool                    `json:"nat"`
+	CreatedAt   time.Time               `json:"createdAt"`
+	Allocations map[string]string       `json:"allocations,omitempty"`
+	Published   map[string][]PortMapping `json:"published,omitempty"`
+}
+
+// PortMapping publishes one host IPv4 socket to a container IPv4 TCP or UDP port.
+type PortMapping struct {
+	HostIP        string `json:"hostIp,omitempty"`
+	HostPort      uint16 `json:"hostPort"`
+	ContainerPort uint16 `json:"containerPort"`
+	Protocol      string `json:"protocol,omitempty"`
+}
+
+// Normalize validates and fills defaults for a published port mapping.
+func (mapping PortMapping) Normalize() (PortMapping, error) {
+	if mapping.HostPort == 0 || mapping.ContainerPort == 0 {
+		return PortMapping{}, fmt.Errorf("published host and container ports must be between 1 and 65535")
+	}
+	if mapping.HostIP == "" {
+		mapping.HostIP = "0.0.0.0"
+	}
+	address, err := netip.ParseAddr(mapping.HostIP)
+	if err != nil || !address.Is4() || address.String() != mapping.HostIP {
+		return PortMapping{}, fmt.Errorf("published host IP must be a canonical IPv4 address")
+	}
+	mapping.Protocol = strings.ToLower(mapping.Protocol)
+	if mapping.Protocol == "" {
+		mapping.Protocol = "tcp"
+	}
+	if mapping.Protocol != "tcp" && mapping.Protocol != "udp" {
+		return PortMapping{}, fmt.Errorf("published port protocol must be tcp or udp")
+	}
+	return mapping, nil
 }
 
 // CreateOptions configures an IPv4 bridge and whether it receives outbound NAT.
@@ -457,12 +488,12 @@ func missingNetworkInterface(err error) bool {
 
 // Join allocates a stable IPv4 address and connects a paused container network
 // namespace to the host bridge. PID is the host PID of Boxr's namespace helper.
-func Join(networkName string, pid int, containerID string) (string, error) {
-	return JoinWithRunner(context.Background(), networkName, pid, containerID, commandRunner{})
+func Join(networkName string, pid int, containerID string, ports ...PortMapping) (string, error) {
+	return JoinWithRunner(context.Background(), networkName, pid, containerID, commandRunner{}, ports...)
 }
 
 // JoinWithRunner is Join with an injectable host command executor.
-func JoinWithRunner(ctx context.Context, networkName string, pid int, containerID string, runner Runner) (string, error) {
+func JoinWithRunner(ctx context.Context, networkName string, pid int, containerID string, runner Runner, ports ...PortMapping) (string, error) {
 	if runner == nil {
 		return "", fmt.Errorf("network command runner is required")
 	}
@@ -532,6 +563,88 @@ func JoinWithRunner(ctx context.Context, networkName string, pid int, containerI
 		}
 	}
 	return address, nil
+}
+
+func portMappingsConflict(left, right PortMapping) bool {
+	if left.HostPort != right.HostPort || left.Protocol != right.Protocol {
+		return false
+	}
+	return left.HostIP == "0.0.0.0" || right.HostIP == "0.0.0.0" || left.HostIP == right.HostIP
+}
+
+func normalizePortMappings(mappings []PortMapping) ([]PortMapping, error) {
+	result := make([]PortMapping, 0, len(mappings))
+	for index, mapping := range mappings {
+		normalized, err := mapping.Normalize()
+		if err != nil {
+			return nil, fmt.Errorf("published port %d: %w", index+1, err)
+		}
+		for _, previous := range result {
+			if portMappingsConflict(previous, normalized) {
+				return nil, fmt.Errorf("published host port %s:%d/%s is configured more than once", normalized.HostIP, normalized.HostPort, normalized.Protocol)
+			}
+		}
+		result = append(result, normalized)
+	}
+	return result, nil
+}
+
+func validatePortMappingReservations(networks []Network, requested []PortMapping) error {
+	for _, mapping := range requested {
+		for _, existingNetwork := range networks {
+			for containerID, mappings := range existingNetwork.Published {
+				for _, existing := range mappings {
+					if portMappingsConflict(existing, mapping) {
+						return fmt.Errorf("host port %s:%d/%s is already published by container %s on network %s", mapping.HostIP, mapping.HostPort, mapping.Protocol, containerID, existingNetwork.Name)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func portDNATArgs(mapping PortMapping, destination string) []string {
+	hostIP := mapping.HostIP
+	if hostIP == "0.0.0.0" {
+		hostIP = "0.0.0.0/0"
+	}
+	return []string{"-p", mapping.Protocol, "-d", hostIP, "--dport", fmt.Sprint(mapping.HostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", destination, mapping.ContainerPort)}
+}
+
+func addPortMappingRules(ctx context.Context, runner Runner, network Network, address string, mapping PortMapping) error {
+	if err := runner.Run(ctx, "sysctl", "-w", "net.ipv4.ip_forward=1"); err != nil {
+		return fmt.Errorf("enable IPv4 forwarding for published ports: %w", err)
+	}
+	for _, chain := range []string{"PREROUTING", "OUTPUT"} {
+		args := append([]string{"-t", "nat", "-A", chain}, portDNATArgs(mapping, address)...)
+		if err := runner.Run(ctx, "iptables", args...); err != nil {
+			return fmt.Errorf("add published port DNAT rule: %w", err)
+		}
+	}
+	filterArgs := []string{"-I", "FORWARD", "1", "-o", network.Bridge, "-d", address, "-p", mapping.Protocol, "--dport", fmt.Sprint(mapping.ContainerPort), "-m", "conntrack", "--ctstate", "NEW", "-j", "ACCEPT"}
+	if err := runner.Run(ctx, "iptables", filterArgs...); err != nil {
+		return fmt.Errorf("allow published port through bridge forwarding: %w", err)
+	}
+	return nil
+}
+
+func removePortMappingRules(ctx context.Context, runner Runner, network Network, address string, mapping PortMapping) error {
+	var failures []string
+	for _, chain := range []string{"PREROUTING", "OUTPUT"} {
+		args := append([]string{"-t", "nat", "-D", chain}, portDNATArgs(mapping, address)...)
+		if err := runner.Run(ctx, "iptables", args...); err != nil && !missingFirewallObject(err) {
+			failures = append(failures, strings.Join(args, " ")+": "+err.Error())
+		}
+	}
+	filterArgs := []string{"-D", "FORWARD", "-o", network.Bridge, "-d", address, "-p", mapping.Protocol, "--dport", fmt.Sprint(mapping.ContainerPort), "-m", "conntrack", "--ctstate", "NEW", "-j", "ACCEPT"}
+	if err := runner.Run(ctx, "iptables", filterArgs...); err != nil && !missingFirewallObject(err) {
+		failures = append(failures, strings.Join(filterArgs, " ")+": "+err.Error())
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("remove published port firewall rules: %s", strings.Join(failures, "; "))
+	}
+	return nil
 }
 
 // Leave disconnects a container veth and releases its address back to IPAM.
