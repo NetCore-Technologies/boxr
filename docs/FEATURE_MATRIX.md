@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 861 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 862 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 
 ## Implemented capabilities
@@ -861,10 +861,11 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 852. Engine API POST containers rename updates unique container names and returns Docker-compatible errors
 853. compose command aliases the supported Compose YAML deployment validation planning pull and lifecycle workflows
 854. Engine API POST containers wait blocks for not-running state and returns the persisted workload exit status
-855. Engine API DELETE force true delegates to native safe forced removal for running or restarting containers
-856. native create command records a verified image-backed container without starting it
-857. native start command launches a created image-backed container through the detached supervisor
-858. native start command restarts stopped image-backed containers through the detached supervisor
-859. native restart command stops then starts an image-backed container with a bounded graceful timeout
-860. Engine API start endpoint restarts stopped image-backed containers through the native detached supervisor
-861. Engine API restart endpoint performs a bounded graceful stop and launches the same saved container again
+855. container prune previews and filters stopped records and requires explicit force before removal
+856. Engine API DELETE force true delegates to native safe forced removal for running or restarting containers
+857. native create command records a verified image-backed container without starting it
+858. native start command launches a created image-backed container through the detached supervisor
+859. native start command restarts stopped image-backed containers through the detached supervisor
+860. native restart command stops then starts an image-backed container with a bounded graceful timeout
+861. Engine API start endpoint restarts stopped image-backed containers through the native detached supervisor
+862. Engine API restart endpoint performs a bounded graceful stop and launches the same saved container again
