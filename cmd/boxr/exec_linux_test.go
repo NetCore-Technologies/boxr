@@ -5,13 +5,12 @@ package main
 import (
 	"bytes"
 	"os"
-	"reflect"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/creack/pty"
-
 	"github.com/manit6752025/boxr/internal/container"
 	"github.com/manit6752025/boxr/internal/state"
 )
