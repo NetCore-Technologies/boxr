@@ -288,3 +288,32 @@ func TestApplyResourceProfileRejectsUnknownAndNil(t *testing.T) {
 		t.Fatal("nil options unexpectedly accepted")
 	}
 }
+
+func TestOptionsValidateManagedBridgeNetworking(t *testing.T) {
+	tests := []struct {
+		name    string
+		options Options
+		valid   bool
+	}{
+		{name: "bridge with named network", options: Options{NetworkMode: "bridge", NetworkName: "frontend"}, valid: true},
+		{name: "bridge with dotted name", options: Options{NetworkMode: "bridge", NetworkName: "api.v2"}, valid: true},
+		{name: "bridge without network name", options: Options{NetworkMode: "bridge"}},
+		{name: "bridge with uppercase network name", options: Options{NetworkMode: "bridge", NetworkName: "Frontend"}},
+		{name: "bridge with traversal name", options: Options{NetworkMode: "bridge", NetworkName: "../frontend"}},
+		{name: "bridge name with host mode", options: Options{NetworkMode: "host", NetworkName: "frontend"}},
+		{name: "bridge name with none mode", options: Options{NetworkMode: "none", NetworkName: "frontend"}},
+		{name: "unknown mode", options: Options{NetworkMode: "overlay", NetworkName: "frontend"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.options.Validate()
+			if test.valid && err != nil {
+				t.Fatalf("Validate(): %v", err)
+			}
+			if !test.valid && err == nil {
+				t.Fatal("Validate() unexpectedly succeeded")
+			}
+		})
+	}
+}
+
