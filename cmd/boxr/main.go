@@ -185,7 +185,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "prune":
 		return runPrune(args[1:], stdout, stderr)
 	case "run":
-		return runContainer(args[1:], stdout, stderr)
+		return runContainer(normalizeRunImageArgument(args[1:]), stdout, stderr)
 	case "create":
 		return runCreate(args[1:], stdout, stderr)
 	case "start":
@@ -212,7 +212,7 @@ func runContainerCommand(args []string, stdout, stderr io.Writer) int {
 	case "create":
 		return runCreate(args[1:], stdout, stderr)
 	case "run":
-		return runContainer(args[1:], stdout, stderr)
+		return runContainer(normalizeRunImageArgument(args[1:]), stdout, stderr)
 	case "start":
 		return runStart(args[1:], stdout, stderr)
 	case "restart":
@@ -292,8 +292,59 @@ func normalizeCreateArguments(args []string) []string {
 		return append(result, args[position+1:]...)
 	}
 	result := append([]string(nil), args[:position]...)
-	result = append(result, "--image", image, "--")
-	return append(result, args[position+1:]...)
+	result = append(result, "--image", image)
+	remaining := args[position+1:]
+	if len(remaining) == 0 || remaining[0] != "--" {
+		result = append(result, "--")
+	}
+	return append(result, remaining...)
+}
+
+func normalizeRunImageArgument(args []string) []string {
+	for _, value := range args {
+		if value == "--image" || strings.HasPrefix(value, "--image=") {
+			return args
+		}
+	}
+	position := -1
+	for index := 0; index < len(args); index++ {
+		value := args[index]
+		if value == "--" {
+			if index+1 < len(args) {
+				position = index + 1
+			}
+			break
+		}
+		if strings.HasPrefix(value, "--") {
+			name, _, hasInlineValue := strings.Cut(value, "=")
+			if !hasInlineValue && createFlagTakesValue(name) {
+				index++
+			}
+			continue
+		}
+		if strings.HasPrefix(value, "-") {
+			if value == "-p" {
+				index++
+			}
+			continue
+		}
+		position = index
+		break
+	}
+	if position < 0 || position >= len(args) {
+		return args
+	}
+	image := args[position]
+	if _, err := imageStore.Inspect(image); err != nil {
+		return args
+	}
+	result := append([]string(nil), args[:position]...)
+	result = append(result, "--image", image)
+	remaining := args[position+1:]
+	if len(remaining) == 0 || remaining[0] != "--" {
+		result = append(result, "--")
+	}
+	return append(result, remaining...)
 }
 
 func createFlagTakesValue(name string) bool {
