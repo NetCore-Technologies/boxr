@@ -2499,3 +2499,67 @@ func TestImageListFiltersVariantDigestAndLabels(t *testing.T) {
 		t.Fatal("empty label key unexpectedly accepted")
 	}
 }
+
+func TestDeployProfileFlagsFilterPlanAndDryRun(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.json")
+	manifest := `{
+		"version": 1,
+		"name": "profile-stack",
+		"services": {
+			"database": {"command": ["/bin/database"]},
+			"api": {
+				"command": ["/bin/api"],
+				"dependsOn": ["database"],
+				"profiles": ["frontend"]
+			},
+			"metrics": {
+				"command": ["/bin/metrics"],
+				"profiles": ["observability"]
+			}
+		}
+	}`
+	if err := os.WriteFile(path, []byte(manifest), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	if code := run([]string{"deploy", "plan", "--json", path}, &out, &errOut); code != 0 {
+		t.Fatalf("default deploy plan: code=%d stderr=%q", code, errOut.String())
+	}
+	var defaultPlan deploy.Plan
+	if err := json.Unmarshal(out.Bytes(), &defaultPlan); err != nil {
+		t.Fatalf("decode default deployment plan: %v", err)
+	}
+	if len(defaultPlan.Services) != 1 || defaultPlan.Services[0].Name != "database" {
+		t.Fatalf("default plan services = %+v, want only database", defaultPlan.Services)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"deploy", "plan", "--profile", "observability", "--profile", "frontend", "--json", path}, &out, &errOut); code != 0 {
+		t.Fatalf("profile deploy plan: code=%d stderr=%q", code, errOut.String())
+	}
+	var selectedPlan deploy.Plan
+	if err := json.Unmarshal(out.Bytes(), &selectedPlan); err != nil {
+		t.Fatalf("decode profile deployment plan: %v", err)
+	}
+	if len(selectedPlan.Services) != 3 || !reflect.DeepEqual(selectedPlan.Profiles, []string{"frontend", "observability"}) {
+		t.Fatalf("profile plan has unexpected selection: %+v", selectedPlan)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"deploy", "up", "--profile", "frontend", "--dry-run", path}, &out, &errOut); code != 0 {
+		t.Fatalf("profile deploy up dry-run: code=%d stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "2 services") || !strings.Contains(out.String(), "Dry run:") {
+		t.Fatalf("profile dry-run did not show the filtered service count: %q", out.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"deploy", "plan", "--profile", "missing", path}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "unknown deployment profile") {
+		t.Fatalf("unknown profile result: code=%d stderr=%q", code, errOut.String())
+	}
+}
+
