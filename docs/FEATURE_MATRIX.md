@@ -5,7 +5,10 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 
 ## Implemented capabilities
 
-**Inventory size: 725 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+
+## Implemented capabilities
+
+**Inventory size: 735 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -728,9 +731,19 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 717. container exit releases dynamically connected published port rules veth links and IPAM reservations
 718. network detach is idempotent when a container has no remaining managed network lease
 719. managed bridge IPAM prevents a single container from acquiring conflicting eth0 attachments on multiple networks
-720. bounded parallel OCI and Docker registry layer downloads
-721. registry layer download worker count capped at four
-722. parallel registry layer verification preserves manifest order
-723. registry pull cancels outstanding layer downloads after the first failure
-724. parallel registry pull removes every partial temporary layer on failure
-725. concurrent registry requests share a synchronized Bearer token refresh
+720. managed veth interfaces carry a network and container-specific Boxr ownership alias
+721. bridge disconnect verifies the Boxr ownership alias before deleting a host veth
+722. stale network attachment discovery filters leases against verified live Boxr helper PIDs
+723. network prune defaults to a read-only stale attachment report
+724. network prune requires an explicit force flag before changing host interfaces or firewall rules
+725. stale attachment pruning removes only Boxr-owned veths and matching published port rules
+726. stale attachment pruning releases the corresponding IPv4 IPAM lease after successful cleanup
+727. network prune retains reservations when a veth has a foreign or missing ownership alias
+728. network prune reports removed attachment IPv4 and published port counts
+729. runtime process liveness checks validate the Boxr helper command line and network namespace
+730. bounded parallel OCI and Docker registry layer downloads
+731. registry layer download worker count capped at four
+732. parallel registry layer verification preserves manifest order
+733. registry pull cancels outstanding layer downloads after the first failure
+734. parallel registry pull removes every partial temporary layer on failure
+735. concurrent registry requests share a synchronized Bearer token refresh
