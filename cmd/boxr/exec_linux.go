@@ -13,12 +13,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
 
+	"github.com/creack/pty"
 	"github.com/manit6752025/boxr/internal/container"
 	"github.com/manit6752025/boxr/internal/state"
+	"golang.org/x/term"
 )
 
 const maxExecEnvironmentBytes = 1 << 20
@@ -39,13 +42,18 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	var env, envFiles envList
 	var workdir string
+	var interactive, tty bool
 	flags.StringVar(&workdir, "workdir", "", "working directory inside the container")
 	flags.StringVar(&workdir, "w", "", "alias for --workdir")
+	flags.BoolVar(&interactive, "interactive", false, "keep standard input open")
+	flags.BoolVar(&interactive, "i", false, "alias for --interactive")
+	flags.BoolVar(&tty, "tty", false, "allocate a pseudo-terminal")
+	flags.BoolVar(&tty, "t", false, "alias for --tty")
 	flags.Var(&env, "env", "set or override an environment variable (repeatable KEY=VALUE)")
 	flags.Var(&env, "e", "alias for --env (repeatable)")
 	flags.Var(&envFiles, "env-file", "load environment assignments from a file (repeatable)")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: boxr exec [--workdir PATH] [--env KEY=VALUE] [--env-file PATH] CONTAINER COMMAND [ARG...]")
+		fmt.Fprintln(stderr, "Usage: boxr exec [-i] [-t] [--workdir PATH] [--env KEY=VALUE] [--env-file PATH] CONTAINER COMMAND [ARG...]")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -254,14 +262,29 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	launcherArgs = append(launcherArgs, nsenterArgs[1:]...)
 	launcher := exec.Command(executable, launcherArgs...)
 	launcher.ExtraFiles = extraFiles
-	launcher.Stdin = os.Stdin
-	launcher.Stdout = stdout
-	launcher.Stderr = stderr
-	if err := launcher.Start(); err != nil {
-		fmt.Fprintf(stderr, "boxr exec: start namespace launcher: %v\n", err)
-		_ = releaseReader.Close()
-		_ = environmentReader.Close()
-		return 1
+	var terminalMaster *os.File
+	var terminalCleanup func()
+	if tty {
+		var terminalErr error
+		terminalMaster, terminalCleanup, terminalErr = startExecTerminal(launcher, stdout)
+		if terminalErr != nil {
+			fmt.Fprintf(stderr, "boxr exec: allocate terminal: %v\n", terminalErr)
+			_ = releaseReader.Close()
+			_ = environmentReader.Close()
+			return 1
+		}
+	} else {
+		if interactive {
+			launcher.Stdin = os.Stdin
+		}
+		launcher.Stdout = stdout
+		launcher.Stderr = stderr
+		if err := launcher.Start(); err != nil {
+			fmt.Fprintf(stderr, "boxr exec: start namespace launcher: %v\n", err)
+			_ = releaseReader.Close()
+			_ = environmentReader.Close()
+			return 1
+		}
 	}
 	_ = releaseReader.Close()
 	_ = environmentReader.Close()
@@ -303,6 +326,10 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	_ = releaseWriter.Close()
 
 	waitErr := launcher.Wait()
+	if terminalCleanup != nil {
+		terminalCleanup()
+		_ = terminalMaster.Close()
+	}
 	environmentWriteErr := <-environmentWriteDone
 	if environmentWriteErr != nil && waitErr == nil {
 		fmt.Fprintf(stderr, "boxr exec: transfer container environment: %v\n", environmentWriteErr)
@@ -322,6 +349,81 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stderr, "boxr exec: launcher failed: %v\n", waitErr)
 	return 125
+}
+
+func startExecTerminal(launcher *exec.Cmd, output io.Writer) (*os.File, func(), error) {
+	sizeSource := firstExecTerminal(os.Stdin, os.Stdout, os.Stderr)
+	if sizeSource == nil {
+		return nil, nil, fmt.Errorf("--tty requires a terminal on stdin, stdout, or stderr")
+	}
+	size, err := pty.GetsizeFull(sizeSource)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read terminal size: %w", err)
+	}
+	var rawState *term.State
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		rawState, err = term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			return nil, nil, fmt.Errorf("set terminal raw mode: %w", err)
+		}
+	}
+	restoreTerminal := func() {
+		if rawState != nil {
+			_ = term.Restore(int(os.Stdin.Fd()), rawState)
+		}
+	}
+	launcher.Stdin = nil
+	launcher.Stdout = nil
+	launcher.Stderr = nil
+	master, err := pty.StartWithSize(launcher, size)
+	if err != nil {
+		restoreTerminal()
+		return nil, nil, err
+	}
+	done := make(chan struct{})
+	resizeSignals := make(chan os.Signal, 1)
+	signal.Notify(resizeSignals, syscall.SIGWINCH)
+	resizeDone := make(chan struct{})
+	go func() {
+		defer close(resizeDone)
+		for {
+			select {
+			case <-resizeSignals:
+				_ = pty.InheritSize(sizeSource, master)
+			case <-done:
+				return
+			}
+		}
+	}()
+	outputDone := make(chan struct{})
+	if output == nil {
+		output = io.Discard
+	}
+	go func() {
+		_, _ = io.Copy(output, master)
+		close(outputDone)
+	}()
+	go func() {
+		_, _ = io.Copy(master, os.Stdin)
+	}()
+	cleanup := func() {
+		close(done)
+		signal.Stop(resizeSignals)
+		<-resizeDone
+		_ = master.Close()
+		<-outputDone
+		restoreTerminal()
+	}
+	return master, cleanup, nil
+}
+
+func firstExecTerminal(files ...*os.File) *os.File {
+	for _, file := range files {
+		if file != nil && term.IsTerminal(int(file.Fd())) {
+			return file
+		}
+	}
+	return nil
 }
 
 func runExecLaunch(args []string) int {
