@@ -513,9 +513,9 @@ func TestDeployStatusDryRunDownAndRemoval(t *testing.T) {
 	create := func(service, name string, order int) state.Record {
 		t.Helper()
 		labels := map[string]string{
-			deploy.StackLabel: "test-stack",
+			deploy.StackLabel:   "test-stack",
 			deploy.ServiceLabel: service,
-			deploy.OrderLabel: strconv.Itoa(order),
+			deploy.OrderLabel:   strconv.Itoa(order),
 		}
 		record, err := state.Create(name, []string{"/bin/true", "private-command"}, container.Options{
 			Env: []string{"TOKEN=private-deployment-secret"},
@@ -528,9 +528,9 @@ func TestDeployStatusDryRunDownAndRemoval(t *testing.T) {
 	database := create("database", deploy.ContainerName("test-stack", "database"), 0)
 	api := create("api", deploy.ContainerName("test-stack", "api"), 1)
 	other, err := state.Create("other-stack-api", []string{"/bin/true"}, container.Options{}, map[string]string{
-		deploy.StackLabel: "other-stack",
+		deploy.StackLabel:   "other-stack",
 		deploy.ServiceLabel: "api",
-		deploy.OrderLabel: "0",
+		deploy.OrderLabel:   "0",
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -2940,10 +2940,10 @@ func startDeploymentProcess(executable, stack string, order int, serviceName str
 		return nil, fmt.Errorf("start service %q: %w", serviceName, err)
 	}
 	return &deploymentProcess{
-		service: serviceName,
-		name: options.Name,
+		service:   serviceName,
+		name:      options.Name,
 		configDir: configDir,
-		command: command,
+		command:   command,
 	}, nil
 }
 
@@ -3160,15 +3160,15 @@ func deploymentStatuses(records []state.Record) []deploymentStatus {
 	statuses := make([]deploymentStatus, 0, len(records))
 	for _, record := range records {
 		statuses = append(statuses, deploymentStatus{
-			Service: record.Labels[deploy.ServiceLabel],
+			Service:       record.Labels[deploy.ServiceLabel],
 			ContainerName: record.Name,
-			ID: record.ID,
-			Status: record.Status,
-			PID: record.PID,
-			ExitCode: record.ExitCode,
-			CreatedAt: record.CreatedAt,
-			StartedAt: record.StartedAt,
-			FinishedAt: record.FinishedAt,
+			ID:            record.ID,
+			Status:        record.Status,
+			PID:           record.PID,
+			ExitCode:      record.ExitCode,
+			CreatedAt:     record.CreatedAt,
+			StartedAt:     record.StartedAt,
+			FinishedAt:    record.FinishedAt,
 		})
 	}
 	return statuses
