@@ -19,8 +19,8 @@ import (
 	"time"
 
 	"github.com/manit6752025/boxr/internal/config"
-	"github.com/manit6752025/boxr/internal/deploy"
 	"github.com/manit6752025/boxr/internal/container"
+	"github.com/manit6752025/boxr/internal/deploy"
 	imageStore "github.com/manit6752025/boxr/internal/image"
 	"github.com/manit6752025/boxr/internal/registry"
 	"github.com/manit6752025/boxr/internal/rootfs"
@@ -2701,7 +2701,7 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
- 
+
 func runDeploy(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "Usage: boxr deploy validate FILE.json | plan [--json] FILE.json | example")

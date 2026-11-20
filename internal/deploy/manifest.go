@@ -188,7 +188,7 @@ func BuildPlan(file File) (Plan, error) {
 			ReadOnlyRootFS:        service.Options.ReadOnlyRootFS,
 			MemoryLimitBytes:      service.Options.MemoryLimitBytes,
 			CPUs:                  service.Options.CPUs,
-			PidsLimit:              service.Options.PidsLimit,
+			PidsLimit:             service.Options.PidsLimit,
 			CommandArgumentCount:  len(service.Command),
 			EnvironmentEntryCount: len(service.Options.Env),
 			LabelCount:            len(service.Options.Labels),
