@@ -268,6 +268,9 @@ func remove(query string, allowCreated bool) error {
 	if record.Status == "created" && !allowCreated {
 		return fmt.Errorf("container %s has not completed; refusing removal", record.ID)
 	}
+	if err := removeEngineConfigLocked(record.ID); err != nil {
+		return fmt.Errorf("remove container Engine API configuration: %w", err)
+	}
 	if err := os.Remove(recordPath(record.ID)); err != nil {
 		return fmt.Errorf("remove container record: %w", err)
 	}
@@ -530,6 +533,9 @@ func Prune(before time.Time) (int, error) {
 	for _, record := range records {
 		if record.Status == "running" || record.Status == "created" || record.CreatedAt.After(before) {
 			continue
+		}
+		if err := removeEngineConfigLocked(record.ID); err != nil {
+			return removed, fmt.Errorf("remove Engine API configuration for %s: %w", record.ID, err)
 		}
 		if err := os.Remove(recordPath(record.ID)); err != nil {
 			return removed, err
