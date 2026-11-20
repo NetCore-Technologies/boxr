@@ -582,9 +582,10 @@ func JoinWithRunner(ctx context.Context, networkName string, pid int, containerI
 		delete(network.Published, containerID)
 		return saveStore(dir, current)
 	}
+	installedPorts := make([]PortMapping, 0, len(normalizedPorts))
 	rollbackCreatedVeth := func(cause error) (string, error) {
 		var cleanupErrors []string
-		for _, mapping := range normalizedPorts {
+		for _, mapping := range installedPorts {
 			if err := removePortMappingRules(ctx, runner, *network, address, mapping); err != nil {
 				cleanupErrors = append(cleanupErrors, err.Error())
 			}
@@ -592,11 +593,13 @@ func JoinWithRunner(ctx context.Context, networkName string, pid int, containerI
 		if err := runner.Run(ctx, "ip", "link", "del", "dev", hostVeth); err != nil && !missingNetworkInterface(err) {
 			cleanupErrors = append(cleanupErrors, err.Error())
 		}
-		if err := releaseAllocation(); err != nil {
-			cleanupErrors = append(cleanupErrors, err.Error())
-		}
 		if len(cleanupErrors) > 0 {
+			// Keep the IP and published-port reservation if host cleanup is
+			// incomplete, preventing another workload from reusing live rules.
 			return "", fmt.Errorf("%v; bridge rollback incomplete: %s", cause, strings.Join(cleanupErrors, "; "))
+		}
+		if err := releaseAllocation(); err != nil {
+			return "", fmt.Errorf("%v; release IPAM reservation: %w", cause, err)
 		}
 		return "", cause
 	}
@@ -629,7 +632,11 @@ func JoinWithRunner(ctx context.Context, networkName string, pid int, containerI
 		}
 	}
 	for _, mapping := range normalizedPorts {
-		if err := addPortMappingRules(ctx, runner, *network, address, mapping); err != nil {
+		partial, err := addPortMappingRules(ctx, runner, *network, address, mapping)
+		if partial {
+			installedPorts = append(installedPorts, mapping)
+		}
+		if err != nil {
 			return rollbackCreatedVeth(fmt.Errorf("publish host port %s:%d/%s: %w", mapping.HostIP, mapping.HostPort, mapping.Protocol, err))
 		}
 	}
@@ -683,21 +690,67 @@ func portDNATArgs(mapping PortMapping, destination string) []string {
 	return append(args, "--dport", fmt.Sprint(mapping.HostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", destination, mapping.ContainerPort))
 }
 
-func addPortMappingRules(ctx context.Context, runner Runner, network Network, address string, mapping PortMapping) error {
+func portMappingFirewallRules(network Network, address string, mapping PortMapping) ([][]string, [][]string) {
+	natRule := portDNATArgs(mapping, address)
+	adds := [][]string{
+		append([]string{"-t", "nat", "-A", "PREROUTING"}, natRule...),
+		append([]string{"-t", "nat", "-A", "OUTPUT"}, natRule...),
+		{"-I", "FORWARD", "1", "-o", network.Bridge, "-d", address, "-p", mapping.Protocol, "--dport", fmt.Sprint(mapping.ContainerPort), "-m", "conntrack", "--ctstate", "NEW", "-j", "ACCEPT"},
+	}
+	checks := [][]string{
+		append([]string{"-t", "nat", "-C", "PREROUTING"}, natRule...),
+		append([]string{"-t", "nat", "-C", "OUTPUT"}, natRule...),
+		{"-C", "FORWARD", "-o", network.Bridge, "-d", address, "-p", mapping.Protocol, "--dport", fmt.Sprint(mapping.ContainerPort), "-m", "conntrack", "--ctstate", "NEW", "-j", "ACCEPT"},
+	}
+	return adds, checks
+}
+
+func addPortMappingRules(ctx context.Context, runner Runner, network Network, address string, mapping PortMapping) (bool, error) {
 	if err := runner.Run(ctx, "sysctl", "-w", "net.ipv4.ip_forward=1"); err != nil {
-		return fmt.Errorf("enable IPv4 forwarding for published ports: %w", err)
+		return false, fmt.Errorf("enable IPv4 forwarding for published ports: %w", err)
 	}
-	for _, chain := range []string{"PREROUTING", "OUTPUT"} {
-		args := append([]string{"-t", "nat", "-A", chain}, portDNATArgs(mapping, address)...)
-		if err := runner.Run(ctx, "iptables", args...); err != nil {
-			return fmt.Errorf("add published port DNAT rule: %w", err)
+	adds, checks := portMappingFirewallRules(network, address, mapping)
+	applied := make([]int, 0, len(adds))
+	rollback := func() (bool, error) {
+		var failures []string
+		for index := len(applied) - 1; index >= 0; index-- {
+			deleteArgs := append([]string(nil), adds[applied[index]]...)
+			if applied[index] < 2 {
+				deleteArgs[2] = "-D"
+			} else {
+				deleteArgs[0] = "-D"
+				deleteArgs = deleteArgs[1:]
+			}
+			if err := runner.Run(ctx, "iptables", deleteArgs...); err != nil && !missingFirewallObject(err) {
+				failures = append(failures, strings.Join(deleteArgs, " ")+": "+err.Error())
+			}
 		}
+		return len(failures) > 0, fmt.Errorf("rollback partial published port rules: %s", strings.Join(failures, "; "))
 	}
-	filterArgs := []string{"-I", "FORWARD", "1", "-o", network.Bridge, "-d", address, "-p", mapping.Protocol, "--dport", fmt.Sprint(mapping.ContainerPort), "-m", "conntrack", "--ctstate", "NEW", "-j", "ACCEPT"}
-	if err := runner.Run(ctx, "iptables", filterArgs...); err != nil {
-		return fmt.Errorf("allow published port through bridge forwarding: %w", err)
+	for index, args := range adds {
+		if err := runner.Run(ctx, "iptables", checks[index]...); err == nil {
+			partial, rollbackErr := rollback()
+			if rollbackErr != nil && partial {
+				return true, fmt.Errorf("published port rule already exists outside Boxr; %w", rollbackErr)
+			}
+			return false, fmt.Errorf("published port rule already exists outside Boxr")
+		} else if !missingFirewallObject(err) {
+			partial, rollbackErr := rollback()
+			if rollbackErr != nil && partial {
+				return true, fmt.Errorf("check published port rule: %v; %w", err, rollbackErr)
+			}
+			return false, fmt.Errorf("check published port rule: %w", err)
+		}
+		if err := runner.Run(ctx, "iptables", args...); err != nil {
+			partial, rollbackErr := rollback()
+			if rollbackErr != nil && partial {
+				return true, fmt.Errorf("add published port rule: %v; %w", err, rollbackErr)
+			}
+			return false, fmt.Errorf("add published port rule: %w", err)
+		}
+		applied = append(applied, index)
 	}
-	return nil
+	return true, nil
 }
 
 func removePortMappingRules(ctx context.Context, runner Runner, network Network, address string, mapping PortMapping) error {
