@@ -131,7 +131,7 @@ func validateContextPath(value string) error {
 		return fmt.Errorf("must be a non-empty relative path inside the build context")
 	}
 	clean := filepath.Clean(value)
-	if clean == "." || clean == string(filepath.Separator) {
+	if clean == string(filepath.Separator) {
 		return fmt.Errorf("must name a path inside the build context")
 	}
 	return nil
@@ -156,6 +156,14 @@ func Build(contextDir, specPath, reference string) (Image, error) {
 // target platform. It does not execute target binaries; callers are responsible
 // for supplying files that match the declared platform.
 func BuildForPlatform(contextDir, specPath, reference, platform string) (Image, error) {
+	spec, err := LoadBuildSpec(specPath)
+	if err != nil {
+		return Image{}, err
+	}
+	return buildWithSpec(contextDir, spec, reference, platform, ".boxrignore")
+}
+
+func buildWithSpec(contextDir string, spec BuildSpec, reference, platform, ignoreFile string, additionalIgnorePaths ...string) (Image, error) {
 	if err := ValidateReference(reference); err != nil {
 		return Image{}, err
 	}
@@ -173,10 +181,6 @@ func BuildForPlatform(contextDir, specPath, reference, platform string) (Image, 
 	}
 	if contextInfo.Mode()&os.ModeSymlink != 0 || !contextInfo.IsDir() {
 		return Image{}, fmt.Errorf("build context must be a real directory, not a symlink")
-	}
-	spec, err := LoadBuildSpec(specPath)
-	if err != nil {
-		return Image{}, err
 	}
 
 	// Base images are resolved only from the verified local OCI store. Builds
@@ -205,9 +209,14 @@ func BuildForPlatform(contextDir, specPath, reference, platform string) (Image, 
 		baseImage = &verified
 	}
 
-	ignorePatterns, err := loadIgnorePatterns(contextAbs)
+	ignorePatterns, err := loadIgnorePatternsNamed(contextAbs, ignoreFile)
 	if err != nil {
 		return Image{}, err
+	}
+	for _, ignored := range additionalIgnorePaths {
+		if ignored != "" && ignored != "." {
+			ignorePatterns = append(ignorePatterns, ignorePattern{value: filepath.ToSlash(ignored)})
+		}
 	}
 	stage, err := os.MkdirTemp("", "boxr-image-build-*")
 	if err != nil {
@@ -590,21 +599,24 @@ type ignorePattern struct {
 // loadIgnorePatterns reads a small, deliberately non-negating ignore file.
 // Negation rules are not supported so a parent directory exclusion cannot be
 // accidentally bypassed by a later child rule.
-func loadIgnorePatterns(contextRoot string) ([]ignorePattern, error) {
-	ignorePath := filepath.Join(contextRoot, ".boxrignore")
+func loadIgnorePatternsNamed(contextRoot, filename string) ([]ignorePattern, error) {
+	if filename == "" || filepath.Base(filename) != filename {
+		return nil, fmt.Errorf("invalid build ignore filename")
+	}
+	ignorePath := filepath.Join(contextRoot, filename)
 	info, err := os.Lstat(ignorePath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("inspect .boxrignore: %w", err)
+		return nil, fmt.Errorf("inspect %s: %w", filename, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maxBuildIgnoreBytes {
-		return nil, fmt.Errorf(".boxrignore must be a regular non-symlink file no larger than %d bytes", maxBuildIgnoreBytes)
+		return nil, fmt.Errorf("%s must be a regular non-symlink file no larger than %d bytes", filename, maxBuildIgnoreBytes)
 	}
 	file, err := os.Open(ignorePath)
 	if err != nil {
-		return nil, fmt.Errorf("open .boxrignore: %w", err)
+		return nil, fmt.Errorf("open %s: %w", filename, err)
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
@@ -616,24 +628,24 @@ func loadIgnorePatterns(contextRoot string) ([]ignorePattern, error) {
 			continue
 		}
 		if strings.HasPrefix(value, "!") {
-			return nil, fmt.Errorf(".boxrignore line %d: negation rules are not supported", lineNumber)
+			return nil, fmt.Errorf("%s line %d: negation rules are not supported", filename, lineNumber)
 		}
 		value = strings.ReplaceAll(value, "\\", "/")
 		if strings.ContainsRune(value, '\x00') || strings.HasPrefix(value, "/") {
-			return nil, fmt.Errorf(".boxrignore line %d: pattern must be relative and contain no NUL", lineNumber)
+			return nil, fmt.Errorf("%s line %d: pattern must be relative and contain no NUL", filename, lineNumber)
 		}
 		directoryOnly := strings.HasSuffix(value, "/")
 		value = strings.Trim(value, "/")
 		if value == "" || hasParentTraversal(value) {
-			return nil, fmt.Errorf(".boxrignore line %d: invalid pattern", lineNumber)
+			return nil, fmt.Errorf("%s line %d: invalid pattern", filename, lineNumber)
 		}
 		if _, err := path.Match(value, "probe"); err != nil {
-			return nil, fmt.Errorf(".boxrignore line %d: invalid glob: %w", lineNumber, err)
+			return nil, fmt.Errorf("%s line %d: invalid glob: %w", filename, lineNumber, err)
 		}
 		patterns = append(patterns, ignorePattern{value: value, directoryOnly: directoryOnly})
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read .boxrignore: %w", err)
+		return nil, fmt.Errorf("read %s: %w", filename, err)
 	}
 	return patterns, nil
 }

@@ -1630,7 +1630,7 @@ Usage:
   boxr rootfs unpack ARCHIVE.tar.gz PATH
   boxr rootfs digest PATH
   boxr rootfs diff BEFORE AFTER
-  boxr image build --tag NAME:TAG [--file Boxrfile.json] [CONTEXT]
+  boxr image build --tag NAME:TAG [-f Dockerfile|Boxrfile.json] [CONTEXT]
   boxr image import ROOTFS NAME:TAG
   boxr image pull [--platform linux/ARCH[/VARIANT]] [--authfile PATH] REGISTRY/IMAGE[:TAG]
   boxr image push [--authfile PATH] LOCAL:TAG [REGISTRY/IMAGE:TAG]
@@ -1820,7 +1820,8 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 	case "build":
 		flags := flag.NewFlagSet("image build", flag.ContinueOnError)
 		flags.SetOutput(stderr)
-		file := flags.String("file", "", "JSON build recipe (default: CONTEXT/Boxrfile.json; non-executing)")
+		file := flags.String("file", "", "Dockerfile or Boxrfile.json (default: CONTEXT/Dockerfile; non-executing subset)")
+		flags.StringVar(file, "f", "", "Dockerfile or JSON recipe path")
 		platform := flags.String("platform", "", "target image platform (default: linux/<host architecture>)")
 		tag := flags.String("tag", "", "image reference to create (required)")
 		jsonOutput := flags.Bool("json", false, "write image metadata as JSON")
@@ -1829,7 +1830,7 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		if *tag == "" || flags.NArg() > 1 || (*quiet && *jsonOutput) {
-			fmt.Fprintln(stderr, "Usage: boxr image build --tag NAME:TAG [--platform linux/ARCH[/VARIANT]] [--file Boxrfile.json] [--json|--quiet] [CONTEXT]")
+			fmt.Fprintln(stderr, "Usage: boxr image build --tag NAME:TAG [--platform linux/ARCH[/VARIANT]] [-f Dockerfile|Boxrfile.json] [--json|--quiet] [CONTEXT]")
 			return 2
 		}
 		contextDir := "."
@@ -1838,9 +1839,23 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 		}
 		buildFile := *file
 		if buildFile == "" {
-			buildFile = filepath.Join(contextDir, "Boxrfile.json")
+			dockerfilePath := filepath.Join(contextDir, "Dockerfile")
+			if _, statErr := os.Lstat(dockerfilePath); statErr == nil {
+				buildFile = dockerfilePath
+			} else if !os.IsNotExist(statErr) {
+				fmt.Fprintf(stderr, "boxr image build: inspect default Dockerfile: %v\\n", statErr)
+				return 1
+			} else {
+				buildFile = filepath.Join(contextDir, "Boxrfile.json")
+			}
 		}
-		created, err := imageStore.BuildForPlatform(contextDir, buildFile, *tag, *platform)
+		var created imageStore.Image
+		var err error
+		if strings.EqualFold(filepath.Ext(buildFile), ".json") {
+			created, err = imageStore.BuildForPlatform(contextDir, buildFile, *tag, *platform)
+		} else {
+			created, err = imageStore.BuildDockerfileForPlatform(contextDir, buildFile, *tag, *platform)
+		}
 		if err != nil {
 			fmt.Fprintf(stderr, "boxr image build: %v\n", err)
 			return 1
@@ -2940,6 +2955,14 @@ var implementedFeatures = []string{
 	"restarting containers remain visible in active container listings during backoff",
 	"container removal is blocked while a restart attempt is pending",
 	"restart policies require detached execution and reject automatic record removal",
+	"Dockerfile parser enforces byte line and instruction-count limits",
+	"Dockerfile builds support scratch and verified local single-stage FROM bases",
+	"Dockerfile COPY supports local files directories and the build-context root",
+	"Dockerfile WORKDIR resolves relative paths inside the container rootfs",
+	"Dockerfile ENV and LABEL support quoted values and variable expansion",
+	"Dockerfile USER and shell or exec CMD and ENTRYPOINT metadata are preserved",
+	"Dockerfile builds apply bounded .dockerignore exclusions without mutating the context",
+	"Dockerfile RUN ADD multi-stage builds and unsupported flags fail explicitly",
 }
 
 func printFeatures(stdout io.Writer) {

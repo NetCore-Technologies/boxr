@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 761 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 769 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -767,3 +767,11 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 759. restarting containers remain visible in active container listings during backoff
 760. container removal is blocked while a restart attempt is pending
 761. restart policies require detached execution and reject automatic record removal
+762. Dockerfile parser enforces byte line and instruction-count limits
+763. Dockerfile builds support scratch and verified local single-stage FROM bases
+764. Dockerfile COPY supports local files directories and the build-context root
+765. Dockerfile WORKDIR resolves relative paths inside the container rootfs
+766. Dockerfile ENV and LABEL support quoted values and variable expansion
+767. Dockerfile USER and shell or exec CMD and ENTRYPOINT metadata are preserved
+768. Dockerfile builds apply bounded .dockerignore exclusions without mutating the context
+769. Dockerfile RUN ADD multi-stage builds and unsupported flags fail explicitly
