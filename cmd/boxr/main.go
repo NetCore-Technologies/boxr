@@ -2623,6 +2623,13 @@ var implementedFeatures = []string{
 	"service startup timeout bounds are validated between 10 milliseconds and 10 minutes",
 	"secret-free deployment plans expose per-service startup timeout metadata",
 	"per-service startup timeouts govern process and readiness startup gates",
+	"per-service shutdown grace overrides the stack-wide deploy down timeout",
+	"zero per-service shutdown grace inherits the stack-wide command timeout",
+	"service shutdown timeout bounds are validated between 10 milliseconds and 10 minutes",
+	"per-service shutdown grace is persisted as reserved non-secret runtime metadata",
+	"attached deployment rollback and interrupt shutdown honor service-specific grace periods",
+	"deploy down applies each service-specific shutdown deadline independently",
+	"only services exceeding their own shutdown grace are escalated to SIGKILL",
 }
 
 func printFeatures(stdout io.Writer) {
