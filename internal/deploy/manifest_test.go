@@ -498,13 +498,13 @@ func TestBuildPlanValidatesServiceEnvironmentFiles(t *testing.T) {
 	}
 
 	tests := map[string][]string{
-		"relative path":       {"config/api.env"},
-		"parent traversal":    {"/etc/boxr/../secrets/api.env"},
-		"non-canonical path":  {"/etc//boxr/api.env"},
-		"surrounding spaces":  {"/etc/boxr/api.env "},
-		"NUL byte":            {"/etc/boxr/api.env\x00"},
-		"duplicate path":      {"/etc/boxr/api.env", "/etc/boxr/api.env"},
-		"too many files":      make([]string, 17),
+		"relative path":      {"config/api.env"},
+		"parent traversal":   {"/etc/boxr/../secrets/api.env"},
+		"non-canonical path": {"/etc//boxr/api.env"},
+		"surrounding spaces": {"/etc/boxr/api.env "},
+		"NUL byte":           {"/etc/boxr/api.env\x00"},
+		"duplicate path":     {"/etc/boxr/api.env", "/etc/boxr/api.env"},
+		"too many files":     make([]string, 17),
 	}
 	for index := range tests["too many files"] {
 		tests["too many files"][index] = fmt.Sprintf("/etc/boxr/%02d.env", index)
@@ -721,4 +721,3 @@ func TestBuildPlanIncludesNormalizedPublishedPorts(t *testing.T) {
 		t.Fatalf("deployment plan exposed command contents: %s", encoded)
 	}
 }
-
