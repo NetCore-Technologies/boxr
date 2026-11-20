@@ -464,7 +464,11 @@ func TestDeployExamplePlanAndValidationCommands(t *testing.T) {
 			},
 			"database": {
 				"command": ["/bin/true"],
-				"options": {}
+				"options": {},
+				"readiness": {
+					"httpUrl": "http://127.0.0.1:8081/healthz",
+					"attempts": 1
+				}
 			}
 		}
 	}`
@@ -484,14 +488,24 @@ func TestDeployExamplePlanAndValidationCommands(t *testing.T) {
 	if code := run([]string{"deploy", "plan", "--json", path}, &out, &errOut); code != 0 {
 		t.Fatalf("deploy plan --json: code=%d err=%q", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), `"executionOrder"`) || strings.Contains(out.String(), "private-command") || strings.Contains(out.String(), "private-env") {
-		t.Fatalf("JSON plan is missing ordering or leaked secrets: %q", out.String())
+	if !strings.Contains(out.String(), `"executionOrder"`) || !strings.Contains(out.String(), `"readinessType": "http"`) ||
+		strings.Contains(out.String(), "127.0.0.1") || strings.Contains(out.String(), "private-command") || strings.Contains(out.String(), "private-env") {
+		t.Fatalf("JSON plan is missing ordering/readiness metadata or leaked private data: %q", out.String())
 	}
 	var plan struct {
 		ExecutionOrder []string `json:"executionOrder"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &plan); err != nil || !reflect.DeepEqual(plan.ExecutionOrder, []string{"database", "api"}) {
 		t.Fatalf("invalid plan JSON: %#v, error=%v", plan, err)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"deploy", "plan", path}, &out, &errOut); code != 0 {
+		t.Fatalf("deploy plan: code=%d err=%q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "READINESS") || !strings.Contains(out.String(), "http") {
+		t.Fatalf("text plan omitted readiness metadata: %q", out.String())
 	}
 
 	out.Reset()
