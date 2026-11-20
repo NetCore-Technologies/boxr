@@ -3514,7 +3514,7 @@ func TestCreateNormalizesDockerStyleImagePosition(t *testing.T) {
 		{
 			name: "flags before image and command after image",
 			args: []string{"--name", "web", "--memory", "128m", "nginx:latest", "nginx", "-g", "daemon off;"},
-			want: []string{"--name", "web", "--memory", "128m", "--image", "nginx:latest", "nginx", "-g", "daemon off;"},
+			want: []string{"--name", "web", "--memory", "128m", "--image", "nginx:latest", "--", "nginx", "-g", "daemon off;"},
 		},
 		{
 			name: "image after end of options",
@@ -3525,6 +3525,11 @@ func TestCreateNormalizesDockerStyleImagePosition(t *testing.T) {
 			name: "explicit image flag is preserved",
 			args: []string{"--image", "nginx:latest", "/bin/sh"},
 			want: []string{"--image", "nginx:latest", "/bin/sh"},
+		},
+		{
+			name: "option-like command arguments are protected",
+			args: []string{"nginx:latest", "-g", "daemon off;"},
+			want: []string{"--image", "nginx:latest", "--", "-g", "daemon off;"},
 		},
 	}
 	for _, test := range tests {
