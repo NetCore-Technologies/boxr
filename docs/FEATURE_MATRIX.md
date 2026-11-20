@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 651 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 658 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -657,3 +657,10 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 649. attached deployment rollback and interrupt shutdown honor service-specific grace periods
 650. deploy down applies each service-specific shutdown deadline independently
 651. only services exceeding their own shutdown grace are escalated to SIGKILL
+652. recurring per-service TCP or HTTP healthchecks run after startup gates pass
+653. healthcheck intervals are bounded from 10 milliseconds to 60 seconds
+654. healthcheck retry budgets are bounded and count consecutive failures
+655. successful healthchecks reset the consecutive failure counter
+656. healthcheck startup grace periods are bounded to 10 minutes
+657. unhealthy services fail the attached deployment supervisor and trigger stack shutdown
+658. healthcheck targets remain loopback-only and absent from deployment plans
