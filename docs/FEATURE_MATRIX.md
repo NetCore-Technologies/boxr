@@ -458,3 +458,11 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 450. image list filter by exact metadata label value
 451. image list filters combine with AND semantics across platform and metadata
 452. image list rejects empty metadata label filter keys
+453. privacy-preserving support bundle generation
+454. support bundle includes Boxr build and Go runtime metadata
+455. support bundle includes diagnostic names and statuses without detail strings
+456. support bundle excludes environment values and command arguments
+457. support bundle excludes container logs, state files, configuration and filesystem paths
+458. support bundle rejects symlink destinations and requires explicit overwrite confirmation
+459. support bundle archives and reports a SHA-256 digest
+460. support bundle archive and entries use private file permissions
