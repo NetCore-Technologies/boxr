@@ -805,6 +805,61 @@ func singleQueryValue(query url.Values, key string) (string, error) {
 	return values[0], nil
 }
 
+func (s *Server) handleContainerRestart(writer http.ResponseWriter, request *http.Request, rawID string) {
+	query, err := decodeContainerID(rawID)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	record, err := state.Get(query)
+	if err != nil {
+		writeError(writer, http.StatusNotFound, err)
+		return
+	}
+	if record.Options.AutoRemove {
+		writeError(writer, http.StatusConflict, fmt.Errorf("container uses automatic removal and cannot be restarted"))
+		return
+	}
+	rawTimeout, err := singleQueryValue(request.URL.Query(), "t")
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	timeout := 10 * time.Second
+	if rawTimeout != "" {
+		seconds, parseErr := strconv.Atoi(rawTimeout)
+		if parseErr != nil || seconds < -1 || seconds > 300 {
+			writeError(writer, http.StatusBadRequest, fmt.Errorf("restart timeout t must be -1 or between 0 and 300 seconds"))
+			return
+		}
+		if seconds == -1 {
+			timeout = 5 * time.Minute
+		} else {
+			timeout = time.Duration(seconds) * time.Second
+		}
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err)
+		return
+	}
+	stdout, stderr, launchErr := launchEngineAPICreatedContainer(executable, []string{
+		"restart", "--time", timeout.String(), record.ID,
+	})
+	if launchErr != nil {
+		message := strings.TrimSpace(stderr)
+		if message == "" {
+			message = strings.TrimSpace(stdout)
+		}
+		if message == "" {
+			message = launchErr.Error()
+		}
+		writeError(writer, http.StatusConflict, fmt.Errorf("restart container: %s", message))
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleContainerStart(writer http.ResponseWriter, request *http.Request, rawID string) {
 	query, err := decodeContainerID(rawID)
 	if err != nil {
