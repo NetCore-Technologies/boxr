@@ -138,7 +138,7 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 	var imageReference string
 	var configCommand []string
 	var configEnv []string
-	var env, envFiles, capDrop, mounts, tmpfs, labels, volumes envList
+	var env, envFiles, capDrop, mounts, tmpfs, labels, volumes, publish envList
 	var dryRun bool
 	for i, arg := range args {
 		if strings.HasPrefix(arg, "--config=") {
@@ -218,6 +218,8 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 	flags.Var(&tmpfs, "tmpfs", "mount tmpfs at TARGET[:SIZE[:MODE]] (repeatable; requires --rootfs)")
 	flags.StringVar(&opts.NetworkMode, "network", opts.NetworkMode, "network namespace mode: host, none, or bridge")
 	flags.StringVar(&opts.NetworkName, "network-name", opts.NetworkName, "managed bridge network to join when --network=bridge")
+	flags.Var(&publish, "publish", "publish host port to a container port: [HOST_IP:]HOST_PORT:CONTAINER_PORT[/tcp|udp] (repeatable)")
+	flags.Var(&publish, "p", "alias for --publish (repeatable)")
 	flags.BoolVar(&opts.UserNamespace, "userns", opts.UserNamespace, "map the invoking UID/GID to root inside a private user namespace")
 	flags.BoolVar(&opts.NoNewPrivileges, "no-new-privileges", opts.NoNewPrivileges, "prevent execve from gaining additional privileges")
 	flags.StringVar(&opts.SeccompProfile, "seccomp-profile", opts.SeccompProfile, "built-in syscall filter profile: baseline")
@@ -390,6 +392,14 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 		}
 		fileEnv = append(fileEnv, entries...)
 	}
+	for _, value := range publish {
+		mapping, err := parsePortMapping(value)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr run: invalid --publish: %v\n", err)
+			return 2
+		}
+		opts.PublishedPorts = append(opts.PublishedPorts, mapping)
+	}
 	opts.Env = mergeEnvValues(imageRuntimeConfig.Env, configEnv, fileEnv, []string(env))
 	if len(labels) > 0 {
 		if opts.Labels == nil {
@@ -447,7 +457,7 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 		Stderr: io.MultiWriter(stderr, combinedLog),
 		OnStart: func(pid int) error {
 			if opts.NetworkMode == "bridge" {
-				if _, err := boxrnetwork.Join(opts.NetworkName, pid, record.ID); err != nil {
+				if _, err := boxrnetwork.Join(opts.NetworkName, pid, record.ID, opts.PublishedPorts...); err != nil {
 					return fmt.Errorf("attach bridge network %q: %w", opts.NetworkName, err)
 				}
 			}
@@ -516,6 +526,7 @@ type runPlan struct {
 	OverlayConfigured    bool     `json:"overlayConfigured"`
 	NetworkMode          string   `json:"networkMode"`
 	NetworkName          string   `json:"networkName,omitempty"`
+	PublishedPorts       []container.PortMapping `json:"publishedPorts,omitempty"`
 	MemoryLimitBytes     int64    `json:"memoryLimitBytes,omitempty"`
 	MemoryHighBytes      int64    `json:"memoryHighBytes,omitempty"`
 	CPUs                 float64  `json:"cpus,omitempty"`
@@ -563,7 +574,7 @@ func buildRunPlan(command []string, opts container.Options) runPlan {
 				return "host"
 			}
 			return opts.NetworkMode
-		}(), NetworkName: opts.NetworkName, MemoryLimitBytes: opts.MemoryLimitBytes,
+		}(), NetworkName: opts.NetworkName, PublishedPorts: normalizePublishedPorts(opts.PublishedPorts), MemoryLimitBytes: opts.MemoryLimitBytes,
 		MemoryHighBytes: opts.MemoryHighBytes, CPUs: opts.CPUs, CPUWeight: opts.CPUWeight,
 		IOWeight: opts.IOWeight, PIDsLimit: opts.PidsLimit, BindMountCount: len(opts.BindMounts),
 		TmpfsMountCount: len(opts.TmpfsMounts), EnvironmentKeys: envKeys, EnvironmentValues: "redacted",
@@ -4343,6 +4354,57 @@ func runLogs(args []string, stdout, stderr io.Writer) int {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+func parsePortMapping(value string) (container.PortMapping, error) {
+	var mapping container.PortMapping
+	if strings.TrimSpace(value) != value || value == "" || strings.ContainsAny(value, " \t\r\n") {
+		return mapping, fmt.Errorf("expected [HOST_IP:]HOST_PORT:CONTAINER_PORT[/tcp|udp]")
+	}
+	portPart := value
+	if strings.Count(value, "/") > 1 {
+		return mapping, fmt.Errorf("expected at most one /protocol suffix")
+	}
+	if strings.Contains(value, "/") {
+		var ok bool
+		portPart, mapping.Protocol, ok = strings.Cut(value, "/")
+		if !ok || mapping.Protocol == "" {
+			return mapping, fmt.Errorf("protocol suffix must be tcp or udp")
+		}
+	}
+	parts := strings.Split(portPart, ":")
+	if len(parts) == 2 {
+		mapping.HostIP = "0.0.0.0"
+	} else if len(parts) == 3 {
+		mapping.HostIP = parts[0]
+	} else {
+		return mapping, fmt.Errorf("expected [HOST_IP:]HOST_PORT:CONTAINER_PORT[/tcp|udp]")
+	}
+	parsePort := func(label, text string) (uint16, error) {
+		value, err := strconv.ParseUint(text, 10, 16)
+		if err != nil || value == 0 {
+			return 0, fmt.Errorf("%s must be a port from 1 to 65535", label)
+		}
+		return uint16(value), nil
+	}
+	var err error
+	if mapping.HostPort, err = parsePort("host port", parts[len(parts)-2]); err != nil {
+		return mapping, err
+	}
+	if mapping.ContainerPort, err = parsePort("container port", parts[len(parts)-1]); err != nil {
+		return mapping, err
+	}
+	return mapping.Normalize()
+}
+
+func normalizePublishedPorts(mappings []container.PortMapping) []container.PortMapping {
+	result := make([]container.PortMapping, 0, len(mappings))
+	for _, mapping := range mappings {
+		if normalized, err := mapping.Normalize(); err == nil {
+			result = append(result, normalized)
+		}
+	}
+	return result
 }
 
 func parseVolumeMount(value string) (string, container.BindMount, error) {
