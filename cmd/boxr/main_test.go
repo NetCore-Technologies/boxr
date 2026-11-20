@@ -3692,3 +3692,36 @@ func TestDockerStyleImageAliasesBuildListTagAndRemove(t *testing.T) {
 		t.Fatalf("removing one tag damaged shared image content: %v", err)
 	}
 }
+
+
+func TestContainerNamespaceRoutesDockerStyleLifecycleCommands(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+	record, err := state.Create("namespace-test", []string{"/bin/true"}, container.Options{}, map[string]string{"suite": "container-namespace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.RemoveCreated(record.ID)
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"container", "ps", "--all", "--format", "json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("container ps returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), record.ID) {
+		t.Fatalf("container ps omitted created record %s: %q", record.ID, stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"container", "inspect", record.ID}, &stdout, &stderr); code != 0 {
+		t.Fatalf("container inspect returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "namespace-test") || !strings.Contains(stdout.String(), "created") {
+		t.Fatalf("container inspect omitted record metadata: %q", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"container", "unknown"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("unknown container action returned %d, want 2", code)
+	}
+}
