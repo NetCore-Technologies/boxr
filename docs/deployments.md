@@ -60,6 +60,15 @@ boxr deploy pull --platform linux/arm64 --authfile ~/.docker/config.json boxr.de
 ```
 
 The pull command walks services in deterministic order, skips services without image references, verifies images already in the local OCI store and downloads each unique missing registry reference once. It reuses the normal Boxr registry credential resolution and OCI/Docker layer verification path. A failed pull stops the prefetch operation before any service is started; successfully imported earlier images remain cached and can be reused on the next attempt. `deploy up` resolves each service image to the actual local tag and performs another integrity check before creating a service process.
+## Read deployment logs
+
+```sh
+boxr deploy logs --tail 100 sample-app
+boxr deploy logs --follow sample-app
+boxr deploy logs sample-app api
+```
+
+Stack logs are printed in dependency order with a `[service]` prefix on each line. `--tail` is applied independently to each service; `--tail 0` prints each recorded log in full. `--follow` continues polling the selected service log files until all selected services stop, drains their final output, and exits on Ctrl+C or SIGTERM. Supply a service name to restrict output to a single service. Logs contain application output written by the container; review application logging carefully before sharing it.
 ## Wait for a deployment
 
 ```sh

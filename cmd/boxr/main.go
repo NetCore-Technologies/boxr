@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1455,6 +1456,7 @@ Usage:
   boxr deploy pull [--platform linux/ARCH[/VARIANT]] [--authfile PATH] FILE.json
   boxr deploy up [--dry-run] FILE.json
   boxr deploy ps [--json] STACK
+  boxr deploy logs [--tail 100] [--follow] STACK [SERVICE]
   boxr deploy wait [--condition running|stopped] [--timeout 30s] [--interval 100ms] [--json] STACK
   boxr deploy down [--time 10s] [--remove] STACK
   boxr deploy example
@@ -2581,6 +2583,9 @@ var implementedFeatures = []string{
 	"base filesystems are safely extracted before context COPY operations",
 	"base environment variables inherit with deterministic key-based overrides",
 	"base entrypoint command working directory user and labels inherit with build overrides",
+	"stack-wide service-prefixed deployment logs",
+	"deployment logs filter by service name",
+	"follow mode streams and drains all service logs",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -2890,6 +2895,25 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, "No services found.")
 		}
 		return 0
+	case "logs":
+		flags := flag.NewFlagSet("deploy logs", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		tail := flags.Int("tail", 100, "number of trailing lines per service (0 means all)")
+		follow := flags.Bool("follow", false, "continue streaming output while services run")
+		interval := flags.Duration("interval", 200*time.Millisecond, "follow polling interval (10ms to 1m)")
+		if err := flags.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if (flags.NArg() != 1 && flags.NArg() != 2) || *tail < 0 || *interval < 10*time.Millisecond || *interval > time.Minute {
+			fmt.Fprintln(stderr, "Usage: boxr deploy logs [--tail 100] [--follow] [--interval 200ms] STACK [SERVICE]")
+			return 2
+		}
+		stack := flags.Arg(0)
+		service := ""
+		if flags.NArg() == 2 {
+			service = flags.Arg(1)
+		}
+		return runDeploymentLogs(stack, service, *tail, *follow, *interval, stdout, stderr)
 	case "wait":
 		flags := flag.NewFlagSet("deploy wait", flag.ContinueOnError)
 		flags.SetOutput(stderr)
@@ -3443,6 +3467,173 @@ func deploymentStatuses(records []state.Record) []deploymentStatus {
 		})
 	}
 	return statuses
+}
+
+type deploymentLogPrefixWriter struct {
+	service string
+	dst     io.Writer
+	pending []byte
+}
+
+func (w *deploymentLogPrefixWriter) Write(data []byte) (int, error) {
+	original := len(data)
+	w.pending = append(w.pending, data...)
+	for {
+		index := bytes.IndexByte(w.pending, '\n')
+		if index < 0 {
+			break
+		}
+		line := w.pending[:index+1]
+		if _, err := fmt.Fprintf(w.dst, "[%s] ", w.service); err != nil {
+			return 0, err
+		}
+		written, err := w.dst.Write(line)
+		if err != nil {
+			return 0, err
+		}
+		if written != len(line) {
+			return 0, io.ErrShortWrite
+		}
+		w.pending = w.pending[index+1:]
+	}
+	return original, nil
+}
+
+func (w *deploymentLogPrefixWriter) Flush() error {
+	if len(w.pending) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintf(w.dst, "[%s] ", w.service); err != nil {
+		return err
+	}
+	written, err := w.dst.Write(w.pending)
+	if err != nil {
+		return err
+	}
+	if written != len(w.pending) {
+		return io.ErrShortWrite
+	}
+	w.pending = nil
+	return nil
+}
+
+func runDeploymentLogs(stack, service string, tail int, follow bool, interval time.Duration, stdout, stderr io.Writer) int {
+	if tail < 0 || interval < 10*time.Millisecond || interval > time.Minute {
+		fmt.Fprintln(stderr, "boxr deploy logs: invalid tail or interval")
+		return 2
+	}
+	records, err := deploymentRecords(stack)
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr deploy logs: %v\n", err)
+		return 1
+	}
+	if service != "" {
+		filtered := make([]state.Record, 0, 1)
+		for _, record := range records {
+			if record.Labels[deploy.ServiceLabel] == service {
+				filtered = append(filtered, record)
+			}
+		}
+		records = filtered
+	}
+	if len(records) == 0 {
+		if service != "" {
+			fmt.Fprintf(stderr, "boxr deploy logs: no service %q found in deployment %q\n", service, stack)
+		} else {
+			fmt.Fprintf(stderr, "boxr deploy logs: deployment %q has no recorded services\n", stack)
+		}
+		return 1
+	}
+	writers := make(map[string]*deploymentLogPrefixWriter, len(records))
+	offsets := make(map[string]int64, len(records))
+	completed := make(map[string]bool, len(records))
+	for _, record := range records {
+		name := record.Labels[deploy.ServiceLabel]
+		writer := &deploymentLogPrefixWriter{service: name, dst: stdout}
+		writers[record.ID] = writer
+		data, offset, err := state.ReadLogsSnapshot(record.ID, tail)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr deploy logs: read service %s: %v\n", name, err)
+			return 1
+		}
+		if _, err := writer.Write(data); err != nil {
+			fmt.Fprintf(stderr, "boxr deploy logs: write service %s: %v\n", name, err)
+			return 1
+		}
+		offsets[record.ID] = offset
+		if !follow || record.Status != "running" {
+			if err := writer.Flush(); err != nil {
+				fmt.Fprintf(stderr, "boxr deploy logs: flush service %s: %v\n", name, err)
+				return 1
+			}
+			completed[record.ID] = true
+		}
+	}
+	if !follow {
+		return 0
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	flushPending := func() error {
+		for _, writer := range writers {
+			if err := writer.Flush(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for {
+		active := false
+		for _, record := range records {
+			if completed[record.ID] {
+				continue
+			}
+			current, err := state.Get(record.ID)
+			if err != nil {
+				if flushErr := writers[record.ID].Flush(); flushErr != nil {
+					fmt.Fprintf(stderr, "boxr deploy logs: flush service %s: %v\n", record.Labels[deploy.ServiceLabel], flushErr)
+					return 1
+				}
+				completed[record.ID] = true
+				continue
+			}
+			var chunk bytes.Buffer
+			next, err := state.CopyLogFrom(record.ID, offsets[record.ID], &chunk)
+			if err != nil {
+				fmt.Fprintf(stderr, "boxr deploy logs: follow service %s: %v\n", record.Labels[deploy.ServiceLabel], err)
+				return 1
+			}
+			offsets[record.ID] = next
+			if _, err := writers[record.ID].Write(chunk.Bytes()); err != nil {
+				fmt.Fprintf(stderr, "boxr deploy logs: write service %s: %v\n", record.Labels[deploy.ServiceLabel], err)
+				return 1
+			}
+			if current.Status == "running" {
+				active = true
+				continue
+			}
+			if err := writers[record.ID].Flush(); err != nil {
+				fmt.Fprintf(stderr, "boxr deploy logs: flush service %s: %v\n", record.Labels[deploy.ServiceLabel], err)
+				return 1
+			}
+			completed[record.ID] = true
+		}
+		if !active {
+			return 0
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			if err := flushPending(); err != nil {
+				fmt.Fprintf(stderr, "boxr deploy logs: flush remaining output: %v\n", err)
+				return 1
+			}
+			return 130
+		case <-timer.C:
+		}
+	}
 }
 
 type deploymentWaitResult struct {

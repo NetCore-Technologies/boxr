@@ -825,6 +825,108 @@ func TestDeploymentWaitConditionHandlesEmptyStacksAndInvalidStates(t *testing.T)
 	}
 }
 
+
+func TestDeployLogsPrefixesServicesAndFiltersByName(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	create := func(service, name, content string, order int) state.Record {
+		t.Helper()
+		record, err := state.Create(name, []string{"/bin/service"}, container.Options{}, map[string]string{
+			deploy.StackLabel: "logs-stack",
+			deploy.ServiceLabel: service,
+			deploy.OrderLabel: strconv.Itoa(order),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		logFile, err := state.OpenLog(record.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := logFile.WriteString(content); err != nil {
+			t.Fatal(err)
+		}
+		if err := logFile.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+	create("database", "logs-database", "db ready\ndb accepting\n", 0)
+	create("api", "logs-api", "api booting\napi serving\n", 1)
+	var out, errOut bytes.Buffer
+	if code := run([]string{"deploy", "logs", "--tail", "1", "logs-stack"}, &out, &errOut); code != 0 {
+		t.Fatalf("deploy logs: code=%d stderr=%q", code, errOut.String())
+	}
+	want := "[database] db accepting\n[api] api serving\n"
+	if out.String() != want {
+		t.Fatalf("stack logs = %q, want %q", out.String(), want)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"deploy", "logs", "logs-stack", "api"}, &out, &errOut); code != 0 {
+		t.Fatalf("deploy logs service filter: code=%d stderr=%q", code, errOut.String())
+	}
+	if out.String() != "[api] api booting\n[api] api serving\n" {
+		t.Fatalf("filtered logs = %q", out.String())
+	}
+}
+
+func TestDeployLogsFollowDrainsFinalServiceOutput(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	record, err := state.Create("logs-follow-api", []string{"/bin/service"}, container.Options{}, map[string]string{
+		deploy.StackLabel: "logs-follow-stack",
+		deploy.ServiceLabel: "api",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, 501); err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := state.OpenLog(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := logFile.WriteString("initial output\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = logFile.Close()
+	type followResult struct {
+		code int
+		out  string
+		err  string
+	}
+	done := make(chan followResult, 1)
+	go func() {
+		var out, errOut bytes.Buffer
+		code := run([]string{"deploy", "logs", "--follow", "--tail", "0", "--interval", "10ms", "logs-follow-stack"}, &out, &errOut)
+		done <- followResult{code: code, out: out.String(), err: errOut.String()}
+	}()
+	time.Sleep(25 * time.Millisecond)
+	logFile, err = state.OpenLog(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := logFile.WriteString("final output\npartial"); err != nil {
+		t.Fatal(err)
+	}
+	_ = logFile.Close()
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-done:
+		if result.code != 0 {
+			t.Fatalf("deploy logs --follow returned %d: %q", result.code, result.err)
+		}
+		if result.out != "[api] initial output\n[api] final output\n[api] partial" {
+			t.Fatalf("followed log output = %q", result.out)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("deploy logs --follow did not finish after the service exited")
+	}
+}
+
 func TestVersionJSONOutput(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run([]string{"version", "--json"}, &out, &errOut); code != 0 {

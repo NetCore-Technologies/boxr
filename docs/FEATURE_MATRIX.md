@@ -612,3 +612,6 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 604. base filesystems are safely extracted before context COPY operations
 605. base environment variables inherit with deterministic key-based overrides
 606. base entrypoint command working directory user and labels inherit with build overrides
+607. stack-wide service-prefixed deployment logs
+608. deployment logs filter by service name
+609. follow mode streams and drains all service logs
