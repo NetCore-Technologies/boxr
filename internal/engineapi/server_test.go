@@ -1175,3 +1175,56 @@ func TestDockerContainerRestartUsesBoundedNativeRestartCommand(t *testing.T) {
 		}
 	}
 }
+
+
+func TestEngineAPIContainerDeleteForceUsesNativeSafeRemoval(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("force-delete-restart", []string{"/bin/true"}, container.Options{
+		RestartPolicy: "always",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.PrepareRestart(record.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	response := engineAPIRequest(server, http.MethodDelete, "/v1.45/containers/"+record.ID)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("delete without force status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	originalLauncher := launchEngineAPICreatedContainer
+	var launchedExecutable string
+	var launchedArgs []string
+	launchEngineAPICreatedContainer = func(executable string, args []string) (string, string, error) {
+		launchedExecutable = executable
+		launchedArgs = append([]string(nil), args...)
+		if err := state.RequestStop(record.ID); err != nil {
+			return "", "", err
+		}
+		if err := state.Remove(record.ID); err != nil {
+			return "", "", err
+		}
+		return "", "", nil
+	}
+	t.Cleanup(func() { launchEngineAPICreatedContainer = originalLauncher })
+
+	response = engineAPIRequest(server, http.MethodDelete, "/v1.45/containers/"+record.ID+"?force=true")
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("forced delete status=%d body=%s", response.Code, response.Body.String())
+	}
+	if launchedExecutable == "" || len(launchedArgs) != 3 ||
+		launchedArgs[0] != "rm" || launchedArgs[1] != "--force" || launchedArgs[2] != record.ID {
+		t.Fatalf("forced delete command executable=%q args=%#v", launchedExecutable, launchedArgs)
+	}
+	if _, err := state.Get(record.ID); err == nil {
+		t.Fatal("container record remains after forced Engine API delete")
+	}
+}
