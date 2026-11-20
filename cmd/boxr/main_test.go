@@ -693,6 +693,34 @@ func TestDeploymentTargetPlatformValidation(t *testing.T) {
 	}
 }
 
+
+func TestDeploymentReadinessProbeIsSelectedByProcessService(t *testing.T) {
+	databaseProbe := &deploy.ReadinessProbe{TCPAddress: "127.0.0.1:5432", Attempts: 1}
+	apiProbe := &deploy.ReadinessProbe{HTTPURL: "http://127.0.0.1:8080/healthz", Attempts: 2}
+	file := deploy.File{
+		Version: 1,
+		Services: map[string]deploy.Service{
+			"database": {Command: []string{"/bin/true"}, Readiness: databaseProbe},
+			"api":      {Command: []string{"/bin/true"}, Readiness: apiProbe},
+		},
+	}
+	process := &deploymentProcess{service: "api"}
+	got, err := deploymentReadinessForProcess(file, process)
+	if err != nil {
+		t.Fatalf("resolve readiness probe: %v", err)
+	}
+	if got != apiProbe {
+		t.Fatalf("readiness probe = %#v, want API probe %#v", got, apiProbe)
+	}
+}
+
+func TestDeploymentReadinessRejectsUnknownProcessService(t *testing.T) {
+	_, err := deploymentReadinessForProcess(deploy.File{Services: map[string]deploy.Service{}}, &deploymentProcess{service: "missing"})
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("expected unknown service error, got %v", err)
+	}
+}
+
 func TestVersionJSONOutput(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run([]string{"version", "--json"}, &out, &errOut); code != 0 {

@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 594 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 596 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -600,3 +600,5 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 592. readiness retries honor supervisor cancellation and startup deadlines
 593. secret-redacted readiness metadata in deployment plans
 594. readiness validation accounts for mandatory network-isolating security profiles
+595. dependent service startup waits for configured readiness probes
+596. parallel service waves select readiness probes by service identity

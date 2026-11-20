@@ -2568,6 +2568,8 @@ var implementedFeatures = []string{
 	"readiness retries honor supervisor cancellation and startup deadlines",
 	"secret-redacted readiness metadata in deployment plans",
 	"readiness validation accounts for mandatory network-isolating security profiles",
+	"dependent service startup waits for configured readiness probes",
+	"parallel service waves select readiness probes by service identity",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -3035,6 +3037,17 @@ func waitForDeploymentStart(ctx context.Context, name string, timeout time.Durat
 
 // waitForDeploymentReadiness races the probe against supervisor cancellation
 // and service exits so a failed sibling cannot remain hidden behind a slow probe.
+func deploymentReadinessForProcess(file deploy.File, process *deploymentProcess) (*deploy.ReadinessProbe, error) {
+	if process == nil {
+		return nil, fmt.Errorf("deployment process is required")
+	}
+	service, exists := file.Services[process.service]
+	if !exists {
+		return nil, fmt.Errorf("deployment service %q does not exist", process.service)
+	}
+	return service.Readiness, nil
+}
+
 func waitForDeploymentReadiness(ctx context.Context, name string, probe *deploy.ReadinessProbe, exits <-chan deploymentProcessExit) (*deploymentProcessExit, error) {
 	if probe == nil {
 		return nil, nil
@@ -3248,7 +3261,13 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 		}
 		// Launch all services in a dependency wave before waiting for any one.
 		for _, process := range groupProcesses {
-			_, unexpectedExit, err := waitForDeploymentStart(ctx, process.name, startTimeout, file.Services[process.service].Readiness, exits)
+			probe, probeErr := deploymentReadinessForProcess(file, process)
+			if probeErr != nil {
+				fmt.Fprintf(stderr, "boxr deploy up: %v\n", probeErr)
+				stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
+				return 1
+			}
+			_, unexpectedExit, err := waitForDeploymentStart(ctx, process.name, startTimeout, probe, exits)
 			if unexpectedExit != nil {
 				exited[unexpectedExit.service] = *unexpectedExit
 			}
