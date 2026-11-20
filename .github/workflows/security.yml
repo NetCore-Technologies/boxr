@@ -1,5 +1,9 @@
 name: Security
 
+# CodeQL scanning is managed by this repository's default setup. This workflow
+# verifies Go module integrity and known vulnerabilities without registering a
+# conflicting advanced CodeQL configuration.
+
 on:
   push:
     branches: [main]
@@ -11,7 +15,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   vulnerability-scan:
@@ -27,30 +30,9 @@ jobs:
           go-version: "1.27.x"
           cache: true
 
+      - name: Verify downloaded Go modules
+        run: go mod verify
+
       - name: Run govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
 
-  codeql:
-    name: CodeQL
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v7
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
-        with:
-          languages: go
-          build-mode: manual
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: "1.27.x"
-          cache: true
-
-      - name: Build
-        run: go build ./cmd/boxr
-
-      - name: Analyze
-        uses: github/codeql-action/analyze@v4
