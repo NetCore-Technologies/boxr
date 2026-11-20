@@ -530,8 +530,11 @@ func (s *Server) handleContainerDelete(writer http.ResponseWriter, request *http
 			writeError(writer, http.StatusConflict, fmt.Errorf("force remove container: %s", message))
 			return
 		}
-		if _, err := state.Get(record.ID); err == nil {
+		if _, verifyErr := state.Get(record.ID); verifyErr == nil {
 			writeError(writer, http.StatusInternalServerError, fmt.Errorf("forced removal command returned without removing container %s", record.ID))
+			return
+		} else if !strings.Contains(verifyErr.Error(), "no container matches") {
+			writeError(writer, http.StatusInternalServerError, fmt.Errorf("verify forced container removal: %w", verifyErr))
 			return
 		}
 		writer.WriteHeader(http.StatusNoContent)
