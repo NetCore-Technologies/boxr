@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 587 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 593 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -593,3 +593,9 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 585. canonical local image reference resolution before service start
 586. deployment pull validates cached image architecture and variant
 587. image-backed service startup enforces the host Linux platform
+588. deployment TCP readiness probes for loopback services
+589. deployment HTTP readiness probes for loopback services
+590. readiness targets reject non-loopback destinations and URL credentials
+591. readiness probe intervals timeouts attempts and status codes are bounded
+592. readiness retries honor supervisor cancellation and startup deadlines
+593. secret-redacted readiness metadata in deployment plans
