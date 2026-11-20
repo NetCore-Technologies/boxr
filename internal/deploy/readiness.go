@@ -101,9 +101,6 @@ func (p ReadinessProbe) Validate() error {
 	if p.Attempts < 0 || p.Attempts > maxReadinessAttempts {
 		return fmt.Errorf("attempts must be 0 (default) or between 1 and %d", maxReadinessAttempts)
 	}
-	if p.Attempts == 0 && p.IntervalMS < 0 {
-		return fmt.Errorf("invalid default probe settings")
-	}
 	if p.ExpectedStatus != 0 && (p.ExpectedStatus < 200 || p.ExpectedStatus > 399) {
 		return fmt.Errorf("expectedStatus must be 0 (default) or an HTTP status from 200 to 399")
 	}
@@ -111,12 +108,12 @@ func (p ReadinessProbe) Validate() error {
 }
 
 func validateLoopbackHost(host string) error {
-	if strings.EqualFold(host, "localhost") {
-		return nil
-	}
+	// Accept numeric loopback addresses only. Resolving arbitrary hostnames,
+	// including localhost aliases, would make the target depend on host DNS
+	// or hosts-file configuration and weaken the loopback-only guarantee.
 	address := net.ParseIP(host)
 	if address == nil || !address.IsLoopback() {
-		return fmt.Errorf("only localhost or a loopback IP address is allowed")
+		return fmt.Errorf("only a loopback IP address is allowed")
 	}
 	return nil
 }
