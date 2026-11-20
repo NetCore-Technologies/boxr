@@ -34,6 +34,7 @@ var (
 	stackNamePattern      = regexp.MustCompile("^[a-z0-9][a-z0-9_-]{0,31}$")
 	serviceNamePattern    = regexp.MustCompile("^[a-z0-9][a-z0-9_-]{0,62}$")
 	imageReferencePattern = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$")
+	profileNamePattern    = regexp.MustCompile("^[a-z0-9][a-z0-9_-]{0,62}$")
 )
 
 // File is a versioned deployment manifest. Each service maps to one Boxr
@@ -57,6 +58,7 @@ type Service struct {
 	Options   container.Options `json:"options"`
 	DependsOn []string          `json:"dependsOn,omitempty"`
 	Volumes   []VolumeMount     `json:"volumes,omitempty"`
+	Profiles  []string          `json:"profiles,omitempty"`
 	Readiness *ReadinessProbe   `json:"readiness,omitempty"`
 }
 
@@ -67,6 +69,7 @@ type ServicePlan struct {
 	ContainerName         string        `json:"containerName,omitempty"`
 	Image                 string        `json:"image,omitempty"`
 	DependsOn             []string      `json:"dependsOn,omitempty"`
+	Profiles              []string      `json:"profiles,omitempty"`
 	ReadinessType         string        `json:"readinessType,omitempty"`
 	Volumes               []VolumeMount `json:"volumes,omitempty"`
 	NetworkMode           string        `json:"networkMode"`
@@ -89,6 +92,7 @@ type Plan struct {
 	Name           string        `json:"name,omitempty"`
 	ExecutionOrder []string      `json:"executionOrder"`
 	StartGroups    [][]string    `json:"startGroups"`
+	Profiles       []string      `json:"profiles,omitempty"`
 	Services       []ServicePlan `json:"services"`
 }
 
@@ -122,7 +126,78 @@ func Load(path string) (File, error) {
 
 // BuildPlan validates every service and computes a stable topological ordering.
 // The returned plan is safe to print: secrets and command arguments are omitted.
+// BuildPlan validates the complete manifest and plans only services that do
+// not opt into a profile. Profile-bound services are inactive until selected.
 func BuildPlan(file File) (Plan, error) {
+	return BuildPlanWithProfiles(file, nil)
+}
+
+// BuildPlanWithProfiles validates every service before selecting the active
+// profile set. Services without profiles are always included; a profiled
+// service is included when any of its profiles is selected. Dependencies on
+// omitted services are rejected by the final graph validation.
+func BuildPlanWithProfiles(file File, selectedProfiles []string) (Plan, error) {
+	if _, err := buildPlan(file); err != nil {
+		return Plan{}, err
+	}
+
+	selected := make(map[string]struct{}, len(selectedProfiles))
+	for _, profile := range selectedProfiles {
+		if !profileNamePattern.MatchString(profile) {
+			return Plan{}, fmt.Errorf("invalid profile name %q", profile)
+		}
+		if _, exists := selected[profile]; exists {
+			return Plan{}, fmt.Errorf("profile %q was selected more than once", profile)
+		}
+		selected[profile] = struct{}{}
+	}
+
+	available := make(map[string]struct{})
+	for _, service := range file.Services {
+		for _, profile := range service.Profiles {
+			available[profile] = struct{}{}
+		}
+	}
+	for profile := range selected {
+		if _, exists := available[profile]; !exists {
+			return Plan{}, fmt.Errorf("unknown deployment profile %q", profile)
+		}
+	}
+
+	filtered := File{Version: file.Version, Name: file.Name, Services: make(map[string]Service)}
+	for name, service := range file.Services {
+		active := len(service.Profiles) == 0
+		if !active {
+			for _, profile := range service.Profiles {
+				if _, exists := selected[profile]; exists {
+					active = true
+					break
+				}
+			}
+		}
+		if active {
+			filtered.Services[name] = service
+		}
+	}
+	if len(filtered.Services) == 0 {
+		return Plan{}, fmt.Errorf("deployment has no active services; select a profile with --profile")
+	}
+
+	plan, err := buildPlan(filtered)
+	if err != nil {
+		return plan, err
+	}
+	if len(selected) > 0 {
+		plan.Profiles = make([]string, 0, len(selected))
+		for profile := range selected {
+			plan.Profiles = append(plan.Profiles, profile)
+		}
+		sort.Strings(plan.Profiles)
+	}
+	return plan, nil
+}
+
+func buildPlan(file File) (Plan, error) {
 	plan := Plan{Version: file.Version, Name: file.Name}
 	if file.Version != 1 {
 		return plan, fmt.Errorf("unsupported deployment version %d (supported: 1)", file.Version)
@@ -154,6 +229,16 @@ func BuildPlan(file File) (Plan, error) {
 
 	for _, name := range names {
 		service := file.Services[name]
+		seenProfiles := make(map[string]struct{}, len(service.Profiles))
+		for _, profile := range service.Profiles {
+			if !profileNamePattern.MatchString(profile) {
+				return plan, fmt.Errorf("service %q has invalid profile name %q", name, profile)
+			}
+			if _, exists := seenProfiles[profile]; exists {
+				return plan, fmt.Errorf("service %q repeats profile %q", name, profile)
+			}
+			seenProfiles[profile] = struct{}{}
+		}
 		if service.Image == "" {
 			if len(service.Command) == 0 {
 				return plan, fmt.Errorf("service %q must define an image or a command", name)
@@ -272,6 +357,7 @@ func BuildPlan(file File) (Plan, error) {
 			ContainerName:         containerName,
 			Image:                 service.Image,
 			DependsOn:             deps,
+			Profiles:              append([]string(nil), service.Profiles...),
 			ReadinessType:         readinessType,
 			Volumes:               append([]VolumeMount(nil), service.Volumes...),
 			NetworkMode:           networkMode,
