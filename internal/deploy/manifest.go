@@ -173,6 +173,15 @@ func Load(path string) (File, error) {
 	if len(data) > MaxManifestBytes {
 		return result, fmt.Errorf("deployment manifest exceeds %d bytes", MaxManifestBytes)
 	}
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return result, fmt.Errorf("deployment manifest is empty")
+	}
+	extension := strings.ToLower(filepath.Ext(path))
+	if extension == ".yaml" || extension == ".yml" || trimmed[0] != '{' {
+		return decodeCompose(data, path)
+	}
+
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&result); err != nil {
