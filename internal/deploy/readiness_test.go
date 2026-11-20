@@ -119,7 +119,7 @@ func TestReadinessProbeRejectsUnsafeAndUnboundedTargets(t *testing.T) {
 }
 
 func TestReadinessProbeDefaultsAreBounded(t *testing.T) {
-	probe := &ReadinessProbe{TCPAddress: "localhost:12345"}
+	probe := &ReadinessProbe{TCPAddress: "127.0.0.1:12345"}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	err := WaitForReadiness(ctx, probe)
