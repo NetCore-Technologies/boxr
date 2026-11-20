@@ -2520,11 +2520,11 @@ func runKill(args []string, stdout, stderr io.Writer) int {
 }
 
 type waitResult struct {
-	ID        string        `json:"id"`
-	Condition string        `json:"condition"`
-	Status    string        `json:"status"`
-	ExitCode  *int          `json:"exitCode,omitempty"`
-	WaitedMS  int64         `json:"waitedMs"`
+	ID        string `json:"id"`
+	Condition string `json:"condition"`
+	Status    string `json:"status"`
+	ExitCode  *int   `json:"exitCode,omitempty"`
+	WaitedMS  int64  `json:"waitedMs"`
 }
 
 func runWait(args []string, stdout, stderr io.Writer) int {
