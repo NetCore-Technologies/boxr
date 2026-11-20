@@ -182,8 +182,9 @@ func BuildPlan(file File) (Plan, error) {
 			if err := service.Readiness.Validate(); err != nil {
 				return plan, fmt.Errorf("service %q has invalid readiness probe: %w", name, err)
 			}
-			if service.Options.NetworkMode == "none" {
-				return plan, fmt.Errorf("service %q must use host networking for a loopback readiness probe", name)
+			securityProfile := strings.ToLower(strings.TrimSpace(service.Options.SecurityProfile))
+			if service.Options.NetworkMode == "none" || securityProfile == "restricted" || securityProfile == "untrusted" {
+				return plan, fmt.Errorf("service %q must use a host-networking security profile for a loopback readiness probe", name)
 			}
 			readinessType = service.Readiness.Type()
 		}
