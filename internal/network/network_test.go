@@ -540,7 +540,7 @@ func TestLeaveKeepsIPAMReservationUntilPublishedRulesAreRemoved(t *testing.T) {
 	if _, err := JoinWithRunner(context.Background(), "frontend", 3326, "container-cleanup", &fakeRunner{}, mapping); err != nil {
 		t.Fatal(err)
 	}
-	failing := &fakeRunner{failAt: 1, failMessage: "firewall backend unavailable"}
+	failing := &fakeRunner{failAt: 2, failMessage: "firewall backend unavailable"}
 	if err := LeaveWithRunner(context.Background(), "frontend", "container-cleanup", failing); err == nil {
 		t.Fatal("published port cleanup failure unexpectedly succeeded")
 	}
