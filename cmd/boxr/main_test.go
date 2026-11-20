@@ -26,6 +26,7 @@ import (
 	"github.com/manit6752025/boxr/internal/container"
 	"github.com/manit6752025/boxr/internal/deploy"
 	imageStore "github.com/manit6752025/boxr/internal/image"
+	boxrnetwork "github.com/manit6752025/boxr/internal/network"
 	"github.com/manit6752025/boxr/internal/rootfs"
 	"github.com/manit6752025/boxr/internal/state"
 	"github.com/manit6752025/boxr/internal/volume"
@@ -3033,6 +3034,73 @@ func TestNetworkDisconnectDetachesRunningPrivateNamespace(t *testing.T) {
 func TestVerifyContainerRuntimePIDRejectsNonBoxrProcess(t *testing.T) {
 	if err := verifyContainerRuntimePID(os.Getpid()); err == nil {
 		t.Fatal("test process unexpectedly passed Boxr helper PID verification")
+	}
+}
+
+func TestNetworkPruneDefaultsToDryRunAndKeepsLiveLeases(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	runner := boxrnetwork.RunnerFunc(func(context.Context, string, ...string) error { return nil })
+	if _, err := boxrnetwork.CreateWithRunner(context.Background(), "stale-net", boxrnetwork.CreateOptions{
+		Subnet: "172.30.90.0/24",
+	}, runner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := boxrnetwork.JoinWithRunner(context.Background(), "stale-net", 5101, "stale-container", runner); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"network", "prune"}, &out, &errOut); code != 0 {
+		t.Fatalf("network prune dry-run returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	for _, expected := range []string{"DRY RUN", "stale-net/stale-container", "172.30.90.2", "network prune --force"} {
+		if !strings.Contains(out.String(), expected) {
+			t.Errorf("network prune dry-run missing %q: %s", expected, out.String())
+		}
+	}
+	summary, err := boxrnetwork.Inspect("stale-net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ContainerCount != 1 {
+		t.Fatalf("dry-run mutated IPAM leases: %+v", summary)
+	}
+}
+
+func TestNetworkPruneForceInvokesOwnershipCheckedCleanup(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", t.TempDir())
+	oldPrune := pruneManagedNetworkAttachments
+	t.Cleanup(func() { pruneManagedNetworkAttachments = oldPrune })
+	called := false
+	pruneManagedNetworkAttachments = func(live map[string]struct{}) (boxrnetwork.PruneReport, error) {
+		called = true
+		if len(live) != 0 {
+			t.Fatalf("unexpected live container set: %#v", live)
+		}
+		return boxrnetwork.PruneReport{AttachmentsRemoved: 2, AddressesReleased: 2, PublishedPortsRemoved: 3}, nil
+	}
+	var out, errOut bytes.Buffer
+	code := run([]string{"network", "prune", "--force"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("network prune --force returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	if !called || !strings.Contains(out.String(), "removed attachments: 2") ||
+		!strings.Contains(out.String(), "released IPv4 addresses: 2") ||
+		!strings.Contains(out.String(), "removed published ports: 3") {
+		t.Fatalf("prune result not reported: called=%v stdout=%q", called, out.String())
+	}
+}
+
+func TestNetworkPruneRejectsConflictingModes(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := run([]string{"network", "prune", "--dry-run", "--force"}, &out, &errOut)
+	if code != 2 || !strings.Contains(errOut.String(), "Usage: boxr network prune") {
+		t.Fatalf("conflicting prune modes returned %d: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+}
+
+func TestContainerNamespaceHelperAliveRejectsTestProcess(t *testing.T) {
+	if containerNamespaceHelperAlive(os.Getpid()) {
+		t.Fatal("ordinary test process was incorrectly counted as a live Boxr namespace helper")
 	}
 }
 
