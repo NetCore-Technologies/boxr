@@ -800,10 +800,46 @@ func LeaveWithRunner(ctx context.Context, networkName, containerID string, runne
 	if index < 0 {
 		return fmt.Errorf("network %q does not exist", networkName)
 	}
+	return leaveFromStore(ctx, runner, &current, dir, index, containerID)
+}
+
+// LeaveAll disconnects a container from every managed bridge network. It is
+// intended for the runtime exit hook, including containers attached later with
+// "boxr network connect".
+func LeaveAll(containerID string) error {
+	return LeaveAllWithRunner(context.Background(), containerID, commandRunner{})
+}
+
+// LeaveAllWithRunner is LeaveAll with an injectable host command executor.
+func LeaveAllWithRunner(ctx context.Context, containerID string, runner Runner) error {
+	if runner == nil {
+		return fmt.Errorf("network command runner is required")
+	}
+	if strings.TrimSpace(containerID) == "" || strings.ContainsAny(containerID, "/\\\x00") {
+		return fmt.Errorf("valid container ID is required")
+	}
+	unlock, err := lockStore()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	current, dir, err := loadStore()
+	if err != nil {
+		return err
+	}
+	for index := range current.Networks {
+		if _, exists := current.Networks[index].Allocations[containerID]; exists {
+			return leaveFromStore(ctx, runner, &current, dir, index, containerID)
+		}
+	}
+	return nil
+}
+
+func leaveFromStore(ctx context.Context, runner Runner, current *store, dir string, index int, containerID string) error {
 	network := &current.Networks[index]
 	address, exists := network.Allocations[containerID]
 	if !exists {
-		return fmt.Errorf("container %q has no allocation on network %q", containerID, networkName)
+		return fmt.Errorf("container %q has no allocation on network %q", containerID, network.Name)
 	}
 	mappings := append([]PortMapping(nil), network.Published[containerID]...)
 	for _, mapping := range mappings {
@@ -813,11 +849,11 @@ func LeaveWithRunner(ctx context.Context, networkName, containerID string, runne
 	}
 	hostVeth, _ := vethNames(containerID)
 	if err := runner.Run(ctx, "ip", "link", "del", "dev", hostVeth); err != nil && !missingNetworkInterface(err) {
-		return fmt.Errorf("disconnect container from network %q: %w", networkName, err)
+		return fmt.Errorf("disconnect container from network %q: %w", network.Name, err)
 	}
 	delete(network.Allocations, containerID)
 	delete(network.Published, containerID)
-	return saveStore(dir, current)
+	return saveStore(dir, *current)
 }
 
 // List returns networks sorted by name without exposing allocation identities.
