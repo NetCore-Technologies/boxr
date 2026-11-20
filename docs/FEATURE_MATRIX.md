@@ -4,6 +4,7 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 
 **Inventory size: 851 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
+
 ## Implemented capabilities
 
 001. help and usage
@@ -851,9 +852,10 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 843. top-level images command lists the verified local image store using Docker-style output flags
 844. top-level tag command creates local image aliases without copying content-addressed blobs
 845. top-level rmi command removes unused local image tags while preserving shared content-addressed blobs
-842. native create command records a verified image-backed container without starting it
-843. native start command launches a created image-backed container through the detached supervisor
-844. native start restarts stopped image-backed containers and clears stale manual-stop intent
-845. Engine API start restarts stopped image-backed containers through the native detached supervisor
-846. native restart performs a bounded graceful stop then starts the same image-backed container again
-847. Docker Engine API POST containers restart runs the bounded native restart workflow
+846. container namespace exposes Docker-style lifecycle subcommands through the native verified Boxr operations
+847. native create command records a verified image-backed container without starting it
+848. native start command launches a created image-backed container through the detached supervisor
+849. native start command restarts stopped image-backed containers through the detached supervisor
+850. native restart command stops then starts an image-backed container with a bounded graceful timeout
+851. Engine API start endpoint restarts stopped image-backed containers through the native detached supervisor
+852. Engine API restart endpoint performs a bounded graceful stop and launches the same saved container again
