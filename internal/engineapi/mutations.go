@@ -57,7 +57,7 @@ type dockerHostConfig struct {
 	PortBindings      map[string][]dockerPortBinding `json:"PortBindings"`
 	Privileged        bool                          `json:"Privileged"`
 	ReadonlyRootfs    bool                          `json:"ReadonlyRootfs"`
-	RestartPolicy     dockerRestartPolicy           `json:"RestartPolicy"`
+	RestartPolicy     dockerRestartPolicyConfig           `json:"RestartPolicy"`
 	AutoRemove        bool                          `json:"AutoRemove"`
 	CapAdd            []string                      `json:"CapAdd"`
 	CapDrop           []string                      `json:"CapDrop"`
@@ -74,7 +74,7 @@ type dockerPortBinding struct {
 	HostPort string `json:"HostPort"`
 }
 
-type dockerRestartPolicy struct {
+type dockerRestartPolicyConfig struct {
 	Name              string `json:"Name"`
 	MaximumRetryCount int    `json:"MaximumRetryCount"`
 }
