@@ -805,3 +805,12 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 797. Dockerfile ADD archive extraction applies rootfs path traversal link and special-file protections
 798. Dockerfile ADD archive extraction enforces bounded file counts and uncompressed byte limits
 799. Dockerfile ADD rejects remote URL and Git sources instead of silently fetching them
+800. deployment loader accepts a bounded single-document Docker Compose YAML file alongside strict JSON manifests
+801. Compose YAML rejects unknown fields duplicate mapping keys and multiple documents
+802. Compose services translate literal image references and safely tokenized command strings or arrays
+803. Compose environment maps and lists resolve pass-through keys and relative env_file paths
+804. Compose depends_on supports deterministic service_started dependency ordering
+805. Compose profiles labels working directories and hostnames map to Boxr deployment options
+806. Compose short-form IPv4 TCP and UDP port mappings map to Boxr published bridge ports
+807. Compose services attach only to explicit pre-created external Boxr bridge networks or explicit host/none modes
+808. unsupported Compose builds volumes implicit networks healthchecks TTY privileged mode and restart policies fail explicitly
