@@ -49,6 +49,9 @@ func (p ReadinessProbe) Type() string {
 func (p ReadinessProbe) Validate() error {
 	tcpAddress := strings.TrimSpace(p.TCPAddress)
 	httpURL := strings.TrimSpace(p.HTTPURL)
+	if tcpAddress != p.TCPAddress || httpURL != p.HTTPURL {
+		return fmt.Errorf("probe targets must not contain surrounding whitespace")
+	}
 	if (tcpAddress == "") == (httpURL == "") {
 		return fmt.Errorf("exactly one of tcpAddress or httpUrl must be set")
 	}
