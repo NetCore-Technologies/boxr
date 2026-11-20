@@ -175,7 +175,7 @@ Extraction rejects path traversal, escaping symlinks, duplicate paths, special d
 
 ## Build a local image safely
 
-Boxr includes a deliberately small, non-executing JSON image recipe. It supports a `scratch` base, explicit `COPY` operations, and runtime metadata. It does **not** execute shell commands, package managers or arbitrary build steps; use a separate build environment to produce binaries before copying them into an image.
+Boxr includes a deliberately small, non-executing JSON image recipe. It supports a `scratch` base or an already-present local OCI image, explicit `COPY` operations, and runtime metadata. A local base is fully integrity-verified and platform-checked before its filesystem is safely extracted; Boxr never performs an implicit network pull during a build. Pull a registry base explicitly with `boxr image pull REGISTRY/IMAGE:TAG` first. Child recipes inherit the base environment, entrypoint, command, working directory, user and labels; supplied child values override the base (environment and labels merge by key). The result is stored as one canonical Boxr rootfs layer, so original base-layer history is not retained. It does **not** execute shell commands, package managers or arbitrary build steps; use a separate build environment to produce binaries before copying them into an image.
 
 ```json
 {
@@ -194,7 +194,7 @@ Boxr includes a deliberately small, non-executing JSON image recipe. It supports
 }
 ```
 
-Save this as `Boxrfile.json`. An optional `.boxrignore` in the context supports comments, blank lines, basename/path globs and directory exclusions; negation rules are intentionally unsupported. For example:
+Save this as `Boxrfile.json`. To build on another image already in the local store, change `base` to a local tag such as `example/runtime:1`; run `boxr image pull REGISTRY/IMAGE:TAG` first for a registry image. A missing local base is an error rather than an implicit network pull. Omitted runtime fields inherit from the base, while child environment and labels override matching keys. An optional `.boxrignore` in the context supports comments, blank lines, basename/path globs and directory exclusions; negation rules are intentionally unsupported. For example:
 
 ```text
 # generated files and secrets never enter the image

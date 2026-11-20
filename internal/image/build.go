@@ -81,7 +81,9 @@ func ValidateBuildSpec(spec BuildSpec) error {
 		return fmt.Errorf("unsupported build spec version %d (expected 1)", spec.Version)
 	}
 	if spec.Base != "scratch" {
-		return fmt.Errorf("unsupported build base %q (only scratch is currently supported)", spec.Base)
+		if err := ValidateReference(spec.Base); err != nil {
+			return fmt.Errorf("build base must be scratch or a valid local image reference: %w", err)
+		}
 	}
 	if len(spec.Copy) > 256 {
 		return fmt.Errorf("build spec supports at most 256 COPY instructions")
@@ -176,6 +178,33 @@ func BuildForPlatform(contextDir, specPath, reference, platform string) (Image, 
 	if err != nil {
 		return Image{}, err
 	}
+
+	// Base images are resolved only from the verified local OCI store. Builds
+	// never trigger an implicit network pull or execute anything from the base.
+	var baseImage *Image
+	if spec.Base != "scratch" {
+		verified, err := Verify(spec.Base)
+		if err != nil {
+			return Image{}, fmt.Errorf("verify base image %q (base images must already exist locally; pull first with `boxr image pull`): %w", spec.Base, err)
+		}
+		if verified.OS != osName || verified.Arch != architecture {
+			return Image{}, fmt.Errorf("base image %q platform %s/%s does not match build target %s/%s", spec.Base, verified.OS, verified.Arch, osName, architecture)
+		}
+		if variant != "" && verified.Variant != variant {
+			return Image{}, fmt.Errorf("base image %q variant %q does not match build target variant %q", spec.Base, verified.Variant, variant)
+		}
+		if variant == "" && verified.Variant != "" {
+			if _, _, _, err := parseBuildPlatform(osName + "/" + architecture + "/" + verified.Variant); err != nil {
+				return Image{}, fmt.Errorf("base image %q has an unsupported platform variant: %w", spec.Base, err)
+			}
+			variant = verified.Variant
+		}
+		if err := ValidateBuildSpec(BuildSpec{Version: 1, Base: "scratch", Config: verified.RuntimeConfig}); err != nil {
+			return Image{}, fmt.Errorf("base image %q has invalid runtime configuration: %w", spec.Base, err)
+		}
+		baseImage = &verified
+	}
+
 	ignorePatterns, err := loadIgnorePatterns(contextAbs)
 	if err != nil {
 		return Image{}, err
@@ -186,7 +215,11 @@ func BuildForPlatform(contextDir, specPath, reference, platform string) (Image, 
 	}
 	defer os.RemoveAll(stage)
 	root := filepath.Join(stage, "rootfs")
-	if err := os.Mkdir(root, 0755); err != nil {
+	if baseImage != nil {
+		if _, err := Unpack(spec.Base, root); err != nil {
+			return Image{}, fmt.Errorf("extract verified base image %q: %w", spec.Base, err)
+		}
+	} else if err := os.Mkdir(root, 0755); err != nil {
 		return Image{}, err
 	}
 	for index, instruction := range spec.Copy {
@@ -194,8 +227,12 @@ func BuildForPlatform(contextDir, specPath, reference, platform string) (Image, 
 			return Image{}, fmt.Errorf("COPY %d: %w", index+1, err)
 		}
 	}
-	if spec.Config.WorkingDir != "" {
-		destination, err := rootfsDestination(root, spec.Config.WorkingDir)
+	runtimeConfig := spec.Config
+	if baseImage != nil {
+		runtimeConfig = inheritBuildRuntimeConfig(baseImage.RuntimeConfig, spec.Config)
+	}
+	if runtimeConfig.WorkingDir != "" {
+		destination, err := rootfsDestination(root, runtimeConfig.WorkingDir)
 		if err != nil {
 			return Image{}, err
 		}
@@ -203,7 +240,73 @@ func BuildForPlatform(contextDir, specPath, reference, platform string) (Image, 
 			return Image{}, fmt.Errorf("create image WorkingDir: %w", err)
 		}
 	}
-	return ImportRootFSWithConfig(root, reference, osName, architecture, variant, spec.Config)
+	return ImportRootFSWithConfig(root, reference, osName, architecture, variant, runtimeConfig)
+}
+
+// inheritBuildRuntimeConfig carries forward useful image defaults while
+// allowing a child recipe to override only the fields it explicitly supplies.
+func inheritBuildRuntimeConfig(base, overrides ImageRuntimeConfig) ImageRuntimeConfig {
+	result := ImageRuntimeConfig{
+		Env:        mergeBuildEnvironment(base.Env, overrides.Env),
+		Entrypoint: cloneBuildStrings(base.Entrypoint),
+		Cmd:        cloneBuildStrings(base.Cmd),
+		WorkingDir: base.WorkingDir,
+		User:       base.User,
+		Labels:     make(map[string]string, len(base.Labels)+len(overrides.Labels)),
+	}
+	if overrides.Entrypoint != nil {
+		result.Entrypoint = cloneBuildStrings(overrides.Entrypoint)
+	}
+	if overrides.Cmd != nil {
+		result.Cmd = cloneBuildStrings(overrides.Cmd)
+	}
+	if overrides.WorkingDir != "" {
+		result.WorkingDir = overrides.WorkingDir
+	}
+	if overrides.User != "" {
+		result.User = overrides.User
+	}
+	for key, value := range base.Labels {
+		result.Labels[key] = value
+	}
+	for key, value := range overrides.Labels {
+		result.Labels[key] = value
+	}
+	if len(result.Labels) == 0 {
+		result.Labels = nil
+	}
+	return result
+}
+
+// mergeBuildEnvironment preserves base-variable ordering and replaces values
+// by key when a child recipe supplies the same variable.
+func mergeBuildEnvironment(base, overrides []string) []string {
+	if base == nil && overrides == nil {
+		return nil
+	}
+	result := make([]string, 0, len(base)+len(overrides))
+	positions := make(map[string]int, len(base)+len(overrides))
+	for _, group := range [][]string{base, overrides} {
+		for _, entry := range group {
+			key, _, _ := strings.Cut(entry, "=")
+			if index, exists := positions[key]; exists {
+				result[index] = entry
+				continue
+			}
+			positions[key] = len(result)
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
+func cloneBuildStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	result := make([]string, len(values))
+	copy(result, values)
+	return result
 }
 
 func parseBuildPlatform(value string) (osName, architecture, variant string, err error) {

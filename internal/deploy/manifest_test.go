@@ -109,6 +109,12 @@ func TestBuildPlanRejectsInvalidGraphsAndServices(t *testing.T) {
 		"isolated network readiness": {Version: 1, Services: map[string]Service{
 			"web": {Command: []string{"/bin/true"}, Options: container.Options{NetworkMode: "none"}, Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:8080"}},
 		}},
+		"restricted readiness profile": {Version: 1, Services: map[string]Service{
+			"web": {Command: []string{"/bin/true"}, Options: container.Options{SecurityProfile: "restricted"}, Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:8080"}},
+		}},
+		"untrusted readiness profile": {Version: 1, Services: map[string]Service{
+			"web": {Command: []string{"/bin/true"}, Options: container.Options{SecurityProfile: "untrusted", RootFS: "/tmp/boxr-test-rootfs"}, Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:8080"}},
+		}},
 		"duplicate container names": {Version: 1, Services: map[string]Service{
 			"api": {Command: []string{"/bin/true"}, Options: container.Options{Name: "same-name"}},
 			"web": {Command: []string{"/bin/true"}, Options: container.Options{Name: "same-name"}},

@@ -98,6 +98,140 @@ func TestBuildCopiesFilesAndPersistsRuntimeConfig(t *testing.T) {
 	}
 }
 
+func TestBuildFromLocalImageBaseInheritsAndOverridesRuntimeConfig(t *testing.T) {
+	useStore(t)
+	baseRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(baseRoot, "usr", "bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(baseRoot, "etc-os-release"), []byte("BOXR_BASE=1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(baseRoot, "usr", "bin", "base-entrypoint"), []byte("base binary\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	baseConfig := ImageRuntimeConfig{
+		Env:        []string{"PATH=/usr/bin", "APP_MODE=base", "BASE_ONLY=kept"},
+		Entrypoint: []string{"/usr/bin/base-entrypoint"},
+		Cmd:        []string{"--base"},
+		WorkingDir: "/srv/base",
+		User:       "1000:1000",
+		Labels: map[string]string{
+			"org.example.base":   "kept",
+			"org.example.shared": "base",
+		},
+	}
+	if _, err := ImportRootFSWithConfig(baseRoot, "demo:base", "linux", runtimeArchitecture(), "", baseConfig); err != nil {
+		t.Fatalf("import base image: %v", err)
+	}
+
+	contextDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(contextDir, "web"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(contextDir, "web", "server"), []byte("child application\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	specPath := writeBuildSpec(t, contextDir, BuildSpec{
+		Version: 1,
+		Base:    "demo:base",
+		Copy:    []CopyInstruction{{Source: "web", Destination: "/opt/web"}},
+		Config: ImageRuntimeConfig{
+			Env:        []string{"APP_MODE=production", "CHILD_ONLY=added"},
+			Cmd:        []string{"--child"},
+			WorkingDir: "/srv/child",
+			Labels: map[string]string{
+				"org.example.shared": "child",
+				"org.example.child":  "added",
+			},
+		},
+	})
+	built, err := Build(contextDir, specPath, "demo:derived")
+	if err != nil {
+		t.Fatalf("Build from local base: %v", err)
+	}
+	if built.OS != "linux" || built.Arch != runtimeArchitecture() {
+		t.Fatalf("derived image platform = %s/%s, want linux/%s", built.OS, built.Arch, runtimeArchitecture())
+	}
+
+	unpacked := filepath.Join(t.TempDir(), "derived-rootfs")
+	if _, err := Unpack("demo:derived", unpacked); err != nil {
+		t.Fatalf("unpack derived image: %v", err)
+	}
+	for path, want := range map[string]string{
+		"etc-os-release":             "BOXR_BASE=1\n",
+		"usr/bin/base-entrypoint":    "base binary\n",
+		"opt/web/server":             "child application\n",
+	} {
+		got, err := os.ReadFile(filepath.Join(unpacked, filepath.FromSlash(path)))
+		if err != nil {
+			t.Errorf("read inherited/copied file %s: %v", path, err)
+			continue
+		}
+		if string(got) != want {
+			t.Errorf("%s = %q, want %q", path, got, want)
+		}
+	}
+	if info, err := os.Stat(filepath.Join(unpacked, "srv", "child")); err != nil || !info.IsDir() {
+		t.Fatalf("child WorkingDir was not created: info=%v error=%v", info, err)
+	}
+
+	verified, err := Verify("demo:derived")
+	if err != nil {
+		t.Fatalf("verify derived image: %v", err)
+	}
+	config := verified.RuntimeConfig
+	wantEnv := []string{"PATH=/usr/bin", "APP_MODE=production", "BASE_ONLY=kept", "CHILD_ONLY=added"}
+	if strings.Join(config.Env, "\x00") != strings.Join(wantEnv, "\x00") {
+		t.Fatalf("inherited environment = %v, want %v", config.Env, wantEnv)
+	}
+	if strings.Join(config.Entrypoint, " ") != "/usr/bin/base-entrypoint" {
+		t.Fatalf("inherited Entrypoint = %v", config.Entrypoint)
+	}
+	if strings.Join(config.Cmd, " ") != "--child" {
+		t.Fatalf("overridden Cmd = %v", config.Cmd)
+	}
+	if config.WorkingDir != "/srv/child" || config.User != "1000:1000" {
+		t.Fatalf("inherited/overridden runtime identity = workdir %q user %q", config.WorkingDir, config.User)
+	}
+	if config.Labels["org.example.base"] != "kept" || config.Labels["org.example.shared"] != "child" || config.Labels["org.example.child"] != "added" {
+		t.Fatalf("base/child labels were not merged: %v", config.Labels)
+	}
+}
+
+func TestBuildRejectsMissingLocalImageBaseWithoutPulling(t *testing.T) {
+	useStore(t)
+	contextDir := t.TempDir()
+	specPath := writeBuildSpec(t, contextDir, BuildSpec{Version: 1, Base: "registry.example/base:latest"})
+	_, err := Build(contextDir, specPath, "demo:missing-base")
+	if err == nil || !strings.Contains(err.Error(), "base images must already exist locally") {
+		t.Fatalf("Build error = %v, want explicit local-base error", err)
+	}
+}
+
+func TestBuildRejectsBasePlatformMismatch(t *testing.T) {
+	useStore(t)
+	baseRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(baseRoot, "base-file"), []byte("base"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ImportRootFSForPlatform(baseRoot, "demo:arm-base", "linux", "arm64", "v8"); err != nil {
+		t.Fatalf("import ARM base: %v", err)
+	}
+	contextDir := t.TempDir()
+	specPath := writeBuildSpec(t, contextDir, BuildSpec{Version: 1, Base: "demo:arm-base"})
+	if _, err := BuildForPlatform(contextDir, specPath, "demo:amd64-child", "linux/amd64"); err == nil || !strings.Contains(err.Error(), "does not match build target") {
+		t.Fatalf("BuildForPlatform error = %v, want platform mismatch", err)
+	}
+}
+
+func TestValidateBuildSpecRejectsInvalidLocalBaseReference(t *testing.T) {
+	err := ValidateBuildSpec(BuildSpec{Version: 1, Base: "../outside:latest"})
+	if err == nil || !strings.Contains(err.Error(), "valid local image reference") {
+		t.Fatalf("ValidateBuildSpec error = %v, want invalid local reference", err)
+	}
+}
+
 func TestBuildIgnorePatternsExcludeFilesAndDirectories(t *testing.T) {
 	contextDir := t.TempDir()
 	for name, content := range map[string]string{

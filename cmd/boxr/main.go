@@ -2575,6 +2575,12 @@ var implementedFeatures = []string{
 	"deployment-wide wait for all services stopped",
 	"bounded stack-state polling with configurable deadlines",
 	"secret-redacted JSON deployment wait results",
+	"non-executing image recipes support scratch and local OCI image bases",
+	"local image bases are integrity-verified before reuse",
+	"image base platforms must match requested Linux build targets",
+	"base filesystems are safely extracted before context COPY operations",
+	"base environment variables inherit with deterministic key-based overrides",
+	"base entrypoint command working directory user and labels inherit with build overrides",
 }
 
 func printFeatures(stdout io.Writer) {

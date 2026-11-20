@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 600 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 606 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -606,3 +606,9 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 598. deployment-wide wait for all services stopped
 599. bounded stack-state polling with configurable deadlines
 600. secret-redacted JSON deployment wait results
+601. non-executing image recipes support scratch and local OCI image bases
+602. local image bases are integrity-verified before reuse
+603. image base platforms must match requested Linux build targets
+604. base filesystems are safely extracted before context COPY operations
+605. base environment variables inherit with deterministic key-based overrides
+606. base entrypoint command working directory user and labels inherit with build overrides
