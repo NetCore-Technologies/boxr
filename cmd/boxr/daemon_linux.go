@@ -7,17 +7,17 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
-	"strconv"
 	"time"
 
 	"github.com/manit6752025/boxr/internal/engineapi"
@@ -173,9 +173,6 @@ func ensureDaemonSocketDirectory(path string) error {
 	if err != nil {
 		return fmt.Errorf("resolve socket directory: %w", err)
 	}
-	if err := os.MkdirAll(absolute, 0700); err != nil {
-		return fmt.Errorf("create socket directory: %w", err)
-	}
 	current := string(filepath.Separator)
 	relative := strings.TrimPrefix(absolute, current)
 	for _, component := range strings.Split(relative, string(filepath.Separator)) {
@@ -183,9 +180,15 @@ func ensureDaemonSocketDirectory(path string) error {
 			continue
 		}
 		current = filepath.Join(current, component)
-		info, err := os.Lstat(current)
-		if err != nil {
-			return fmt.Errorf("inspect socket directory %s: %w", current, err)
+		info, statErr := os.Lstat(current)
+		if errors.Is(statErr, os.ErrNotExist) {
+			if mkdirErr := os.Mkdir(current, 0700); mkdirErr != nil && !errors.Is(mkdirErr, os.ErrExist) {
+				return fmt.Errorf("create socket directory %s: %w", current, mkdirErr)
+			}
+			info, statErr = os.Lstat(current)
+		}
+		if statErr != nil {
+			return fmt.Errorf("inspect socket directory %s: %w", current, statErr)
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return fmt.Errorf("socket directory path %s must not contain symlinks or non-directories", current)
