@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 658 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 681 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -664,3 +664,26 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 656. healthcheck startup grace periods are bounded to 10 minutes
 657. unhealthy services fail the attached deployment supervisor and trigger stack shutdown
 658. healthcheck targets remain loopback-only and absent from deployment plans
+659. managed bridge network creation with an owner-private persistent metadata store
+660. versioned network store with bounded strict JSON decoding
+661. network metadata writes are atomically published with private file permissions
+662. IPv4 bridge subnets are canonical and bounded between /16 and /29
+663. bridge network gateways are validated as usable in-subnet addresses
+664. bridge networks reject overlapping IPv4 subnets
+665. bridge interface names are validated against Linux interface length limits
+666. bridge provisioning creates and raises a host Linux bridge interface
+667. bridge networks optionally enable scoped IPv4 forwarding and NAT
+668. network-specific firewall chains isolate Boxr forwarding and masquerade rules
+669. network deletion removes only its own firewall chains and bridge interface
+670. per-network IPv4 address allocation excludes network broadcast and gateway addresses
+671. container network attachments reserve unique addresses by container ID
+672. bridge attachments create host-side veth pairs and join container net namespaces
+673. container bridge interfaces receive an eth0 address and default gateway
+674. failed bridge attachment rolls back its veth and IPv4 allocation
+675. container exit removes its bridge veth and releases its address
+676. bridge network removal is blocked while container attachments remain
+677. network list and inspect provide sorted secret-free JSON metadata
+678. bridge mode requires an explicit managed network name
+679. bridge mode creates a private network namespace before host-side attachment
+680. container run joins and leaves bridge networks through lifecycle hooks
+681. network metadata rejects duplicate IDs names bridges and invalid allocations
