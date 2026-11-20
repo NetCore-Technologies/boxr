@@ -170,7 +170,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 func runContainer(args []string, stdout, stderr io.Writer) int {
 	forwardedArgs, detached, err := extractDetachedFlag(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "boxr run: %v\\n", err)
+		fmt.Fprintf(stderr, "boxr run: %v\n", err)
 		return 2
 	}
 	if detached {
@@ -516,7 +516,7 @@ func runContainer(args []string, stdout, stderr io.Writer) int {
 		},
 		OnReady: func(pid int) {
 			if detachedReadyWriter != nil && !detachedReadySent {
-				_, _ = fmt.Fprintf(detachedReadyWriter, "READY %s %d\\n", record.ID, pid)
+				_, _ = fmt.Fprintf(detachedReadyWriter, "READY %s %d\n", record.ID, pid)
 				detachedReadySent = true
 				_ = detachedReadyWriter.Close()
 				detachedReadyWriter = nil
@@ -4792,16 +4792,16 @@ func runDetachedContainer(args []string, stdout, stderr io.Writer) int {
 	}
 	executable, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(stderr, "boxr run --detach: resolve executable: %v\\n", err)
+		fmt.Fprintf(stderr, "boxr run --detach: resolve executable: %v\n", err)
 		return 1
 	}
 	stateDir, err := state.Dir()
 	if err != nil {
-		fmt.Fprintf(stderr, "boxr run --detach: resolve state directory: %v\\n", err)
+		fmt.Fprintf(stderr, "boxr run --detach: resolve state directory: %v\n", err)
 		return 1
 	}
 	if err := os.MkdirAll(stateDir, 0700); err != nil {
-		fmt.Fprintf(stderr, "boxr run --detach: create state directory: %v\\n", err)
+		fmt.Fprintf(stderr, "boxr run --detach: create state directory: %v\n", err)
 		return 1
 	}
 	info, err := os.Lstat(stateDir)
@@ -4810,26 +4810,26 @@ func runDetachedContainer(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if err := os.Chmod(stateDir, 0700); err != nil {
-		fmt.Fprintf(stderr, "boxr run --detach: secure state directory: %v\\n", err)
+		fmt.Fprintf(stderr, "boxr run --detach: secure state directory: %v\n", err)
 		return 1
 	}
 	logFile, err := os.CreateTemp(stateDir, "detached-launch-*.log")
 	if err != nil {
-		fmt.Fprintf(stderr, "boxr run --detach: create launch log: %v\\n", err)
+		fmt.Fprintf(stderr, "boxr run --detach: create launch log: %v\n", err)
 		return 1
 	}
 	logPath := logFile.Name()
 	if err := logFile.Chmod(0600); err != nil {
 		_ = logFile.Close()
 		_ = os.Remove(logPath)
-		fmt.Fprintf(stderr, "boxr run --detach: secure launch log: %v\\n", err)
+		fmt.Fprintf(stderr, "boxr run --detach: secure launch log: %v\n", err)
 		return 1
 	}
 	reader, writer, err := os.Pipe()
 	if err != nil {
 		_ = logFile.Close()
 		_ = os.Remove(logPath)
-		fmt.Fprintf(stderr, "boxr run --detach: create startup handshake: %v\\n", err)
+		fmt.Fprintf(stderr, "boxr run --detach: create startup handshake: %v\n", err)
 		return 1
 	}
 	childArgs := append([]string{"__boxr-detached-run"}, args...)
@@ -4843,7 +4843,7 @@ func runDetachedContainer(args []string, stdout, stderr io.Writer) int {
 		_ = writer.Close()
 		_ = logFile.Close()
 		_ = os.Remove(logPath)
-		fmt.Fprintf(stderr, "boxr run --detach: start supervisor: %v\\n", err)
+		fmt.Fprintf(stderr, "boxr run --detach: start supervisor: %v\n", err)
 		return 1
 	}
 	_ = writer.Close()
@@ -4855,7 +4855,7 @@ func runDetachedContainer(args []string, stdout, stderr io.Writer) int {
 	}
 	result := make(chan handshake, 1)
 	go func() {
-		line, err := bufio.NewReader(reader).ReadString('\\n')
+		line, err := bufio.NewReader(reader).ReadString('\n')
 		result <- handshake{line: strings.TrimSpace(line), err: err}
 	}()
 	timer := time.NewTimer(30 * time.Second)
@@ -4866,34 +4866,34 @@ func runDetachedContainer(args []string, stdout, stderr io.Writer) int {
 		if received.err != nil {
 			_ = command.Process.Kill()
 			_, _ = command.Process.Wait()
-			fmt.Fprintf(stderr, "boxr run --detach: supervisor exited before startup (launch log: %s): %v\\n", logPath, received.err)
+			fmt.Fprintf(stderr, "boxr run --detach: supervisor exited before startup (launch log: %s): %v\n", logPath, received.err)
 			return 1
 		}
 		fields := strings.Fields(received.line)
 		if len(fields) == 3 && fields[0] == "READY" {
 			if err := command.Process.Release(); err != nil {
-				fmt.Fprintf(stderr, "boxr run --detach: release supervisor handle: %v\\n", err)
+				fmt.Fprintf(stderr, "boxr run --detach: release supervisor handle: %v\n", err)
 				return 1
 			}
-			fmt.Fprintf(stdout, "container %s started detached (PID %s)\\n", fields[1], fields[2])
-			fmt.Fprintf(stdout, "launch log: %s\\n", logPath)
-			fmt.Fprintf(stdout, "use 'boxr logs %s' to follow container output\\n", fields[1])
+			fmt.Fprintf(stdout, "container %s started detached (PID %s)\n", fields[1], fields[2])
+			fmt.Fprintf(stdout, "launch log: %s\n", logPath)
+			fmt.Fprintf(stdout, "use 'boxr logs %s' to follow container output\n", fields[1])
 			return 0
 		}
 		_, _ = command.Wait()
 		fields = strings.Fields(received.line)
 		if len(fields) == 2 && fields[0] == "ERROR" {
 			if code, err := strconv.Atoi(fields[1]); err == nil && code != 0 {
-				fmt.Fprintf(stderr, "boxr run --detach: startup failed with exit status %d (launch log: %s)\\n", code, logPath)
+				fmt.Fprintf(stderr, "boxr run --detach: startup failed with exit status %d (launch log: %s)\n", code, logPath)
 				return code
 			}
 		}
-		fmt.Fprintf(stderr, "boxr run --detach: supervisor did not start the container: %s (launch log: %s)\\n", received.line, logPath)
+		fmt.Fprintf(stderr, "boxr run --detach: supervisor did not start the container: %s (launch log: %s)\n", received.line, logPath)
 		return 1
 	case <-timer.C:
 		_ = command.Process.Kill()
 		_, _ = command.Process.Wait()
-		fmt.Fprintf(stderr, "boxr run --detach: timed out waiting for startup (launch log: %s)\\n", logPath)
+		fmt.Fprintf(stderr, "boxr run --detach: timed out waiting for startup (launch log: %s)\n", logPath)
 		return 1
 	}
 }
