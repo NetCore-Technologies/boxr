@@ -292,7 +292,7 @@ func normalizeCreateArguments(args []string) []string {
 		return append(result, args[position+1:]...)
 	}
 	result := append([]string(nil), args[:position]...)
-	result = append(result, "--image", image)
+	result = append(result, "--image", image, "--")
 	return append(result, args[position+1:]...)
 }
 
@@ -1258,6 +1258,10 @@ func runRemove(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if *all {
+		if *force {
+			fmt.Fprintln(stderr, "boxr rm: --force cannot be combined with --all; specify container IDs")
+			return 2
+		}
 		if flags.NArg() != 0 {
 			fmt.Fprintln(stderr, "boxr rm: --all does not accept IDs")
 			return 2
