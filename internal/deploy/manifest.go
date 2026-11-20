@@ -29,73 +29,9 @@ const (
 )
 
 var (
-	stackNamePattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
-	serviceNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}// Package deploy validates declarative, multi-service Boxr deployment manifests.
-// It builds a deterministic dependency order without starting processes or
-// changing host state. Execution is intentionally a separate operation.
-package deploy
-
-import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
-	"io"
-	"os"
-	"regexp"
-	"sort"
-	"strings"
-
-	"github.com/manit6752025/boxr/internal/container"
-)
-
-const (
-	MaxManifestBytes = 1 << 20
-	MaxServices      = 64
-	MaxCommandArgs   = 128
-	MaxCommandBytes  = 32 << 10
-	StackLabel       = "io.boxr.deployment"
-	ServiceLabel     = "io.boxr.service"
-	OrderLabel       = "io.boxr.deployment-order"
-)
-
-var (
-	stackNamePattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
-)
-	imageReferencePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}// Package deploy validates declarative, multi-service Boxr deployment manifests.
-// It builds a deterministic dependency order without starting processes or
-// changing host state. Execution is intentionally a separate operation.
-package deploy
-
-import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
-	"io"
-	"os"
-	"regexp"
-	"sort"
-	"strings"
-
-	"github.com/manit6752025/boxr/internal/container"
-)
-
-const (
-	MaxManifestBytes = 1 << 20
-	MaxServices      = 64
-	MaxCommandArgs   = 128
-	MaxCommandBytes  = 32 << 10
-	StackLabel       = "io.boxr.deployment"
-	ServiceLabel     = "io.boxr.service"
-	OrderLabel       = "io.boxr.deployment-order"
-)
-
-var (
-	stackNamePattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
-)
+	stackNamePattern     = regexp.MustCompile("^[a-z0-9][a-z0-9_-]{0,31}$")
+	serviceNamePattern   = regexp.MustCompile("^[a-z0-9][a-z0-9_-]{0,62}$")
+	imageReferencePattern = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$")
 )
 
 // File is a versioned deployment manifest. Each service maps to one Boxr

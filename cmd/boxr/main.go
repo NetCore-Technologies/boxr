@@ -3000,7 +3000,7 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 			return 1
 		}
 		if service.Image != "" {
-			if err := imageStore.Verify(service.Image); err != nil {
+			if _, err := imageStore.Verify(service.Image); err != nil {
 				fmt.Fprintf(stderr, "boxr deploy up: image %q for service %q is not ready: %v\n", service.Image, service.Name, err)
 				return 1
 			}
