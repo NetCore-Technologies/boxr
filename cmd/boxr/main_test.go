@@ -1028,7 +1028,7 @@ func TestDeployUpFailsVolumePreflightBeforeCreatingAnyContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errOut bytes.Buffer
-	if code := runDeploymentUp(file, plan, time.Second, 0, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "volume preflight failed") {
+	if code := runDeploymentUp(file, plan, time.Second, 0, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "configuration preflight failed") {
 		t.Fatalf("deploy up missing volume: code=%d stderr=%q", code, errOut.String())
 	}
 	records, err := state.List(true)
@@ -2636,6 +2636,52 @@ func TestDeployProfilesCommandListsDefaultAndOptInServices(t *testing.T) {
 		if !strings.Contains(out.String(), expected) {
 			t.Errorf("text profile inventory missing %q: %s", expected, out.String())
 		}
+	}
+}
+
+func TestDeploymentEnvironmentFilesMergeInDeclarationOrder(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "base.env")
+	second := filepath.Join(dir, "service.env")
+	if err := os.WriteFile(first, []byte("SHARED=base\nFROM_BASE=one\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("SHARED=service\nFROM_SERVICE=two\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	options, err := deploymentContainerOptions(deploy.Service{
+		EnvFiles: []string{first, second},
+		Options: container.Options{Env: []string{"SHARED=explicit", "DIRECT=value"}},
+	})
+	if err != nil {
+		t.Fatalf("deploymentContainerOptions(): %v", err)
+	}
+	got := make(map[string]string, len(options.Env))
+	for _, entry := range options.Env {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			t.Fatalf("invalid merged environment entry %q", entry)
+		}
+		got[key] = value
+	}
+	want := map[string]string{
+		"SHARED":       "explicit",
+		"FROM_BASE":    "one",
+		"FROM_SERVICE": "two",
+		"DIRECT":       "value",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("merged environment = %#v, want %#v", got, want)
+	}
+}
+
+func TestDeploymentEnvironmentFilesFailClosedWhenMissing(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.env")
+	_, err := deploymentContainerOptions(deploy.Service{
+		EnvFiles: []string{missing},
+	})
+	if err == nil || !strings.Contains(err.Error(), "environment file 1 could not be read") {
+		t.Fatalf("expected unreadable environment file to fail closed, got %v", err)
 	}
 }
 
