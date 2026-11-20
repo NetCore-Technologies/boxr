@@ -3,6 +3,7 @@ package state
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -104,11 +105,29 @@ func ReadEngineConfig(id string) ([]byte, error) {
 	if after.Mode().Perm()&0077 != 0 {
 		return nil, fmt.Errorf("Engine API configuration permissions must be owner-only")
 	}
-	data := make([]byte, after.Size())
-	if _, err := file.Read(data); err != nil {
+	data, err := io.ReadAll(io.LimitReader(file, maxEngineConfigBytes+1))
+	if err != nil {
 		return nil, err
 	}
+	if len(data) > maxEngineConfigBytes {
+		return nil, fmt.Errorf("Engine API configuration exceeds %d bytes", maxEngineConfigBytes)
+	}
 	return data, nil
+}
+
+// EngineConfigPath returns the canonical sidecar path for an existing record.
+func EngineConfigPath(id string) (string, error) {
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	record, err := findLocked(id)
+	if err != nil {
+		return "", err
+	}
+	directory, err := engineConfigDirectoryLocked()
+	if err != nil {
+		return "", err
+	}
+	return engineConfigPath(directory, record.ID), nil
 }
 
 func engineConfigDirectoryLocked() (string, error) {
