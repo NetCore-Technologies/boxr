@@ -319,7 +319,7 @@ func TestJoinPublishesPortsAndLeaveRemovesScopedRules(t *testing.T) {
 
 func TestJoinRejectsPublishedPortConflictsAcrossNetworks(t *testing.T) {
 	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
-	for _, network := range []struct{name, subnet string}{
+	for _, network := range []struct{ name, subnet string }{
 		{name: "frontend", subnet: "172.30.71.0/24"},
 		{name: "backend", subnet: "172.30.72.0/24"},
 	} {
@@ -473,9 +473,9 @@ func TestNetworkStoreRejectsTrailingJSONAndUnsafeRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := map[string]string{
-		"trailing JSON": `{"version":1,"networks":[]} {}`,
-		"unknown field": `{"version":1,"networks":[],"unexpected":true}`,
-		"invalid bridge name": `{"version":1,"networks":[{"id":"0123456789abcdef","name":"frontend","driver":"bridge","bridge":"br/name","subnet":"172.30.0.0/24","gateway":"172.30.0.1","nat":false}]}`,
+		"trailing JSON":        `{"version":1,"networks":[]} {}`,
+		"unknown field":        `{"version":1,"networks":[],"unexpected":true}`,
+		"invalid bridge name":  `{"version":1,"networks":[{"id":"0123456789abcdef","name":"frontend","driver":"bridge","bridge":"br/name","subnet":"172.30.0.0/24","gateway":"172.30.0.1","nat":false}]}`,
 		"overlapping networks": `{"version":1,"networks":[{"id":"0123456789abcdef","name":"frontend","driver":"bridge","bridge":"brfront","subnet":"172.30.0.0/24","gateway":"172.30.0.1","nat":false},{"id":"fedcba9876543210","name":"backend","driver":"bridge","bridge":"brback","subnet":"172.30.0.128/25","gateway":"172.30.0.129","nat":false}]}`,
 		"duplicate allocation": `{"version":1,"networks":[{"id":"0123456789abcdef","name":"frontend","driver":"bridge","bridge":"brfront","subnet":"172.30.0.0/24","gateway":"172.30.0.1","nat":false,"allocations":{"container-a":"172.30.0.2","container-b":"172.30.0.2"}}]}`,
 	}
@@ -540,4 +540,3 @@ func TestLeaveKeepsIPAMReservationUntilPublishedRulesAreRemoved(t *testing.T) {
 		t.Fatalf("released port could not be reused after cleanup: %v", err)
 	}
 }
-
