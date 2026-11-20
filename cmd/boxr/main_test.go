@@ -3348,7 +3348,6 @@ func TestDeferImageServiceBindMountsRejectsUnrepresentablePaths(t *testing.T) {
 	}
 }
 
-
 func TestCompletionIncludesDockerEngineDaemon(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := runCompletion([]string{"bash"}, &stdout, &stderr); code != 0 {
