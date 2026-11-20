@@ -559,7 +559,7 @@ func LeaveWithRunner(ctx context.Context, networkName, containerID string, runne
 		return fmt.Errorf("container %q has no allocation on network %q", containerID, networkName)
 	}
 	hostVeth, _ := vethNames(containerID)
-	if err := runner.Run(ctx, "ip", "link", "del", "dev", hostVeth); err != nil {
+	if err := runner.Run(ctx, "ip", "link", "del", "dev", hostVeth); err != nil && !missingNetworkInterface(err) {
 		return fmt.Errorf("disconnect container from network %q: %w", networkName, err)
 	}
 	delete(network.Allocations, containerID)
