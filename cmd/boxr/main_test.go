@@ -720,6 +720,111 @@ func TestDeploymentReadinessRejectsUnknownProcessService(t *testing.T) {
 	}
 }
 
+
+func TestDeployWaitRequiresAllServicesAndRedactsRuntimeDetails(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	create := func(service, name string, order int) state.Record {
+		t.Helper()
+		record, err := state.Create(name, []string{"/bin/sh", "-c", "private-command"}, container.Options{
+			Env: []string{"TOKEN=private-wait-secret"},
+		}, map[string]string{
+			deploy.StackLabel:   "wait-stack",
+			deploy.ServiceLabel: service,
+			deploy.OrderLabel:   strconv.Itoa(order),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+	database := create("database", "wait-stack-database", 0)
+	api := create("api", "wait-stack-api", 1)
+	if err := state.Start(database.ID, 301); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(api.ID, 302); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"deploy", "wait", "--condition", "running", "--json", "wait-stack"}, &out, &errOut); code != 0 {
+		t.Fatalf("deploy wait running: code=%d stderr=%q", code, errOut.String())
+	}
+	var result deploymentWaitResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("decode deploy wait JSON: %v", err)
+	}
+	if result.Stack != "wait-stack" || result.Condition != "running" || len(result.Services) != 2 {
+		t.Fatalf("unexpected deployment wait result: %+v", result)
+	}
+	if result.Services[0].Service != "database" || result.Services[1].Service != "api" {
+		t.Fatalf("deployment wait services are not ordered: %+v", result.Services)
+	}
+	if strings.Contains(out.String(), "private-command") || strings.Contains(out.String(), "private-wait-secret") {
+		t.Fatalf("deployment wait leaked command or environment data: %s", out.String())
+	}
+	if err := state.Finish(database.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(api.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"deploy", "wait", "--condition", "stopped", "wait-stack"}, &out, &errOut); code != 0 {
+		t.Fatalf("deploy wait stopped: code=%d stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "reached stopped state") {
+		t.Fatalf("stopped confirmation missing: %q", out.String())
+	}
+}
+
+func TestDeployWaitFailsWhenServiceExitsBeforeRunningAndTimesOut(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	record, err := state.Create("wait-failed", []string{"/bin/false"}, container.Options{}, map[string]string{
+		deploy.StackLabel: "wait-failure-stack",
+		deploy.ServiceLabel: "worker",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, 401); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(record.ID, &container.ExitError{Code: 1}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"deploy", "wait", "--condition", "running", "wait-failure-stack"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "reached failed") {
+		t.Fatalf("wait running should fail on an exited service: code=%d stderr=%q", code, errOut.String())
+	}
+
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	_, err = state.Create("not-started", []string{"/bin/true"}, container.Options{}, map[string]string{
+		deploy.StackLabel: "wait-timeout-stack",
+		deploy.ServiceLabel: "pending",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"deploy", "wait", "--timeout", "20ms", "--interval", "10ms", "wait-timeout-stack"}, &out, &errOut); code != 1 || !strings.Contains(errOut.String(), "timed out") {
+		t.Fatalf("wait running should time out: code=%d stderr=%q", code, errOut.String())
+	}
+}
+
+func TestDeploymentWaitConditionHandlesEmptyStacksAndInvalidStates(t *testing.T) {
+	if done, err := deploymentWaitCondition(nil, "stopped"); err != nil || !done {
+		t.Fatalf("empty stopped stack = %v, %v; want true, nil", done, err)
+	}
+	if _, err := deploymentWaitCondition(nil, "running"); err == nil {
+		t.Fatal("empty running stack unexpectedly satisfied")
+	}
+	if _, err := deploymentWaitCondition(nil, "invalid"); err == nil {
+		t.Fatal("invalid wait condition unexpectedly accepted")
+	}
+}
+
 func TestVersionJSONOutput(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run([]string{"version", "--json"}, &out, &errOut); code != 0 {

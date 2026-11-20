@@ -1455,6 +1455,7 @@ Usage:
   boxr deploy pull [--platform linux/ARCH[/VARIANT]] [--authfile PATH] FILE.json
   boxr deploy up [--dry-run] FILE.json
   boxr deploy ps [--json] STACK
+  boxr deploy wait [--condition running|stopped] [--timeout 30s] [--interval 100ms] [--json] STACK
   boxr deploy down [--time 10s] [--remove] STACK
   boxr deploy example
   boxr features [--json]
@@ -2570,6 +2571,10 @@ var implementedFeatures = []string{
 	"readiness validation accounts for mandatory network-isolating security profiles",
 	"dependent service startup waits for configured readiness probes",
 	"parallel service waves select readiness probes by service identity",
+	"deployment-wide wait for all services running",
+	"deployment-wide wait for all services stopped",
+	"bounded stack-state polling with configurable deadlines",
+	"secret-redacted JSON deployment wait results",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -2878,6 +2883,30 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 		if len(statuses) == 0 {
 			fmt.Fprintln(stdout, "No services found.")
 		}
+		return 0
+	case "wait":
+		flags := flag.NewFlagSet("deploy wait", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		condition := flags.String("condition", "running", "stack condition: running or stopped")
+		timeout := flags.Duration("timeout", 30*time.Second, "maximum wait duration (0 means no timeout)")
+		interval := flags.Duration("interval", 100*time.Millisecond, "poll interval (10ms to 1m)")
+		jsonOutput := flags.Bool("json", false, "write stack status as JSON")
+		if err := flags.Parse(args[1:]); err != nil {
+			return 2
+		}
+		if flags.NArg() != 1 || *timeout < 0 || *interval < 10*time.Millisecond || *interval > time.Minute || (*condition != "running" && *condition != "stopped") {
+			fmt.Fprintln(stderr, "Usage: boxr deploy wait [--condition running|stopped] [--timeout 30s] [--interval 100ms] [--json] STACK")
+			return 2
+		}
+		result, err := waitForDeploymentCondition(flags.Arg(0), *condition, *timeout, *interval)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr deploy wait: %v\n", err)
+			return 1
+		}
+		if *jsonOutput {
+			return writeJSON(stdout, result, stderr, "boxr deploy wait")
+		}
+		fmt.Fprintf(stdout, "deployment %s reached %s state (%d service(s))\n", result.Stack, result.Condition, len(result.Services))
 		return 0
 	case "down":
 		flags := flag.NewFlagSet("deploy down", flag.ContinueOnError)
@@ -3408,6 +3437,86 @@ func deploymentStatuses(records []state.Record) []deploymentStatus {
 		})
 	}
 	return statuses
+}
+
+type deploymentWaitResult struct {
+	Stack     string             `json:"stack"`
+	Condition string             `json:"condition"`
+	WaitedMS  int64              `json:"waitedMs"`
+	Services  []deploymentStatus `json:"services"`
+}
+
+func deploymentWaitCondition(records []state.Record, condition string) (bool, error) {
+	if condition != "running" && condition != "stopped" {
+		return false, fmt.Errorf("unsupported deployment condition %q", condition)
+	}
+	if len(records) == 0 {
+		if condition == "stopped" {
+			return true, nil
+		}
+		return false, fmt.Errorf("deployment has no recorded services")
+	}
+	switch condition {
+	case "running":
+		for _, record := range records {
+			if record.Status == "exited" || record.Status == "failed" {
+				return false, fmt.Errorf("service %s reached %s before the deployment became running", record.Labels[deploy.ServiceLabel], record.Status)
+			}
+			if record.Status != "running" {
+				return false, nil
+			}
+		}
+		return true, nil
+	case "stopped":
+		for _, record := range records {
+			if record.Status == "running" {
+				return false, nil
+			}
+		}
+		return true, nil
+	default:
+		return false, fmt.Errorf("unsupported deployment condition %q", condition)
+	}
+}
+
+func waitForDeploymentCondition(stack, condition string, timeout, interval time.Duration) (deploymentWaitResult, error) {
+	result := deploymentWaitResult{Stack: stack, Condition: condition}
+	if timeout < 0 {
+		return result, fmt.Errorf("timeout cannot be negative")
+	}
+	if interval < 10*time.Millisecond || interval > time.Minute {
+		return result, fmt.Errorf("poll interval must be between 10ms and 1m")
+	}
+	started := time.Now()
+	for {
+		records, err := deploymentRecords(stack)
+		if err != nil {
+			return result, err
+		}
+		satisfied, err := deploymentWaitCondition(records, condition)
+		if err != nil {
+			return result, err
+		}
+		if satisfied {
+			result.WaitedMS = time.Since(started).Milliseconds()
+			result.Services = deploymentStatuses(records)
+			if result.Services == nil {
+				result.Services = []deploymentStatus{}
+			}
+			return result, nil
+		}
+		if timeout > 0 {
+			remaining := timeout - time.Since(started)
+			if remaining <= 0 {
+				return result, fmt.Errorf("timed out waiting for deployment %s to reach %s", stack, condition)
+			}
+			if remaining < interval {
+				time.Sleep(remaining)
+				continue
+			}
+		}
+		time.Sleep(interval)
+	}
 }
 
 func runDeploymentDown(stack string, timeout time.Duration, remove, dryRun bool, stdout, stderr io.Writer) int {

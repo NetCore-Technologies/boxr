@@ -60,11 +60,21 @@ boxr deploy pull --platform linux/arm64 --authfile ~/.docker/config.json boxr.de
 ```
 
 The pull command walks services in deterministic order, skips services without image references, verifies images already in the local OCI store and downloads each unique missing registry reference once. It reuses the normal Boxr registry credential resolution and OCI/Docker layer verification path. A failed pull stops the prefetch operation before any service is started; successfully imported earlier images remain cached and can be reused on the next attempt. `deploy up` resolves each service image to the actual local tag and performs another integrity check before creating a service process.
+## Wait for a deployment
+
+```sh
+boxr deploy wait --condition running sample-app
+boxr deploy wait --condition stopped --timeout 60s sample-app
+boxr deploy wait --condition running --timeout 45s --interval 250ms --json sample-app
+```
+
+The default condition is `running` with a 30-second deadline. A running wait succeeds only when every recorded service is running; it fails immediately if a service exits or fails before the entire stack is ready. A stopped wait succeeds when no recorded service is running. A timeout of `0` waits without a deadline. JSON output contains service names, container names, IDs, statuses and timing, but no commands, environment values, labels or host paths.
 ## Runtime lifecycle
 
 ```sh
 boxr deploy up boxr.deploy.json
 boxr deploy ps sample-app
+boxr deploy wait --condition running sample-app
 boxr deploy down sample-app
 boxr deploy down --time 20s --remove sample-app
 ```
