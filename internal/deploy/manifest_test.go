@@ -487,6 +487,15 @@ func TestBuildPlanValidatesServiceEnvironmentFiles(t *testing.T) {
 	if got := plan.Services[0].EnvironmentFileCount; got != 2 {
 		t.Fatalf("environment file count = %d, want 2", got)
 	}
+	encoded, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hostPath := range file.Services["api"].EnvFiles {
+		if strings.Contains(string(encoded), hostPath) {
+			t.Errorf("deployment plan leaked environment file path %q: %s", hostPath, encoded)
+		}
+	}
 
 	tests := map[string][]string{
 		"relative path":       {"config/api.env"},
