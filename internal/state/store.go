@@ -123,6 +123,47 @@ func Create(name string, command []string, options container.Options, labels map
 	return record, nil
 }
 
+// Rename changes the unique local container name without changing its ID.
+func Rename(query, newName string) (Record, error) {
+	storeMu.Lock()
+	defer storeMu.Unlock()
+
+	var empty Record
+	if err := validateName(newName); err != nil {
+		return empty, err
+	}
+	record, err := findLocked(query)
+	if err != nil {
+		return empty, err
+	}
+	if record.Name == newName {
+		return record, nil
+	}
+	records, err := listRecordsLocked(true)
+	if err != nil {
+		return empty, err
+	}
+	for _, candidate := range records {
+		if candidate.ID != record.ID && candidate.Name == newName {
+			return empty, fmt.Errorf("container name %q is already in use by %s", newName, candidate.ID)
+		}
+	}
+
+	oldName := record.Name
+	record.Name = newName
+	if err := saveRecord(record); err != nil {
+		return empty, err
+	}
+	if err := appendEvent(Event{Time: time.Now().UTC(), Action: "rename", ID: record.ID, Name: newName}); err != nil {
+		record.Name = oldName
+		if rollbackErr := saveRecord(record); rollbackErr != nil {
+			return empty, errors.Join(fmt.Errorf("append rename event: %w", err), fmt.Errorf("restore previous container name: %w", rollbackErr))
+		}
+		return empty, err
+	}
+	return record, nil
+}
+
 func Start(id string, pid int) error {
 	if pid <= 0 {
 		return fmt.Errorf("host PID must be positive")
