@@ -612,30 +612,82 @@ func (s *Server) handleContainerStats(writer http.ResponseWriter, request *http.
 		writeError(writer, http.StatusConflict, fmt.Errorf("container is not running"))
 		return
 	}
-	stats, err := state.ReadStats(record.PID)
-	if err != nil {
-		writeError(writer, http.StatusNotImplemented, err)
+	stream := true
+	if raw := request.URL.Query().Get("stream"); raw != "" {
+		stream, err = strconv.ParseBool(raw)
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, fmt.Errorf("query parameter stream must be boolean"))
+			return
+		}
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	if !stream {
+		payload, statsErr := dockerStatsSnapshot(record)
+		if statsErr != nil {
+			writeError(writer, http.StatusNotImplemented, statsErr)
+			return
+		}
+		writeJSON(writer, http.StatusOK, payload)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
+	flusher, canFlush := writer.(http.Flusher)
+	if !canFlush {
+		writeError(writer, http.StatusInternalServerError, fmt.Errorf("streaming responses are unavailable"))
+		return
+	}
+	writer.WriteHeader(http.StatusOK)
+	encoder := json.NewEncoder(writer)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		payload, statsErr := dockerStatsSnapshot(record)
+		if statsErr != nil {
+			return
+		}
+		if encoder.Encode(payload) != nil {
+			return
+		}
+		flusher.Flush()
+		select {
+		case <-request.Context().Done():
+			return
+		case <-ticker.C:
+			current, getErr := state.Get(query)
+			if getErr != nil || current.Status != "running" || current.PID <= 0 {
+				return
+			}
+			record = current
+		}
+	}
+}
+
+func dockerStatsSnapshot(record state.Record) (map[string]any, error) {
+	stats, err := state.ReadStats(record.PID)
+	if err != nil {
+		return nil, err
+	}
+	memoryLimit := int64(0)
+	if value, parseErr := strconv.ParseInt(stats.MemoryMax, 10, 64); parseErr == nil && value > 0 {
+		memoryLimit = value
+	}
+	cpuUsage := map[string]any{
+		"total_usage": stats.CPUUsageUsec * 1000,
+		"usage_in_kernelmode": stats.CPUSystemUsec * 1000,
+		"usage_in_usermode": stats.CPUUserUsec * 1000,
+	}
+	return map[string]any{
 		"read": time.Now().UTC().Format(time.RFC3339Nano),
-		"preread": "", "pids_stats": map[string]any{
-			"current": stats.PIDsCurrent, "limit": record.Options.PidsLimit,
-		},
-		"memory_stats": map[string]any{
-			"usage": stats.MemoryCurrent, "limit": stats.MemoryMax,
-		},
+		"preread": "",
+		"pids_stats": map[string]any{"current": stats.PIDsCurrent, "limit": record.Options.PidsLimit},
+		"memory_stats": map[string]any{"usage": stats.MemoryCurrent, "limit": memoryLimit, "stats": map[string]int64{}},
 		"cpu_stats": map[string]any{
-			"cpu_usage": map[string]any{
-				"total_usage": stats.CPUUsageUsec * 1000,
-				"usage_in_kernelmode": stats.CPUSystemUsec * 1000,
-				"usage_in_usermode": stats.CPUUserUsec * 1000,
-			},
+			"cpu_usage": cpuUsage, "system_cpu_usage": 0, "online_cpus": runtime.NumCPU(),
 		},
+		"precpu_stats": map[string]any{"cpu_usage": cpuUsage, "system_cpu_usage": 0, "online_cpus": runtime.NumCPU()},
 		"blkio_stats": map[string]any{"io_service_bytes_recursive": []any{}},
 		"networks": map[string]any{},
 		"name": displayName(record), "id": record.ID,
-	})
+	}, nil
 }
 
 func (s *Server) handleImages(writer http.ResponseWriter) {
