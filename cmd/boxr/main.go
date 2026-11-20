@@ -182,6 +182,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runCreate(args[1:], stdout, stderr)
 	case "start":
 		return runStart(args[1:], stdout, stderr)
+	case "restart":
+		return runRestart(args[1:], stdout, stderr)
 	case "exec":
 		return runExec(args[1:], stdout, stderr)
 	default:
@@ -943,6 +945,32 @@ func buildRunPlan(command []string, opts container.Options) runPlan {
 		SeccompProfile: opts.SeccompProfile, SecurityProfile: opts.SecurityProfile, ResourceProfile: opts.ResourceProfile, NoContainerStateMade: true,
 	}
 	return plan
+}
+
+func runRestart(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("restart", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	timeout := flags.Duration("time", 10*time.Second, "grace period before SIGKILL")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 1 || *timeout < 0 || *timeout > 5*time.Minute {
+		fmt.Fprintln(stderr, "Usage: boxr restart [--time 10s] ID|NAME")
+		return 2
+	}
+	record, err := state.Get(flags.Arg(0))
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr restart: %v\n", err)
+		return 1
+	}
+	if record.Options.AutoRemove {
+		fmt.Fprintf(stderr, "boxr restart: container %s uses automatic removal and cannot be restarted\n", record.ID)
+		return 1
+	}
+	if code := runStop([]string{"--time", timeout.String(), record.ID}, stdout, stderr); code != 0 {
+		return code
+	}
+	return runStart([]string{record.ID}, stdout, stderr)
 }
 
 func runStart(args []string, stdout, stderr io.Writer) int {
@@ -1855,6 +1883,7 @@ Usage:
   boxr push [--authfile PATH] LOCAL:TAG [REGISTRY/IMAGE:TAG]
   boxr create [options] IMAGE [COMMAND [ARG...]]
   boxr start ID|NAME
+  boxr restart [--time 10s] ID|NAME
   boxr run [options] [--detach|-d] [--dry-run] COMMAND [ARG...]
   boxr exec [options] CONTAINER COMMAND [ARG...]
   boxr version [--json]
@@ -3327,7 +3356,9 @@ var implementedFeatures = []string{
 	"native create command records a verified image-backed container without starting it",
 	"native start command launches a created image-backed container through the detached supervisor",
 	"native start command restarts stopped image-backed containers through the detached supervisor",
-	"Engine API start endpoint restarts stopped image-backed containers through the native detached supervisor"
+	"native restart command stops then starts an image-backed container with a bounded graceful timeout",
+	"Engine API start endpoint restarts stopped image-backed containers through the native detached supervisor",
+	"Engine API restart endpoint performs a bounded graceful stop and launches the same saved container again"
 }
 
 func printFeatures(stdout io.Writer) {
@@ -3378,7 +3409,7 @@ func runCompletion(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Usage: boxr completion bash|zsh|fish|powershell")
 		return 2
 	}
-	commands := "daemon pull push create start run exec ps inspect stop kill wait logs network volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
+	commands := "daemon pull push create start restart run exec ps inspect stop kill wait logs network volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
 	switch args[0] {
 	case "bash":
 		fmt.Fprintf(stdout, `_boxr_complete() { COMPREPLY=($(compgen -W "%s" -- "${COMP_WORDS[COMP_CWORD]}")); }
