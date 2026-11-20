@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 644 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 651 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
 
@@ -650,3 +650,10 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 642. service startup timeout bounds are validated between 10 milliseconds and 10 minutes
 643. secret-free deployment plans expose per-service startup timeout metadata
 644. per-service startup timeouts govern process and readiness startup gates
+645. per-service shutdown grace overrides the stack-wide deploy down timeout
+646. zero per-service shutdown grace inherits the stack-wide command timeout
+647. service shutdown timeout bounds are validated between 10 milliseconds and 10 minutes
+648. per-service shutdown grace is persisted as reserved non-secret runtime metadata
+649. attached deployment rollback and interrupt shutdown honor service-specific grace periods
+650. deploy down applies each service-specific shutdown deadline independently
+651. only services exceeding their own shutdown grace are escalated to SIGKILL
