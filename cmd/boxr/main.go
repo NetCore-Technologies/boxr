@@ -192,6 +192,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runStart(args[1:], stdout, stderr)
 	case "restart":
 		return runRestart(args[1:], stdout, stderr)
+	case "rename":
+		return runRename(args[1:], stdout, stderr)
 	case "container":
 		return runContainerCommand(args[1:], stdout, stderr)
 	case "exec":
@@ -217,6 +219,8 @@ func runContainerCommand(args []string, stdout, stderr io.Writer) int {
 		return runStart(args[1:], stdout, stderr)
 	case "restart":
 		return runRestart(args[1:], stdout, stderr)
+	case "rename":
+		return runRename(args[1:], stdout, stderr)
 	case "stop":
 		return runStop(args[1:], stdout, stderr)
 	case "kill":
@@ -1068,6 +1072,20 @@ func runRestart(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	return runStart([]string{record.ID}, stdout, stderr)
+}
+
+func runRename(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 2 || strings.TrimSpace(args[0]) == "" {
+		fmt.Fprintln(stderr, "Usage: boxr rename ID|NAME NEW_NAME")
+		return 2
+	}
+	record, err := state.Rename(args[0], args[1])
+	if err != nil {
+		fmt.Fprintf(stderr, "boxr rename: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "renamed %s as %s\n", record.ID, record.Name)
+	return 0
 }
 
 func runStart(args []string, stdout, stderr io.Writer) int {
@@ -2019,7 +2037,8 @@ Usage:
   boxr create [options] IMAGE [COMMAND [ARG...]]
   boxr start ID|NAME
   boxr restart [--time 10s] ID|NAME
-  boxr container create|run|start|restart|stop|kill|wait|logs|exec|ls|inspect|rm|stats ...
+  boxr rename ID|NAME NEW_NAME
+  boxr container create|run|start|restart|rename|stop|kill|wait|logs|exec|ls|inspect|rm|stats ...
   boxr run [options] [--detach|-d] [--dry-run] COMMAND [ARG...]
   boxr exec [options] CONTAINER COMMAND [ARG...]
   boxr version [--json]
@@ -3555,7 +3574,7 @@ func runCompletion(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Usage: boxr completion bash|zsh|fish|powershell")
 		return 2
 	}
-	commands := "daemon pull push build images tag rmi container create start restart run exec ps inspect stop kill wait logs network volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
+	commands := "daemon pull push build images tag rmi container create start restart rename run exec ps inspect stop kill wait logs network volume image stats rm events prune info system doctor support-bundle rootfs config deploy features version help completion"
 	switch args[0] {
 	case "bash":
 		fmt.Fprintf(stdout, `_boxr_complete() { COMPREPLY=($(compgen -W "%s" -- "${COMP_WORDS[COMP_CWORD]}")); }
