@@ -2,6 +2,9 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
+
+## Implemented capabilities
+
 **Inventory size: 725 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 ## Implemented capabilities
@@ -714,12 +717,12 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 706. published port setup checks exact PREROUTING OUTPUT and FORWARD rules before insertion
 707. published port rollback removes only firewall rules inserted by the current attachment attempt
 708. failed firewall cleanup retains the IPAM lease and host-port reservation until cleanup can be retried
-709. bounded parallel OCI and Docker registry layer downloads
-710. registry layer download worker count capped at four
-711. parallel registry layer verification preserves manifest order
-712. registry pull cancels outstanding layer downloads after the first failure
-713. parallel registry pull removes every partial temporary layer on failure
-714. concurrent registry requests share a synchronized Bearer token refresh
+709. live network connect attaches a running Boxr container with a private network namespace to a managed bridge
+710. live network disconnect removes a running container's managed bridge interface and address lease
+711. live bridge attachment requires the container to have been started with network mode none
+712. live bridge attachment rejects host-network containers before attempting namespace entry
+713. live bridge attachment rejects user-namespace containers when host-side namespace control is unavailable
+714. live network connect verifies the target PID executable and Boxr namespace-helper command line
 715. live network connect supports repeatable TCP and UDP published host ports
 716. container exit detaches dynamically connected managed networks even when they were not present at run startup
 717. container exit releases dynamically connected published port rules veth links and IPAM reservations
