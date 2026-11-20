@@ -56,7 +56,7 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "Usage: boxr exec [-i] [-t] [--workdir PATH] [--env KEY=VALUE] [--env-file PATH] CONTAINER COMMAND [ARG...]")
 		flags.PrintDefaults()
 	}
-	if err := flags.Parse(args); err != nil {
+	if err := flags.Parse(expandExecShortFlags(args)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
@@ -347,6 +347,42 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stderr, "boxr exec: launcher failed: %v\n", waitErr)
 	return 125
+}
+
+func expandExecShortFlags(args []string) []string {
+	expanded := make([]string, 0, len(args)+2)
+	for index := 0; index < len(args); index++ {
+		value := args[index]
+		if value == "--" {
+			return append(expanded, args[index:]...)
+		}
+		switch value {
+		case "--workdir", "-w", "--env", "-e", "--env-file":
+			expanded = append(expanded, value)
+			if index+1 < len(args) {
+				index++
+				expanded = append(expanded, args[index])
+			}
+			continue
+		}
+		if strings.HasPrefix(value, "--workdir=") ||
+			strings.HasPrefix(value, "--env=") ||
+			strings.HasPrefix(value, "--env-file=") {
+			expanded = append(expanded, value)
+			continue
+		}
+		if len(value) > 2 && value[0] == '-' && value[1] != '-' && strings.Trim(value[1:], "it") == "" {
+			for _, option := range value[1:] {
+				expanded = append(expanded, "-"+string(option))
+			}
+			continue
+		}
+		expanded = append(expanded, value)
+		if !strings.HasPrefix(value, "-") || value == "-" {
+			return append(expanded, args[index+1:]...)
+		}
+	}
+	return expanded
 }
 
 func startExecTerminal(launcher *exec.Cmd, output io.Writer) (*os.File, func(), error) {
