@@ -650,6 +650,10 @@ func loadIgnorePatternsNamed(contextRoot, filename string) ([]ignorePattern, err
 	return patterns, nil
 }
 
+func loadIgnorePatterns(contextRoot string) ([]ignorePattern, error) {
+	return loadIgnorePatternsNamed(contextRoot, ".boxrignore")
+}
+
 func ignoredPath(relative string, isDir bool, patterns []ignorePattern) bool {
 	clean := filepath.ToSlash(filepath.Clean(relative))
 	if clean == "." || clean == "" {
