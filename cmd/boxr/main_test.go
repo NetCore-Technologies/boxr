@@ -3433,9 +3433,11 @@ func TestCreateAndStartImageBackedContainer(t *testing.T) {
 	originalLauncher := launchCreatedContainer
 	var launchedExecutable string
 	var launchedArgs []string
+	launchCount := 0
 	launchCreatedContainer = func(executable string, args []string, childStdout, childStderr io.Writer) error {
 		launchedExecutable = executable
 		launchedArgs = append([]string(nil), args...)
+		launchCount++
 		return nil
 	}
 	t.Cleanup(func() { launchCreatedContainer = originalLauncher })
@@ -3454,6 +3456,52 @@ func TestCreateAndStartImageBackedContainer(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "started "+record.ID) {
 		t.Fatalf("start output does not identify the container: %q", stdout.String())
+	}
+
+	// Model a workload that ran, was manually stopped, and exited. A
+	// subsequent native start must accept that stopped record just like the
+	// first start, without losing its private configuration.
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatalf("mark initial start: %v", err)
+	}
+	if err := state.RequestStop(record.ID); err != nil {
+		t.Fatalf("mark manual stop: %v", err)
+	}
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatalf("finish stopped container: %v", err)
+	}
+	stopped, err := state.Get(record.ID)
+	if err != nil {
+		t.Fatalf("read stopped container: %v", err)
+	}
+	if stopped.Status != "exited" || !stopped.StopRequested {
+		t.Fatalf("expected a stopped record with stop intent, got %+v", stopped)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"start", "created-test"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("restart stopped container returned %d: stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if launchCount != 2 {
+		t.Fatalf("start invoked the supervisor %d times, want 2", launchCount)
+	}
+
+	// The runtime calls state.Start after creating its new process. An
+	// explicit start clears the old manual-stop marker so future restart
+	// policy decisions can proceed normally.
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatalf("restart stopped container state: %v", err)
+	}
+	restarted, err := state.Get(record.ID)
+	if err != nil {
+		t.Fatalf("read restarted container: %v", err)
+	}
+	if restarted.Status != "running" || restarted.StopRequested {
+		t.Fatalf("restart did not clear stopped state: %+v", restarted)
+	}
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatalf("finish restarted test process: %v", err)
 	}
 }
 
