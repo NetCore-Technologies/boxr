@@ -3439,7 +3439,8 @@ var implementedFeatures = []string{
 	"top-level rmi command removes unused local image tags while preserving shared content-addressed blobs",
 	"container namespace exposes Docker-style lifecycle subcommands through the native verified Boxr operations",,
 	"native rm safely removes created containers without weakening running-container protection",
-	"native rm --force stops running containers or cancels pending restarts before safe removal"
+	"native rm --force stops running containers or cancels pending restarts before safe removal",
+	"Engine API DELETE force true delegates to native safe forced removal for running or restarting containers"
 	"native create command records a verified image-backed container without starting it",
 	"native start command launches a created image-backed container through the detached supervisor",
 	"native start command restarts stopped image-backed containers through the detached supervisor",
