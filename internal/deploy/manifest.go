@@ -414,11 +414,15 @@ func buildPlan(file File) (Plan, error) {
 			}
 			healthcheckType = service.Healthcheck.Probe.Type()
 		}
+		healthcheckIntervalMS := 0
+		healthcheckTimeoutMS := 0
+		healthcheckRetries := 0
+		healthcheckStartPeriodMS := 0
 		if service.Healthcheck != nil {
-			servicePlans[name].HealthcheckIntervalMS = service.Healthcheck.IntervalMS
-			servicePlans[name].HealthcheckTimeoutMS = service.Healthcheck.Probe.TimeoutMS
-			servicePlans[name].HealthcheckRetries = service.Healthcheck.Retries
-			servicePlans[name].HealthcheckStartPeriodMS = service.Healthcheck.StartPeriodMS
+			healthcheckIntervalMS = service.Healthcheck.IntervalMS
+			healthcheckTimeoutMS = service.Healthcheck.Probe.TimeoutMS
+			healthcheckRetries = service.Healthcheck.Retries
+			healthcheckStartPeriodMS = service.Healthcheck.StartPeriodMS
 		}
 		if configuredName := service.Options.Name; configuredName != "" {
 			if previous, exists := configuredNames[configuredName]; exists {
@@ -475,9 +479,13 @@ func buildPlan(file File) (Plan, error) {
 			EnvironmentFileCount:  len(service.EnvFiles),
 			StartTimeoutMS:        service.StartTimeoutMS,
 			StopTimeoutMS:         service.StopTimeoutMS,
-			HealthcheckConfigured: service.Healthcheck != nil,
-			HealthcheckType:       healthcheckType,
-			LabelCount:            len(service.Options.Labels),
+			HealthcheckConfigured:    service.Healthcheck != nil,
+			HealthcheckType:          healthcheckType,
+			HealthcheckIntervalMS:    healthcheckIntervalMS,
+			HealthcheckTimeoutMS:     healthcheckTimeoutMS,
+			HealthcheckRetries:       healthcheckRetries,
+			HealthcheckStartPeriodMS: healthcheckStartPeriodMS,
+			LabelCount:               len(service.Options.Labels),
 		}
 	}
 
