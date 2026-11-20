@@ -4872,9 +4872,14 @@ func runDetachedContainer(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "boxr run --detach: supervisor did not start the container: %s (launch log: %s)\n", received.line, logPath)
 		return 1
 	case <-timer.C:
-		_ = command.Process.Kill()
-		_, _ = command.Process.Wait()
-		fmt.Fprintf(stderr, "boxr run --detach: timed out waiting for startup (launch log: %s)\n", logPath)
+		// Do not kill a supervisor on a handshake timeout: it may already have
+		// created a state record or released the namespace startup barrier.
+		// Leave it discoverable so the operator can inspect/stop it safely.
+		if err := command.Process.Release(); err != nil {
+			fmt.Fprintf(stderr, "boxr run --detach: startup is not confirmed and supervisor handle release failed: %v (check 'boxr ps --all'; launch log: %s)\n", err, logPath)
+			return 1
+		}
+		fmt.Fprintf(stderr, "boxr run --detach: startup is not confirmed after 30s; supervisor remains detached (check 'boxr ps --all'; launch log: %s)\n", logPath)
 		return 1
 	}
 }
