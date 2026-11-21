@@ -53,7 +53,9 @@ type composeService struct {
 	WorkingDir    string    `yaml:"working_dir"`
 	Hostname      string    `yaml:"hostname"`
 	NetworkMode   string    `yaml:"network_mode"`
-	Restart       string    `yaml:"restart"`
+	Restart        string    `yaml:"restart"`
+	StopSignal     string    `yaml:"stop_signal"`
+	StopGracePeriod yaml.Node `yaml:"stop_grace_period"`
 	ContainerName string    `yaml:"container_name"`
 	TTY           bool      `yaml:"tty"`
 	StdinOpen     bool      `yaml:"stdin_open"`
@@ -265,6 +267,15 @@ func convertComposeService(name string, source composeService, networkNames map[
 		return result, fmt.Errorf("restart policy %q is not supported for attached deployments; use restart: 'no'", source.Restart)
 	}
 
+	stopSignal, err := parseComposeStopSignal(source.StopSignal)
+	if err != nil {
+		return result, err
+	}
+	stopGracePeriodMS, err := parseComposeStopGracePeriod(&source.StopGracePeriod)
+	if err != nil {
+		return result, err
+	}
+
 	command, err := parseComposeCommand(&source.Command)
 	if err != nil {
 		return result, err
@@ -314,6 +325,7 @@ func convertComposeService(name string, source composeService, networkNames map[
 		ReadOnlyRootFS:   source.ReadOnly,
 		DropCapabilities: capabilityDrops,
 		Healthcheck:      healthcheck,
+		StopSignal:       stopSignal,
 	}
 	return Service{
 		Image:     source.Image,
@@ -322,7 +334,8 @@ func convertComposeService(name string, source composeService, networkNames map[
 		DependsOn: dependencies,
 		Profiles:  append([]string(nil), source.Profiles...),
 		EnvFiles:  envFiles,
-		Volumes:   namedVolumes,
+		Volumes:       namedVolumes,
+		StopTimeoutMS: stopGracePeriodMS,
 	}, nil
 }
 

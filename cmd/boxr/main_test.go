@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -4229,5 +4230,30 @@ func TestDeploymentHealthyDependencyTimeoutUsesHealthcheckBudget(t *testing.T) {
 	want := 20*time.Second + 2*time.Second + 5*(45*time.Second+3*time.Second)
 	if got != want {
 		t.Fatalf("healthy dependency timeout = %s, want %s", got, want)
+	}
+}
+
+
+func TestDeploymentOSStopSignalMapping(t *testing.T) {
+	cases := map[string]syscall.Signal{
+		"":        0,
+		"SIGTERM": syscall.SIGTERM,
+		"TERM":    syscall.SIGTERM,
+		"SIGINT":  syscall.SIGINT,
+		"SIGQUIT": syscall.SIGQUIT,
+		"SIGHUP":  syscall.SIGHUP,
+		"SIGUSR1": syscall.SIGUSR1,
+		"SIGUSR2": syscall.SIGUSR2,
+	}
+	for input, want := range cases {
+		got, err := deploymentOSStopSignal(input)
+		if err != nil || got != want {
+			t.Errorf("deploymentOSStopSignal(%q) = %v, %v; want %v", input, got, err, want)
+		}
+	}
+	for _, input := range []string{"SIGKILL", "SIGSTOP", "SIGCONT", "SIGMAGIC"} {
+		if _, err := deploymentOSStopSignal(input); err == nil {
+			t.Errorf("deploymentOSStopSignal(%q) unexpectedly succeeded", input)
+		}
 	}
 }

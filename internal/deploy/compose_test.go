@@ -45,6 +45,8 @@ services:
     profiles: [frontend]
     working_dir: /srv/app
     hostname: api
+    stop_signal: SIGQUIT
+    stop_grace_period: 30s
     read_only: true
     cap_drop: [NET_RAW, CAP_MKNOD]
     networks: [app]
@@ -77,6 +79,9 @@ networks:
 		HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 8080, Protocol: "tcp",
 	}) {
 		t.Fatalf("published ports = %#v", api.Options.PublishedPorts)
+	}
+	if api.Options.StopSignal != "SIGQUIT" || api.StopTimeoutMS != 30000 {
+		t.Fatalf("stop settings = signal %q grace %dms", api.Options.StopSignal, api.StopTimeoutMS)
 	}
 	if api.Options.Workdir != "/srv/app" || api.Options.Hostname != "api" {
 		t.Fatalf("workdir/hostname = %q / %q", api.Options.Workdir, api.Options.Hostname)
@@ -139,6 +144,10 @@ func TestLoadComposeRejectsSemanticsBoxrCannotRepresent(t *testing.T) {
 		"interactive tty":                  "services:\n  api:\n    image: alpine\n    network_mode: none\n    tty: true\n",
 		"privileged":                       "services:\n  api:\n    image: alpine\n    network_mode: none\n    privileged: true\n",
 		"restart policy":                   "services:\n  api:\n    image: alpine\n    network_mode: none\n    restart: always\n",
+		"invalid stop signal":               "services:\n  api:\n    image: alpine\n    network_mode: none\n    stop_signal: SIGKILL\n",
+		"unknown stop signal":               "services:\n  api:\n    image: alpine\n    network_mode: none\n    stop_signal: SIGMAGIC\n",
+		"invalid stop grace period":         "services:\n  api:\n    image: alpine\n    network_mode: none\n    stop_grace_period: 0s\n",
+		"long stop grace period":            "services:\n  api:\n    image: alpine\n    network_mode: none\n    stop_grace_period: 10m1s\n",
 		"implicit default bridge":          "services:\n  api:\n    image: alpine\n",
 		"non-external network":             "services:\n  api:\n    image: alpine\n    networks: [app]\nnetworks:\n  app: {}\n",
 		"unsupported dependency condition": "services:\n  api:\n    image: alpine\n    network_mode: none\n    depends_on:\n      db:\n        condition: service_completed_successfully\n  db:\n    image: postgres\n    network_mode: none\n",
@@ -812,5 +821,47 @@ func TestLoadComposeRejectsHealthyDependencyWithoutEnabledHealthcheck(t *testing
 				t.Fatal("service_healthy dependency without an enabled healthcheck was accepted by BuildPlan")
 			}
 		})
+	}
+}
+
+
+func TestParseComposeStopGracePeriod(t *testing.T) {
+	cases := []struct {
+		input string
+		want  int
+	}{
+		{"100ms", 100},
+		{"10.5ms", 11},
+		{"30s", 30000},
+		{"10m", 600000},
+	}
+	for _, test := range cases {
+		node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: test.input}
+		got, err := parseComposeStopGracePeriod(node)
+		if err != nil || got != test.want {
+			t.Errorf("parseComposeStopGracePeriod(%q) = %d, %v; want %d", test.input, got, err, test.want)
+		}
+	}
+	for _, input := range []string{"", "9ms", "0s", "-1s", "10m1s", "bad"} {
+		node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: input}
+		if _, err := parseComposeStopGracePeriod(node); err == nil {
+			t.Errorf("parseComposeStopGracePeriod(%q) unexpectedly succeeded", input)
+		}
+	}
+	if _, err := parseComposeStopGracePeriod(&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: "30"}); err == nil {
+		t.Fatal("integer stop_grace_period unexpectedly succeeded")
+	}
+}
+
+func TestParseComposeStopSignal(t *testing.T) {
+	for _, input := range []string{"", "SIGTERM", "TERM", "SIGINT", "SIGQUIT", "SIGHUP", "SIGUSR1", "SIGUSR2"} {
+		if got, err := parseComposeStopSignal(input); err != nil || got == "" {
+			t.Errorf("parseComposeStopSignal(%q) = %q, %v", input, got, err)
+		}
+	}
+	for _, input := range []string{"SIGKILL", "SIGSTOP", "SIGCONT", "SIGMAGIC"} {
+		if _, err := parseComposeStopSignal(input); err == nil {
+			t.Errorf("parseComposeStopSignal(%q) unexpectedly succeeded", input)
+		}
 	}
 }

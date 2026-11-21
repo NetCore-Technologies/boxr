@@ -75,7 +75,7 @@ func RunWithHooks(command string, args []string, options Options, hooks Hooks) e
 	}
 
 	signals := make(chan os.Signal, 8)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGUSR1, syscall.SIGUSR2)
 	defer signal.Stop(signals)
 	encodedOptions, err := json.Marshal(options)
 	if err != nil {
@@ -245,7 +245,7 @@ func Init(args []string) error {
 
 	var token [1]byte
 	signals := make(chan os.Signal, 8)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGUSR1, syscall.SIGUSR2)
 	defer signal.Stop(signals)
 	if _, err := io.ReadFull(ready, token[:]); err != nil {
 		return fmt.Errorf("wait for parent cgroup setup: %w", err)

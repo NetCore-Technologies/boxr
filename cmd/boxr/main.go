@@ -3783,6 +3783,7 @@ var implementedFeatures = []string{
 	"Compose YAML supports bounded Docker-style environment variable interpolation with project .env defaults and process-environment precedence",
 	"Compose healthchecks translate Docker CMD CMD-SHELL and NONE tests plus bounded interval timeout start-period and retry settings into container health monitors",
 	"Compose depends_on service_healthy gates dependent services until the declared dependency container healthcheck reports healthy",
+	"Compose stop_signal forwards a validated catchable stop signal through the attached supervisor and stop_grace_period sets a bounded per-service shutdown grace",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -4251,6 +4252,7 @@ type deploymentProcess struct {
 	name        string
 	configDir   string
 	stopTimeout time.Duration
+	stopSignal  syscall.Signal
 	command     *exec.Cmd
 }
 
@@ -4407,6 +4409,10 @@ func startDeploymentProcess(executable, stack string, order int, serviceName str
 		internalLabels[deploy.StopTimeoutLabel] = strconv.Itoa(service.StopTimeoutMS)
 	}
 	options.Labels = mergeLabels(options.Labels, internalLabels)
+	stopSignal, err := deploymentOSStopSignal(options.StopSignal)
+	if err != nil {
+		return nil, fmt.Errorf("prepare service %q stop signal: %w", serviceName, err)
+	}
 	deferredMountArgs, err := deferImageServiceBindMounts(service.Image, &options)
 	if err != nil {
 		return nil, fmt.Errorf("prepare image service mounts: %w", err)
@@ -4447,6 +4453,7 @@ func startDeploymentProcess(executable, stack string, order int, serviceName str
 		name:        options.Name,
 		configDir:   configDir,
 		stopTimeout: time.Duration(service.StopTimeoutMS) * time.Millisecond,
+		stopSignal:  stopSignal,
 		command:     command,
 	}, nil
 }
@@ -4877,7 +4884,11 @@ func stopDeploymentProcesses(processes []*deploymentProcess, exited map[string]d
 			grace = process.stopTimeout
 		}
 		pending[process.service] = stopState{graceDeadline: now.Add(grace)}
-		if err := process.command.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		var stopSignal os.Signal = os.Interrupt
+		if process.stopSignal != 0 {
+			stopSignal = process.stopSignal
+		}
+		if err := process.command.Process.Signal(stopSignal); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			fmt.Fprintf(stderr, "boxr deploy: signal service %s: %v\n", process.service, err)
 		}
 	}
@@ -4941,6 +4952,32 @@ func stopDeploymentProcesses(processes []*deploymentProcess, exited map[string]d
 			}
 		case <-timer.C:
 		}
+	}
+}
+
+func deploymentOSStopSignal(value string) (syscall.Signal, error) {
+	if value == "" {
+		return 0, nil
+	}
+	normalized, err := container.NormalizeStopSignal(value)
+	if err != nil {
+		return 0, err
+	}
+	switch normalized {
+	case "SIGHUP":
+		return syscall.SIGHUP, nil
+	case "SIGINT":
+		return syscall.SIGINT, nil
+	case "SIGQUIT":
+		return syscall.SIGQUIT, nil
+	case "SIGUSR1":
+		return syscall.SIGUSR1, nil
+	case "SIGUSR2":
+		return syscall.SIGUSR2, nil
+	case "SIGTERM":
+		return syscall.SIGTERM, nil
+	default:
+		return 0, fmt.Errorf("signal %q cannot be safely forwarded by the attached deployment supervisor", value)
 	}
 }
 
