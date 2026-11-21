@@ -205,7 +205,7 @@ func TestDockerContainerCommitExcludesDeclaredVolumeContents(t *testing.T) {
 		t.Fatalf("commit status=%d body=%s", response.Code, response.Body.String())
 	}
 	unpacked := filepath.Join(t.TempDir(), "volume-committed")
-	if err := imageStore.Unpack("volume-commit-result:latest", unpacked); err != nil {
+	if _, err := imageStore.Unpack("volume-commit-result:latest", unpacked); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(unpacked, "data", "from-image.txt")); !os.IsNotExist(err) {
