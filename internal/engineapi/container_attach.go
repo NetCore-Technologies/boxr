@@ -100,6 +100,7 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 	var target io.Writer = writer
 	var flusher http.Flusher
 	var connection io.ReadWriteCloser
+	var inputDone <-chan struct{}
 	if dockerExecUpgradeRequested(request) {
 		hijacker, ok := writer.(http.Hijacker)
 		if !ok {
@@ -122,7 +123,6 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 		connection = conn
 		target = conn
 		defer connection.Close()
-		var inputDone <-chan struct{}
 		if stdinConnection != nil {
 			done := make(chan struct{})
 			inputDone = done
