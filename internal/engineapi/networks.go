@@ -341,18 +341,51 @@ func decodeDockerNetworkBody(request *http.Request, target any) error {
 	return nil
 }
 
-func validateDockerEndpointConfig(raw json.RawMessage) error {
+type dockerNetworkEndpointIPAMConfig struct {
+	IPv4Address  string   `json:"IPv4Address"`
+	IPv6Address  string   `json:"IPv6Address"`
+	LinkLocalIPs []string `json:"LinkLocalIPs"`
+}
+
+type dockerNetworkEndpointConfig struct {
+	IPAMConfig *dockerNetworkEndpointIPAMConfig `json:"IPAMConfig"`
+	Aliases    []string                         `json:"Aliases"`
+	Links      []string                         `json:"Links"`
+	MacAddress string                           `json:"MacAddress"`
+	DriverOpts map[string]string                `json:"DriverOpts"`
+}
+
+func parseDockerEndpointConfig(raw json.RawMessage) (boxrnetwork.EndpointOptions, error) {
+	var endpoint boxrnetwork.EndpointOptions
 	if len(raw) == 0 || string(raw) == "null" {
-		return nil
+		return endpoint, nil
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil {
-		return fmt.Errorf("EndpointConfig must be an object")
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var config dockerNetworkEndpointConfig
+	if err := decoder.Decode(&config); err != nil {
+		return endpoint, fmt.Errorf("decode EndpointConfig: %w", err)
 	}
-	if len(fields) != 0 {
-		return fmt.Errorf("EndpointConfig aliases, static addresses, links, MAC addresses and driver options are not supported yet")
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return endpoint, fmt.Errorf("EndpointConfig must contain one JSON object")
 	}
-	return nil
+	if len(config.Aliases) > 0 || len(config.Links) > 0 || len(config.DriverOpts) > 0 {
+		return endpoint, fmt.Errorf("EndpointConfig aliases, links and driver options are not supported")
+	}
+	if config.IPAMConfig != nil {
+		if config.IPAMConfig.IPv6Address != "" || len(config.IPAMConfig.LinkLocalIPs) > 0 {
+			return endpoint, fmt.Errorf("EndpointConfig supports IPv4Address only; IPv6 and link-local addresses are not supported")
+		}
+		endpoint.IPv4Address = config.IPAMConfig.IPv4Address
+	}
+	endpoint.MACAddress = config.MacAddress
+	if endpoint.MACAddress != "" {
+		if err := boxrnetwork.ValidateEndpointMAC(endpoint.MACAddress); err != nil {
+			return boxrnetwork.EndpointOptions{}, fmt.Errorf("EndpointConfig MacAddress: %w", err)
+		}
+	}
+	return endpoint, nil
 }
 
 func (s *Server) handleNetworkConnect(writer http.ResponseWriter, request *http.Request, networkName string) {
@@ -365,7 +398,8 @@ func (s *Server) handleNetworkConnect(writer http.ResponseWriter, request *http.
 		writeError(writer, http.StatusBadRequest, fmt.Errorf("Container is required"))
 		return
 	}
-	if err := validateDockerEndpointConfig(input.EndpointConfig); err != nil {
+	endpoint, err := parseDockerEndpointConfig(input.EndpointConfig)
+	if err != nil {
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
@@ -388,7 +422,7 @@ func (s *Server) handleNetworkConnect(writer http.ResponseWriter, request *http.
 		writeError(writer, http.StatusConflict, fmt.Errorf("refuse to enter container PID %d: %w", record.PID, err))
 		return
 	}
-	if _, err := s.joinNetwork(networkName, record.PID, record.ID); err != nil {
+	if _, err := s.joinNetwork(networkName, record.PID, record.ID, endpoint); err != nil {
 		if strings.Contains(err.Error(), "does not exist") {
 			writeError(writer, http.StatusNotFound, err)
 		} else {
