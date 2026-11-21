@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/manit6752025/boxr/internal/rootfs"
 	"github.com/manit6752025/boxr/internal/state"
@@ -53,8 +54,11 @@ func (w *dockerArchiveLimitWriter) Write(data []byte) (int, error) {
 }
 
 func cleanDockerArchivePath(value string) (string, error) {
-	if value == "" || !strings.HasPrefix(value, "/") || strings.ContainsAny(value, "\x00\r\n\\") {
-		return "", fmt.Errorf("path must be an absolute container path without NUL, newline or backslash")
+	if value == "" || strings.ContainsAny(value, "\x00\r\n\\") {
+		return "", fmt.Errorf("path must be non-empty and contain no NUL, newline or backslash")
+	}
+	if !strings.HasPrefix(value, "/") {
+		value = "/" + value
 	}
 	for _, component := range strings.Split(value, "/") {
 		if component == ".." {
@@ -70,6 +74,26 @@ func cleanDockerArchivePath(value string) (string, error) {
 		return "", fmt.Errorf("container path exceeds %d bytes", maxDockerArchivePath)
 	}
 	return cleaned, nil
+}
+
+func dockerArchivePathFlags(value string) (relative string, contentsOnly, directoryExpected bool, err error) {
+	contentsOnly = strings.HasSuffix(value, "/.")
+	directoryExpected = contentsOnly || strings.HasSuffix(value, "/")
+	relative, err = cleanDockerArchivePath(value)
+	return relative, contentsOnly, directoryExpected, err
+}
+
+func dockerArchivePathUsesRestrictedMount(relative string) bool {
+	if relative == "" {
+		return false
+	}
+	first, _, _ := strings.Cut(relative, "/")
+	switch first {
+	case "proc", "sys", "dev":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleContainerArchive(writer http.ResponseWriter, request *http.Request, rawID string) {
@@ -89,7 +113,7 @@ func (s *Server) handleContainerArchive(writer http.ResponseWriter, request *htt
 			return
 		}
 	}
-	containerPath, err := cleanDockerArchivePath(query.Get("path"))
+	containerPath, contentsOnly, directoryExpected, err := dockerArchivePathFlags(query.Get("path"))
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, err)
 		return
@@ -191,6 +215,10 @@ func (s *Server) handleContainerArchive(writer http.ResponseWriter, request *htt
 	}
 
 	live := record.Status == "running" || record.Status == "paused"
+	if live && request.Method == http.MethodPut && dockerArchivePathUsesRestrictedMount(containerPath) {
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("copying through /proc, /sys or /dev is not supported"))
+		return
+	}
 	if live {
 		if record.PID <= 1 || !state.ProcessAlive(record.PID) {
 			writeError(writer, http.StatusConflict, fmt.Errorf("container process is no longer running"))
@@ -212,12 +240,7 @@ func (s *Server) handleContainerArchive(writer http.ResponseWriter, request *htt
 
 	switch request.Method {
 	case http.MethodGet, http.MethodHead:
-		readLower, readUpper := lowerRoot, upperRoot
-		if live {
-			readLower = filepath.Join("/proc", strconv.Itoa(record.PID), "root")
-			readUpper = ""
-		}
-		s.handleDockerArchiveGet(writer, request, readLower, readUpper, containerPath)
+		s.handleDockerArchiveGet(writer, request, lowerRoot, upperRoot, containerPath, contentsOnly, directoryExpected)
 	case http.MethodPut:
 		if upperInfo, statErr := os.Lstat(upperRoot); errors.Is(statErr, os.ErrNotExist) {
 			if err := os.MkdirAll(upperRoot, 0700); err != nil {
@@ -231,13 +254,19 @@ func (s *Server) handleContainerArchive(writer http.ResponseWriter, request *htt
 			writeError(writer, http.StatusConflict, fmt.Errorf("container writable layer is not a real directory"))
 			return
 		}
-		s.handleDockerArchivePut(writer, request, lowerRoot, upperRoot, containerPath)
+		writeRoot := upperRoot
+		if live {
+			// Modify the mounted container view rather than mutating an OverlayFS
+			// upperdir behind a live mount.
+			writeRoot = filepath.Join("/proc", strconv.Itoa(record.PID), "root", ".")
+		}
+		s.handleDockerArchivePut(writer, request, writeRoot, writeRoot, containerPath)
 	default:
 		writeMethodErrorFor(writer, http.MethodGet+", "+http.MethodHead+", "+http.MethodPut)
 	}
 }
 
-func (s *Server) handleDockerArchiveGet(writer http.ResponseWriter, request *http.Request, lowerRoot, upperRoot, containerPath string) {
+func (s *Server) handleDockerArchiveGet(writer http.ResponseWriter, request *http.Request, lowerRoot, upperRoot, containerPath string, contentsOnly, directoryExpected bool) {
 	lowerPath, upperPath, info, err := resolveDockerOverlayPath(lowerRoot, upperRoot, containerPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
@@ -245,6 +274,10 @@ func (s *Server) handleDockerArchiveGet(writer http.ResponseWriter, request *htt
 		} else {
 			writeError(writer, http.StatusConflict, fmt.Errorf("resolve container path: %w", err))
 		}
+		return
+	}
+	if directoryExpected && !info.IsDir() {
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("container path was required to be a directory"))
 		return
 	}
 	linkTarget := ""
@@ -259,12 +292,13 @@ func (s *Server) handleDockerArchiveGet(writer http.ResponseWriter, request *htt
 			return
 		}
 	}
-	stat := map[string]any{
-		"name": filepath.Base(containerPath), "size": info.Size(),
-		"mode": int64(info.Mode()), "mtime": info.ModTime().Unix(), "linkTarget": linkTarget,
-	}
+	statName := path.Base(containerPath)
 	if containerPath == "" {
-		stat["name"] = "/"
+		statName = "/"
+	}
+	stat := map[string]any{
+		"name": statName, "size": info.Size(),
+		"mode": int64(info.Mode()), "mtime": info.ModTime().UTC().Format(time.RFC3339Nano), "linkTarget": linkTarget,
 	}
 	statJSON, err := json.Marshal(stat)
 	if err != nil {
@@ -286,12 +320,19 @@ func (s *Server) handleDockerArchiveGet(writer http.ResponseWriter, request *htt
 	}
 	limited := &dockerArchiveLimitWriter{writer: temporary, remaining: maxDockerArchiveExpanded}
 	tarWriter := tar.NewWriter(limited)
-	tarName := containerPath
-	if tarName == "" {
+	tarName := path.Base(containerPath)
+	if containerPath == "" || contentsOnly {
 		tarName = "."
 	}
 	visited := 0
-	if err := addDockerArchiveNode(lowerPath, upperPath, tarName, tarWriter, &visited, 0, limited); err != nil {
+	var archiveErr error
+	if contentsOnly && info.IsDir() {
+		archiveErr = addDockerArchiveDirectoryContents(lowerPath, upperPath, tarName, tarWriter, &visited, 0, limited)
+	} else {
+		archiveErr = addDockerArchiveNode(lowerPath, upperPath, tarName, tarWriter, &visited, 0, limited)
+	}
+	if archiveErr != nil {
+		err = archiveErr
 		_ = tarWriter.Close()
 		_ = temporary.Close()
 		writeError(writer, http.StatusUnprocessableEntity, fmt.Errorf("archive container path: %w", err))
@@ -327,6 +368,28 @@ func (s *Server) handleDockerArchiveGet(writer http.ResponseWriter, request *htt
 		_, _ = io.Copy(writer, temporary)
 	}
 	_ = temporary.Close()
+}
+
+func addDockerArchiveDirectoryContents(lowerPath, upperPath, archiveName string, tarWriter *tar.Writer, visited *int, depth int, limiter *dockerArchiveLimitWriter) error {
+	if depth > maxDockerArchiveDepth {
+		return fmt.Errorf("container path exceeds maximum archive depth %d", maxDockerArchiveDepth)
+	}
+	children, err := dockerOverlayChildren(lowerPath, upperPath)
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(children))
+	for name := range children {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		child := children[name]
+		if err := addDockerArchiveNode(child.lowerPath, child.upperPath, path.Join(archiveName, name), tarWriter, visited, depth+1, limiter); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func addDockerArchiveNode(lowerPath, upperPath, archiveName string, tarWriter *tar.Writer, visited *int, depth int, limiter *dockerArchiveLimitWriter) error {
