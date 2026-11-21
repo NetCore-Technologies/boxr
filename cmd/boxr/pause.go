@@ -23,32 +23,27 @@ func runPauseCommand(args []string, pause bool, stdout, stderr io.Writer) int {
 		action, targetStatus = "unpause", "running"
 	}
 	if len(args) == 0 {
-		fmt.Fprintf(stderr, "Usage: boxr %s ID|NAME [...]
-", action)
+		fmt.Fprintf(stderr, "Usage: boxr %s ID|NAME [...]\n", action)
 		return 2
 	}
 	failed := false
 	for _, query := range args {
 		record, err := state.Get(query)
 		if err != nil {
-			fmt.Fprintf(stderr, "boxr %s: %s: %v
-", action, query, err)
+			fmt.Fprintf(stderr, "boxr %s: %s: %v\n", action, query, err)
 			failed = true
 			continue
 		}
 		if record.Status == targetStatus {
-			fmt.Fprintf(stdout, "%s is already %s
-", record.ID, targetStatus)
+			fmt.Fprintf(stdout, "%s is already %s\n", record.ID, targetStatus)
 			continue
 		}
 		if err := transitionContainerPause(record, pause, container.SetCgroupFrozen); err != nil {
-			fmt.Fprintf(stderr, "boxr %s: %s: %v
-", action, record.ID, err)
+			fmt.Fprintf(stderr, "boxr %s: %s: %v\n", action, record.ID, err)
 			failed = true
 			continue
 		}
-		fmt.Fprintf(stdout, "%sd %s
-", action, record.ID)
+		fmt.Fprintf(stdout, "%sd %s\n", action, record.ID)
 	}
 	if failed {
 		return 1
