@@ -3360,7 +3360,6 @@ func TestCompletionIncludesDockerAndNativeImageContainerCommands(t *testing.T) {
 	}
 }
 
-
 func TestCreateAndStartImageBackedContainer(t *testing.T) {
 	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
 	t.Setenv("BOXR_STATE_DIR", filepath.Join(t.TempDir(), "state"))
@@ -3551,7 +3550,6 @@ func TestTopLevelPullAliasRequiresImageReference(t *testing.T) {
 	}
 }
 
-
 func TestRestartRestartsStoppedImageBackedContainer(t *testing.T) {
 	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
 	t.Setenv("BOXR_STATE_DIR", filepath.Join(t.TempDir(), "state"))
@@ -3636,7 +3634,6 @@ func TestRestartRejectsAutoRemoveContainers(t *testing.T) {
 	_ = state.RemoveCreated(record.ID)
 }
 
-
 func TestDockerStyleImageAliasesBuildListTagAndRemove(t *testing.T) {
 	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
 	contextDir := t.TempDir()
@@ -3698,7 +3695,6 @@ func TestDockerStyleImageAliasesBuildListTagAndRemove(t *testing.T) {
 	}
 }
 
-
 func TestContainerNamespaceRoutesDockerStyleLifecycleCommands(t *testing.T) {
 	t.Setenv("BOXR_STATE_DIR", filepath.Join(t.TempDir(), "state"))
 	record, err := state.Create("namespace-test", []string{"/bin/true"}, container.Options{}, map[string]string{"suite": "container-namespace"})
@@ -3730,7 +3726,6 @@ func TestContainerNamespaceRoutesDockerStyleLifecycleCommands(t *testing.T) {
 		t.Fatalf("unknown container action returned %d, want 2", code)
 	}
 }
-
 
 func TestRemoveCanDeleteCreatedContainersButStillProtectsRunningOnes(t *testing.T) {
 	t.Setenv("BOXR_STATE_DIR", filepath.Join(t.TempDir(), "state"))
@@ -3783,7 +3778,6 @@ func TestRemoveCanDeleteCreatedContainersButStillProtectsRunningOnes(t *testing.
 	}
 }
 
-
 func TestRemoveForceCancelsPendingRestartAndDeletesRecord(t *testing.T) {
 	t.Setenv("BOXR_STATE_DIR", filepath.Join(t.TempDir(), "state"))
 	record, err := state.Create("force-remove", []string{"/bin/true"}, container.Options{
@@ -3810,7 +3804,6 @@ func TestRemoveForceCancelsPendingRestartAndDeletesRecord(t *testing.T) {
 		t.Fatal("container remains after forced removal")
 	}
 }
-
 
 func TestRunAcceptsDockerStylePositionalLocalImages(t *testing.T) {
 	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
@@ -3863,7 +3856,6 @@ func TestRunAcceptsDockerStylePositionalLocalImages(t *testing.T) {
 	}
 }
 
-
 func TestRenameAndContainerRenamePreserveContainerIdentity(t *testing.T) {
 	t.Setenv("BOXR_STATE_DIR", filepath.Join(t.TempDir(), "state"))
 	first, err := state.Create("before-rename", []string{"/bin/true"}, container.Options{}, nil)
@@ -3912,7 +3904,6 @@ func TestRenameAndContainerRenamePreserveContainerIdentity(t *testing.T) {
 	}
 }
 
-
 func TestComposeCommandAliasesSupportedComposeYAMLWorkflow(t *testing.T) {
 	manifest := filepath.Join(t.TempDir(), "compose.yaml")
 	contents := `name: compose-alias-test
@@ -3942,7 +3933,6 @@ services:
 		t.Fatalf("compose plan output omits deployment metadata: %q", stdout.String())
 	}
 }
-
 
 func TestContainerPruneRequiresExplicitModeAndPreservesActiveRecords(t *testing.T) {
 	t.Setenv("BOXR_STATE_DIR", filepath.Join(t.TempDir(), "state"))
