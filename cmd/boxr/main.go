@@ -3653,13 +3653,13 @@ var implementedFeatures = []string{
 	"compose command aliases the supported Compose YAML deployment validation planning pull and lifecycle workflows",
 	"Engine API POST containers wait blocks for not-running state and returns the persisted workload exit status",
 	"container prune previews and filters stopped records and requires explicit force before removal",
-	"Engine API DELETE force true delegates to native safe forced removal for running or restarting containers"
+	"Engine API DELETE force true delegates to native safe forced removal for running or restarting containers",
 	"native create command records a verified image-backed container without starting it",
 	"native start command launches a created image-backed container through the detached supervisor",
 	"native start command restarts stopped image-backed containers through the detached supervisor",
 	"native restart command stops then starts an image-backed container with a bounded graceful timeout",
 	"Engine API start endpoint restarts stopped image-backed containers through the native detached supervisor",
-	"Engine API restart endpoint performs a bounded graceful stop and launches the same saved container again"
+	"Engine API restart endpoint performs a bounded graceful stop and launches the same saved container again",
 }
 
 func printFeatures(stdout io.Writer) {
