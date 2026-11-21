@@ -3401,12 +3401,14 @@ func TestDockerContainerSizeRejectsSymlinkedRootAndBoundsWalk(t *testing.T) {
 	}
 }
 
-func TestDockerContainerInspectPreservesTTYConfig(t *testing.T) {
+func TestDockerContainerInspectPreservesTTYAndStdinConfig(t *testing.T) {
 	server := setupEngineAPITest(t)
-	record := createEngineAPITestContainer(t, "tty-container", container.Options{TTY: true})
+	record := createEngineAPITestContainer(t, "tty-container", container.Options{
+		TTY: true, OpenStdin: true, StdinOnce: true,
+	})
 	response := engineAPIRequest(server, http.MethodGet, "/v1.45/containers/"+record.ID+"/json")
 	if response.Code != http.StatusOK {
-		t.Fatalf("TTY inspect status=%d body=%s", response.Code, response.Body.String())
+		t.Fatalf("TTY and stdin inspect status=%d body=%s", response.Code, response.Body.String())
 	}
 	var inspected struct {
 		Config map[string]any `json:"Config"`
@@ -3414,7 +3416,9 @@ func TestDockerContainerInspectPreservesTTYConfig(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &inspected); err != nil {
 		t.Fatal(err)
 	}
-	if inspected.Config["Tty"] != true {
-		t.Fatalf("Docker inspect Config.Tty = %#v, want true", inspected.Config["Tty"])
+	for key, want := range map[string]bool{"Tty": true, "OpenStdin": true, "StdinOnce": true} {
+		if inspected.Config[key] != want {
+			t.Errorf("Docker inspect Config.%s = %#v, want %t", key, inspected.Config[key], want)
+		}
 	}
 }

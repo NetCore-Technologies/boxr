@@ -1660,7 +1660,7 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 		"ExposedPorts": dockerContainerExposedPorts(record.Options.ExposedPorts),
 		"StopSignal":   record.Options.StopSignal,
 		"Healthcheck":  record.Options.Healthcheck,
-		"OpenStdin":    false, "StdinOnce": false, "Tty": false,
+		"OpenStdin":    record.Options.OpenStdin, "StdinOnce": record.Options.StdinOnce, "Tty": record.Options.TTY,
 	}
 	hostConfig := map[string]any{
 		"NetworkMode":       dockerNetworkMode(record.Options),
