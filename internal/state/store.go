@@ -453,9 +453,21 @@ func SetHealth(id string, health HealthState) error {
 		if !container.HealthcheckEnabled(record.Options.Healthcheck) {
 			return fmt.Errorf("container %s has no active healthcheck", record.ID)
 		}
+		previousStatus := ""
+		if record.Health != nil {
+			previousStatus = record.Health.Status
+		}
 		copy := health
 		copy.Log = append([]HealthLog(nil), health.Log...)
 		record.Health = &copy
+		if previousStatus != health.Status {
+			if err := appendEvent(Event{
+				Time: time.Now().UTC(), Action: "health_status: " + health.Status,
+				ID: record.ID, Name: record.Name,
+			}); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 }
@@ -495,6 +507,11 @@ func Start(id string, pid int) error {
 		}
 		if err := appendEvent(Event{Time: now, Action: "start", ID: record.ID, Name: record.Name, PID: pid}); err != nil {
 			return err
+		}
+		if record.Health != nil {
+			if err := appendEvent(Event{Time: now, Action: "health_status: starting", ID: record.ID, Name: record.Name, PID: pid}); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
