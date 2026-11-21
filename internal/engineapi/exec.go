@@ -31,7 +31,6 @@ type dockerExecCreateConfig struct {
 	AttachStdin  bool
 	AttachStdout bool
 	AttachStderr bool
-	Detach       bool
 	Tty          bool
 	Env          []string
 	Cmd          []string
@@ -46,7 +45,6 @@ type dockerExecStartConfig struct {
 	Detach      bool
 	Tty         bool
 	ConsoleSize []uint
-	DetachKeys  string
 }
 
 type dockerExecSession struct {
@@ -227,11 +225,11 @@ func validateDockerExecCreateConfig(config dockerExecCreateConfig) error {
 	if totalEnvironmentBytes > 1<<20 {
 		return fmt.Errorf("exec environment exceeds 1 MiB")
 	}
-	if len(config.ConsoleSize) != 0 && len(config.ConsoleSize) != 2 {
-		return fmt.Errorf("ConsoleSize must contain height and width")
+	if len(config.ConsoleSize) != 0 {
+		return fmt.Errorf("ConsoleSize requires a TTY, which is not supported yet")
 	}
-	if strings.ContainsAny(config.DetachKeys, "\x00\r\n") {
-		return fmt.Errorf("DetachKeys cannot contain NUL or newlines")
+	if config.DetachKeys != "" {
+		return fmt.Errorf("DetachKeys requires an attached stdin or TTY stream, which is not supported yet")
 	}
 	return nil
 }
@@ -317,11 +315,8 @@ func decodeDockerExecStartConfig(request *http.Request) (dockerExecStartConfig, 
 	if config.Tty {
 		return config, fmt.Errorf("Tty is not supported yet; Docker exec PTY hijacking is unavailable")
 	}
-	if len(config.ConsoleSize) != 0 && len(config.ConsoleSize) != 2 {
-		return config, fmt.Errorf("ConsoleSize must contain height and width")
-	}
-	if strings.ContainsAny(config.DetachKeys, "\x00\r\n") {
-		return config, fmt.Errorf("DetachKeys cannot contain NUL or newlines")
+	if len(config.ConsoleSize) != 0 {
+		return config, fmt.Errorf("ConsoleSize requires a TTY, which is not supported yet")
 	}
 	return config, nil
 }
@@ -351,7 +346,7 @@ func (s *Server) handleExecStart(writer http.ResponseWriter, request *http.Reque
 	session.Running = true
 	started := time.Now().UTC()
 	session.StartedAt = &started
-	detach := session.Config.Detach || startConfig.Detach
+	detach := startConfig.Detach
 	attachStdout := session.Config.AttachStdout
 	attachStderr := session.Config.AttachStderr
 	session.mu.Unlock()
@@ -439,6 +434,7 @@ func (s *Server) handleExecInspect(writer http.ResponseWriter, id string) {
 		"CanRemove":   !session.Running,
 		"ContainerID": session.ContainerID,
 		"Pid":         session.PID,
+		"DetachKeys":  session.Config.DetachKeys,
 	})
 }
 

@@ -113,7 +113,7 @@ func TestDockerEngineExecCreateStartStreamAndInspect(t *testing.T) {
 func TestDockerEngineExecDetachedSessionCanBeInspectedWhileRunning(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record := execAPITestContainer(t, server)
-	response := postDockerExecCreate(t, server, record.ID, dockerExecCreateConfig{Detach: true, Cmd: []string{"/bin/long-task"}})
+	response := postDockerExecCreate(t, server, record.ID, dockerExecCreateConfig{Cmd: []string{"/bin/long-task"}})
 	if response.Code != http.StatusCreated {
 		t.Fatalf("exec create status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -131,7 +131,9 @@ func TestDockerEngineExecDetachedSessionCanBeInspectedWhileRunning(t *testing.T)
 		<-release
 		return 0, nil
 	}
-	start := engineAPIRequest(server, http.MethodPost, "/exec/"+created.Id+"/start")
+	startRequest := httptest.NewRequest(http.MethodPost, "/exec/"+created.Id+"/start", strings.NewReader(`{"Detach":true}`))
+	start := httptest.NewRecorder()
+	server.ServeHTTP(start, startRequest)
 	if start.Code != http.StatusOK || start.Body.Len() != 0 {
 		t.Fatalf("detached start status=%d body=%s", start.Code, start.Body.String())
 	}
@@ -184,6 +186,8 @@ func TestDockerEngineExecRejectsUnsupportedOrUnsafeCreateOptions(t *testing.T) {
 		{name: "empty command", config: dockerExecCreateConfig{}},
 		{name: "invalid environment", config: dockerExecCreateConfig{Env: []string{"BAD-KEY=value"}, Cmd: []string{"/bin/true"}}},
 		{name: "relative working directory", config: dockerExecCreateConfig{WorkingDir: "relative", Cmd: []string{"/bin/true"}}},
+		{name: "TTY console size", config: dockerExecCreateConfig{ConsoleSize: []uint{24, 80}, Cmd: []string{"/bin/true"}}},
+		{name: "TTY detach keys", config: dockerExecCreateConfig{DetachKeys: "ctrl-p,ctrl-q", Cmd: []string{"/bin/true"}}},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -192,6 +196,17 @@ func TestDockerEngineExecRejectsUnsupportedOrUnsafeCreateOptions(t *testing.T) {
 				t.Fatalf("exec create status=%d body=%s", response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestDockerEngineExecCreateRejectsStartOnlyDetachOption(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record := execAPITestContainer(t, server)
+	request := httptest.NewRequest(http.MethodPost, "/v1.45/containers/"+record.ID+"/exec", strings.NewReader(`{"Cmd":["/bin/true"],"Detach":true}`))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("exec create with start-only Detach field status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 
