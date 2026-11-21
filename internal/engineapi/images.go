@@ -1,6 +1,7 @@
 package engineapi
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -179,7 +180,10 @@ func (s *Server) handleImageLoad(writer http.ResponseWriter, request *http.Reque
 	if quiet {
 		return
 	}
+	encoder := json.NewEncoder(writer)
 	for _, item := range imported {
-		_, _ = fmt.Fprintf(writer, "{\"stream\":%q}\n", "Loaded image: "+item.Reference+"\n")
+		if err := encoder.Encode(map[string]string{"stream": "Loaded image: " + item.Reference + "\n"}); err != nil {
+			return
+		}
 	}
 }
