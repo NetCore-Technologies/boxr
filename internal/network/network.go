@@ -694,7 +694,7 @@ func JoinWithRunnerOptions(ctx context.Context, networkName string, pid int, con
 				return "", fmt.Errorf("MAC address %s is already assigned on network %q", endpoint.MACAddress, network.Name)
 			}
 		}
-		macAddress = endpoint.MACAddress
+		macAddress = strings.ToLower(endpoint.MACAddress)
 	}
 	if network.Allocations == nil {
 		network.Allocations = make(map[string]string)
