@@ -894,26 +894,3 @@ func readDockerJSON(root *os.Root, name string) ([]byte, error) {
 	}
 	return data, nil
 }
-
-
-	info, err := os.Lstat(pathname)
-	if err != nil {
-		return nil, err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maxJSONBytes {
-		return nil, fmt.Errorf("JSON file must be a regular non-symlink file no larger than %d bytes", maxJSONBytes)
-	}
-	file, err := os.Open(pathname)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, maxJSONBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(data)) > maxJSONBytes {
-		return nil, fmt.Errorf("JSON file exceeds %d bytes", maxJSONBytes)
-	}
-	return data, nil
-}
