@@ -31,12 +31,15 @@ const (
 )
 
 type Server struct {
-	version       string
-	imageMu       sync.Mutex
-	volumeMu      sync.Mutex
-	networkMu     sync.Mutex
-	createNetwork func(string, boxrnetwork.CreateOptions) (boxrnetwork.Network, error)
-	removeNetwork func(string) error
+	version          string
+	imageMu          sync.Mutex
+	volumeMu         sync.Mutex
+	networkMu        sync.Mutex
+	createNetwork    func(string, boxrnetwork.CreateOptions) (boxrnetwork.Network, error)
+	removeNetwork    func(string) error
+	joinNetwork      func(string, int, string, ...boxrnetwork.PortMapping) (string, error)
+	leaveNetwork     func(string, string) error
+	verifyNetworkPID func(state.Record) error
 }
 
 func New(version string) *Server {
@@ -44,9 +47,12 @@ func New(version string) *Server {
 		version = "dev"
 	}
 	return &Server{
-		version:       version,
-		createNetwork: boxrnetwork.Create,
-		removeNetwork: boxrnetwork.Remove,
+		version:          version,
+		createNetwork:    boxrnetwork.Create,
+		removeNetwork:    boxrnetwork.Remove,
+		joinNetwork:      boxrnetwork.Join,
+		leaveNetwork:     boxrnetwork.Leave,
+		verifyNetworkPID: verifyDockerContainerPID,
 	}
 }
 
@@ -231,13 +237,31 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.handleNetworkCreate(writer, request)
 	case strings.HasPrefix(path, "/networks/"):
 		remainder := strings.TrimPrefix(path, "/networks/")
-		if remainder == "" || strings.Contains(remainder, "/") {
+		parts := strings.Split(remainder, "/")
+		if len(parts) == 0 || parts[0] == "" || len(parts) > 2 {
 			writeError(writer, http.StatusNotFound, fmt.Errorf("network endpoint not found"))
 			return
 		}
-		name, err := url.PathUnescape(remainder)
+		name, err := url.PathUnescape(parts[0])
 		if err != nil {
 			writeError(writer, http.StatusBadRequest, fmt.Errorf("invalid network identifier"))
+			return
+		}
+		if len(parts) == 2 {
+			switch parts[1] {
+			case "connect":
+				if !requireMethod(writer, request, http.MethodPost) {
+					return
+				}
+				s.handleNetworkConnect(writer, request, name)
+			case "disconnect":
+				if !requireMethod(writer, request, http.MethodPost) {
+					return
+				}
+				s.handleNetworkDisconnect(writer, request, name)
+			default:
+				writeError(writer, http.StatusNotFound, fmt.Errorf("network endpoint not found"))
+			}
 			return
 		}
 		switch request.Method {
@@ -248,6 +272,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		default:
 			writeMethodErrorFor(writer, http.MethodGet+", "+http.MethodDelete)
 		}
+
 	case path == "/events":
 		if !requireMethod(writer, request, http.MethodGet) {
 			return
