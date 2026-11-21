@@ -1363,7 +1363,6 @@ func TestDockerContainerWaitBlocksUntilRunningContainerExits(t *testing.T) {
 	}
 }
 
-
 func TestDockerVolumeCreateListInspectAndDelete(t *testing.T) {
 	server := setupEngineAPITest(t)
 	t.Setenv("BOXR_DATA_DIR", filepath.Join(t.TempDir(), "data"))
@@ -1493,7 +1492,6 @@ func TestDockerVolumeDeleteRejectsActiveContainerUse(t *testing.T) {
 		t.Fatalf("delete released volume status=%d body=%s", response.Code, response.Body.String())
 	}
 }
-
 
 func TestParseDockerBindAcceptsOnlyPrecreatedNamedVolumes(t *testing.T) {
 	t.Setenv("BOXR_DATA_DIR", filepath.Join(t.TempDir(), "data"))
