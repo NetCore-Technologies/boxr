@@ -252,7 +252,7 @@ func dockerNetworkWithContainers(item boxrnetwork.Network, records []state.Recor
 		ID: item.ID, Name: item.Name, Driver: item.Driver, Bridge: item.Bridge,
 		Subnet: item.Subnet, IPRange: item.IPRange,
 		AuxiliaryAddresses: item.AuxiliaryAddresses,
-		Gateway: item.Gateway, NAT: item.NAT,
+		Gateway:            item.Gateway, NAT: item.NAT,
 		ContainerCount: len(item.Allocations), CreatedAt: item.CreatedAt,
 		Labels: item.Labels,
 	}
