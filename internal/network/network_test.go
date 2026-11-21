@@ -936,3 +936,50 @@ func TestCreateRejectsInvalidAuxiliaryIPAMAddresses(t *testing.T) {
 		})
 	}
 }
+
+func TestAuxiliaryAddressReservationsAreBoundedAndDeepCopied(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	reserved := map[string]string{"database": "172.30.54.10"}
+	created, err := CreateWithRunner(context.Background(), "aux-copy", CreateOptions{
+		Subnet: "172.30.54.0/24", Gateway: "172.30.54.1",
+		AuxiliaryAddresses: reserved,
+	}, &fakeRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created.AuxiliaryAddresses["database"] = "172.30.54.11"
+	details, err := InspectDetails("aux-copy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if details.AuxiliaryAddresses["database"] != "172.30.54.10" {
+		t.Fatalf("caller mutation changed persisted auxiliary map: %#v", details.AuxiliaryAddresses)
+	}
+	details.AuxiliaryAddresses["database"] = "172.30.54.12"
+	summary, err := Inspect("aux-copy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.AuxiliaryAddresses["database"] != "172.30.54.10" {
+		t.Fatalf("InspectDetails mutation changed stored summary: %#v", summary.AuxiliaryAddresses)
+	}
+	summary.AuxiliaryAddresses["database"] = "172.30.54.13"
+	next, err := InspectDetails("aux-copy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.AuxiliaryAddresses["database"] != "172.30.54.10" {
+		t.Fatalf("summary mutation changed persisted IPAM map: %#v", next.AuxiliaryAddresses)
+	}
+
+	tooMany := make(map[string]string, maxAuxiliaryAddresses+1)
+	for index := 0; index <= maxAuxiliaryAddresses; index++ {
+		tooMany[fmt.Sprintf("reserved-%03d", index)] = fmt.Sprintf("172.30.55.%d", index+2)
+	}
+	if _, err := CreateWithRunner(context.Background(), "aux-limit", CreateOptions{
+		Subnet: "172.30.55.0/24", Gateway: "172.30.55.1",
+		AuxiliaryAddresses: tooMany,
+	}, &fakeRunner{}); err == nil {
+		t.Fatal("network with more than the auxiliary IPAM limit was accepted")
+	}
+}
