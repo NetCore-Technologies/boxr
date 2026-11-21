@@ -28,9 +28,9 @@ import (
 )
 
 const (
-	storeVersion    = 1
-	maxStoreBytes   = 4 << 20
-	maxNetworkCount = 128
+	storeVersion          = 1
+	maxStoreBytes         = 4 << 20
+	maxNetworkCount       = 128
 	maxAuxiliaryAddresses = 256
 )
 
