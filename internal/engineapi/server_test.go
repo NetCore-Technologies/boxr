@@ -2755,3 +2755,25 @@ func TestDockerImagePruneDefaultsToDanglingOnlyAndValidatesFilters(t *testing.T)
 		})
 	}
 }
+
+
+func TestDockerStatusWithHealthMatchesDockerPSHealthSuffix(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status string
+		health *state.HealthState
+		want   string
+	}{
+		{name: "healthy", status: "Up 3 minutes", health: &state.HealthState{Status: "healthy"}, want: "Up 3 minutes (healthy)"},
+		{name: "unhealthy", status: "Up 3 minutes", health: &state.HealthState{Status: "unhealthy"}, want: "Up 3 minutes (unhealthy)"},
+		{name: "starting", status: "Up 3 minutes", health: &state.HealthState{Status: "starting"}, want: "Up 3 minutes (health: starting)"},
+		{name: "stopped", status: "Exited (0) 2 seconds ago", health: &state.HealthState{Status: "healthy"}, want: "Exited (0) 2 seconds ago"},
+		{name: "no healthcheck", status: "Up 3 minutes", want: "Up 3 minutes"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := dockerStatusWithHealth(test.status, test.health); got != test.want {
+				t.Fatalf("dockerStatusWithHealth() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
