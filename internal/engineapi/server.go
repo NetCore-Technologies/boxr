@@ -230,6 +230,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		default:
 			writeMethodErrorFor(writer, http.MethodGet+", "+http.MethodDelete)
 		}
+	case path == "/networks/prune":
+		if !requireMethod(writer, request, http.MethodPost) {
+			return
+		}
+		s.handleNetworkPrune(writer, request)
 	case path == "/networks":
 		if !requireMethod(writer, request, http.MethodGet) {
 			return
