@@ -3,6 +3,7 @@
 package volume
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -28,6 +29,7 @@ type Volume struct {
 	Path      string            `json:"path"`
 	Labels    map[string]string `json:"labels,omitempty"`
 	CreatedAt time.Time         `json:"createdAt"`
+	Anonymous bool              `json:"anonymous,omitempty"`
 }
 
 // Usage is a no-follow filesystem snapshot of a volume's logical contents.
@@ -102,6 +104,21 @@ func dirs() (string, string, error) {
 }
 
 func Create(name string, labels map[string]string) (Volume, error) {
+	return create(name, labels, false)
+}
+
+// CreateAnonymous creates a Docker-compatible anonymous local volume using a
+// cryptographically random name. Anonymous identity is persisted so Engine API
+// volume prune can distinguish generated volumes from explicitly named ones.
+func CreateAnonymous(labels map[string]string) (Volume, error) {
+	var identifier [32]byte
+	if _, err := rand.Read(identifier[:]); err != nil {
+		return Volume{}, fmt.Errorf("generate anonymous volume name: %w", err)
+	}
+	return create(hex.EncodeToString(identifier[:]), labels, true)
+}
+
+func create(name string, labels map[string]string, anonymous bool) (Volume, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	if err := validateName(name); err != nil {
@@ -129,12 +146,15 @@ func Create(name string, labels map[string]string) (Volume, error) {
 	if err := os.Mkdir(path, 0700); err != nil {
 		return Volume{}, fmt.Errorf("create volume %q: %w", name, err)
 	}
-	volume := Volume{Name: name, Path: path, Labels: cloneLabels(labels), CreatedAt: time.Now().UTC()}
-	if err := saveMetadata(metaPath, volume); err != nil {
+	item := Volume{
+		Name: name, Path: path, Labels: cloneLabels(labels),
+		CreatedAt: time.Now().UTC(), Anonymous: anonymous,
+	}
+	if err := saveMetadata(metaPath, item); err != nil {
 		_ = os.Remove(path)
 		return Volume{}, err
 	}
-	return volume, nil
+	return item, nil
 }
 
 // ImportArchive safely restores a gzip-tar volume export. Extraction is
