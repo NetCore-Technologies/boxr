@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 862 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 868 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 
 ## Implemented capabilities
@@ -869,3 +869,9 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 860. native restart command stops then starts an image-backed container with a bounded graceful timeout
 861. Engine API start endpoint restarts stopped image-backed containers through the native detached supervisor
 862. Engine API restart endpoint performs a bounded graceful stop and launches the same saved container again
+863. Engine API lists local named volumes with name label driver scope and dangling filters
+864. Engine API creates local named volumes with validated labels and the local driver
+865. Engine API inspects named volume metadata and the private mountpoint
+866. Engine API removes named volumes only when no persisted container references them
+867. Engine API container create resolves pre-created Boxr named volumes from Docker HostConfig.Binds
+868. Engine API container inspect reports named volume type name driver and Docker-compatible Binds
