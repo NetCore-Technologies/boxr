@@ -310,7 +310,6 @@ func (s *Server) handleNetworkDelete(writer http.ResponseWriter, name string) {
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-
 type dockerNetworkConnectRequest struct {
 	Container      string          `json:"Container"`
 	EndpointConfig json.RawMessage `json:"EndpointConfig"`
