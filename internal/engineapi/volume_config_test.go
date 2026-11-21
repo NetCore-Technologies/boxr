@@ -58,6 +58,14 @@ func TestDockerConfigVolumesCreateAnonymousVolumesAndCopyImageData(t *testing.T)
 	if binVolume.Name == "" {
 		t.Fatal("missing anonymous volume for /bin")
 	}
+	rootfs, err := state.ManagedRootFSDir(record.ID)
+	if err != nil {
+		t.Fatalf("get created container rootfs: %v", err)
+	}
+	mountpoint, err := os.Stat(filepath.Join(rootfs, "srv", "app", "data"))
+	if err != nil || !mountpoint.IsDir() {
+		t.Fatalf("declared volume mountpoint was not created in the rootfs: info=%v err=%v", mountpoint, err)
+	}
 	data, err := os.ReadFile(filepath.Join(binVolume.Path, "app"))
 	if err != nil || string(data) != "boxr test image\n" {
 		t.Fatalf("image data was not copied into declared volume: %q, %v", data, err)

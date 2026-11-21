@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/manit6752025/boxr/internal/container"
@@ -558,6 +559,13 @@ func buildWithSpec(contextDir string, spec BuildSpec, reference, platform, ignor
 			return Image{}, fmt.Errorf("create image WorkingDir: %w", err)
 		}
 	}
+	volumeTargets := make([]string, 0, len(runtimeConfig.Volumes))
+	for target := range runtimeConfig.Volumes {
+		volumeTargets = append(volumeTargets, target)
+	}
+	if err := EnsureVolumeMountpoints(root, volumeTargets); err != nil {
+		return Image{}, fmt.Errorf("create image VOLUME mountpoints: %w", err)
+	}
 	return ImportRootFSWithConfig(root, reference, osName, architecture, variant, runtimeConfig)
 }
 
@@ -678,6 +686,27 @@ func parseBuildPlatform(value string) (osName, architecture, variant string, err
 		return "", "", "", fmt.Errorf("unsupported Linux build platform %q", value)
 	}
 	return osName, architecture, variant, nil
+}
+
+// EnsureVolumeMountpoints creates declared volume directories without following
+// symlinks outside the image root. It is also used after image unpack so API
+// create requests can safely declare a new mount target.
+func EnsureVolumeMountpoints(root string, targets []string) error {
+	ordered := append([]string(nil), targets...)
+	sort.Strings(ordered)
+	for _, target := range ordered {
+		if !path.IsAbs(target) || target == "/" || path.Clean(target) != target || strings.ContainsAny(target, "\x00\r\n") {
+			return fmt.Errorf("volume target %q must be a clean absolute non-root path", target)
+		}
+		destination, err := rootfsDestination(root, target)
+		if err != nil {
+			return err
+		}
+		if _, err := ensureRootfsDirectory(root, destination); err != nil {
+			return fmt.Errorf("prepare volume mountpoint %q: %w", target, err)
+		}
+	}
+	return nil
 }
 
 func rootfsDestination(root, target string) (string, error) {

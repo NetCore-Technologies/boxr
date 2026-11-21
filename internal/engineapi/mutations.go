@@ -750,6 +750,11 @@ func createContainerRecord(name string, input dockerCreateRequest) (result state
 		_ = state.RemoveCreated(record.ID)
 		return empty, fmt.Errorf("unpack verified image into persistent container rootfs: %w", err)
 	}
+	if err := imageStore.EnsureVolumeMountpoints(rootPath, declaredVolumeTargets); err != nil {
+		_ = state.RemoveManagedRootFS(record.ID)
+		_ = state.RemoveCreated(record.ID)
+		return empty, fmt.Errorf("prepare Docker volume mountpoints: %w", err)
+	}
 	record, err = state.ConfigureManagedRootFS(record.ID, rootPath)
 	if err != nil {
 		cleanupErr := state.RemoveManagedRootFS(record.ID)

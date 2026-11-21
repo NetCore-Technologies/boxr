@@ -1,6 +1,10 @@
 package image
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestDockerfileVolumeInstructionRecordsAndValidatesTargets(t *testing.T) {
 	spec, err := ParseDockerfile([]byte("FROM scratch\nVOLUME [\"/data\", \"/cache\"]\nVOLUME /logs\n"))
@@ -37,5 +41,26 @@ func TestBuildRuntimeConfigInheritsDeclaredVolumes(t *testing.T) {
 	}
 	if _, ok := merged.Volumes["/cache"]; !ok {
 		t.Fatal("Dockerfile volume declaration was not merged")
+	}
+}
+
+func TestEnsureVolumeMountpointsCreatesDirectoriesAndRejectsEscapingSymlinks(t *testing.T) {
+	root := t.TempDir()
+	if err := EnsureVolumeMountpoints(root, []string{"/var/lib/service/cache", "/data"}); err != nil {
+		t.Fatalf("create volume mountpoints: %v", err)
+	}
+	for _, target := range []string{"/var/lib/service/cache", "/data"} {
+		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(target)))
+		if err != nil || !info.IsDir() {
+			t.Fatalf("mountpoint %s: info=%v err=%v", target, info, err)
+		}
+	}
+
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureVolumeMountpoints(root, []string{"/escape/volume"}); err == nil {
+		t.Fatal("volume mountpoint followed a symlink outside the image root")
 	}
 }
