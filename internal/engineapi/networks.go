@@ -63,7 +63,7 @@ type dockerNetworkResponse struct {
 	ConfigOnly bool                         `json:"ConfigOnly"`
 	Options    map[string]string            `json:"Options"`
 	Labels     map[string]string            `json:"Labels"`
-	Containers map[string]map[string]string `json:"Containers,omitempty"`
+	Containers map[string]map[string]string `json:"Containers"`
 }
 
 type dockerNetworkCreateResponse struct {
@@ -85,6 +85,7 @@ func dockerNetwork(item boxrnetwork.Summary) dockerNetworkResponse {
 		},
 		Internal: false, Attachable: true, Ingress: false, ConfigOnly: false,
 		Options: options, Labels: item.Labels,
+		Containers: make(map[string]map[string]string),
 	}
 }
 
