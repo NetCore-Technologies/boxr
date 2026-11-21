@@ -654,6 +654,10 @@ func parseDockerfileHealthcheck(value string) (*container.HealthcheckConfig, err
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", name, err)
 			}
+			if duration < 0 || duration > 24*time.Hour ||
+				(name != "--start-period" && duration < time.Millisecond) {
+				return nil, fmt.Errorf("%s duration is outside the supported range", name)
+			}
 			switch name {
 			case "--interval":
 				config.Interval = duration

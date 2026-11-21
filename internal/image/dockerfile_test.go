@@ -555,6 +555,7 @@ func TestDockerfileHealthcheckRejectsUnknownOptionsAndUnboundedCommands(t *testi
 	for _, dockerfile := range []string{
 		"FROM scratch\nHEALTHCHECK --unknown=1 CMD true\n",
 		"FROM scratch\nHEALTHCHECK --interval=-1s CMD true\n",
+		"FROM scratch\nHEALTHCHECK --interval=0s CMD true\n",
 		"FROM scratch\nHEALTHCHECK --retries=0 CMD true\n",
 		"FROM scratch\nHEALTHCHECK CMD []\n",
 	} {

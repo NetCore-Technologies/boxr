@@ -160,7 +160,7 @@ func nextContainerHealthState(current state.HealthState, startedAt *time.Time, c
 		return next
 	}
 	inGracePeriod := config.StartPeriod > 0 && startedAt != nil &&
-		result.End.Sub(*startedAt) < config.StartPeriod
+		result.Start.Sub(*startedAt) < config.StartPeriod
 	if !inGracePeriod || current.Status == "healthy" || current.Status == "unhealthy" {
 		next.FailingStreak++
 	}

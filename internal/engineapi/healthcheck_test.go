@@ -101,7 +101,7 @@ func TestDockerCreateHealthcheckOverridesImageAndAppearsInInspect(t *testing.T) 
 		}
 	})
 	if record.Options.Healthcheck == nil || record.Options.Healthcheck.Test[1] != "/container/health" ||
-		record.Options.Healthcheck.Interval != 12*time.Second || record.Options.Healthcheck.Retries != 6 {
+		record.Options.Healthcheck.Interval != container.DefaultHealthcheckInterval || record.Options.Healthcheck.Retries != 6 {
 		t.Fatalf("container healthcheck = %+v", record.Options.Healthcheck)
 	}
 }
