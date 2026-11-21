@@ -110,6 +110,10 @@ func TestDockerVolumeCopyUpRefusesToMutateVolumeUsedByRunningContainer(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	fresh, err := volume.Create("fresh-volume", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	active, err := state.Create("active-volume-user", []string{"/bin/app"}, container.Options{
 		BindMounts: []container.BindMount{{Source: item.Path, Target: "/data"}},
 	}, nil)
@@ -131,7 +135,8 @@ func TestDockerVolumeCopyUpRefusesToMutateVolumeUsedByRunningContainer(t *testin
 	_, err = createContainerRecord("second-volume-user", dockerCreateRequest{
 		Image: image.Reference,
 		HostConfig: dockerHostConfig{Mounts: []json.RawMessage{
-			json.RawMessage(`{"Type":"volume","Source":"active-volume","Target":"/bin"}`),
+			json.RawMessage(`{"Type":"volume","Source":"fresh-volume","Target":"/bin"}`),
+			json.RawMessage(`{"Type":"volume","Source":"active-volume","Target":"/opt/data"}`),
 		}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "refusing initial copy-up") {
@@ -140,5 +145,9 @@ func TestDockerVolumeCopyUpRefusesToMutateVolumeUsedByRunningContainer(t *testin
 	entries, err := os.ReadDir(item.Path)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("live volume was modified: entries=%v err=%v", entries, err)
+	}
+	entries, err = os.ReadDir(fresh.Path)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("earlier volume was partially copied before the later conflict: entries=%v err=%v", entries, err)
 	}
 }
