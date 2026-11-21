@@ -750,7 +750,6 @@ func TestComposeHealthcheckDisableFlag(t *testing.T) {
 	}
 }
 
-
 func TestLoadComposeSupportsServiceHealthyDependency(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "compose.yaml")

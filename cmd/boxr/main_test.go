@@ -4154,7 +4154,6 @@ func TestContainerPruneRequiresExplicitModeAndPreservesActiveRecords(t *testing.
 	}
 }
 
-
 func TestWaitForDeploymentHealthyUsesPersistedContainerHealth(t *testing.T) {
 	t.Setenv("BOXR_STATE_DIR", t.TempDir())
 	options := container.Options{
@@ -4215,7 +4214,6 @@ func TestWaitForDeploymentHealthySurfacesUnexpectedServiceExit(t *testing.T) {
 		t.Fatalf("unexpected exit = %#v, %v", unexpected, err)
 	}
 }
-
 
 func TestDeploymentHealthyDependencyTimeoutUsesHealthcheckBudget(t *testing.T) {
 	dependent := deploy.Service{StartTimeoutMS: 30000}

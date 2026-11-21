@@ -18,11 +18,11 @@ func TestBuildPlanOrdersServicesDeterministicallyAndRedactsSecrets(t *testing.T)
 		Name:    "sample",
 		Services: map[string]Service{
 			"web": {
-				Command:   []string{"/bin/sh", "-c", "echo private-command-token"},
-				Options:   container.Options{Env: []string{"TOKEN=private-environment-token"}, Labels: map[string]string{"owner": "private-label"}},
+				Command:          []string{"/bin/sh", "-c", "echo private-command-token"},
+				Options:          container.Options{Env: []string{"TOKEN=private-environment-token"}, Labels: map[string]string{"owner": "private-label"}},
 				DependsOn:        []string{"database"},
 				DependsOnHealthy: []string{"database"},
-				Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:5432", Attempts: 2},
+				Readiness:        &ReadinessProbe{TCPAddress: "127.0.0.1:5432", Attempts: 2},
 			},
 			"worker": {
 				Command:   []string{"/bin/worker"},
@@ -120,7 +120,7 @@ func TestBuildPlanRejectsInvalidGraphsAndServices(t *testing.T) {
 			"web": {Command: []string{"/bin/true"}, Options: container.Options{SecurityProfile: "untrusted", RootFS: "/tmp/boxr-test-rootfs"}, Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:8080"}},
 		}},
 		"healthy dependency without declared edge": {Version: 1, Services: map[string]Service{
-			"db": validService,
+			"db":  validService,
 			"web": {Command: []string{"/bin/true"}, DependsOnHealthy: []string{"db"}},
 		}},
 		"healthy dependency without healthcheck": {Version: 1, Services: map[string]Service{
@@ -128,7 +128,7 @@ func TestBuildPlanRejectsInvalidGraphsAndServices(t *testing.T) {
 			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"db"}, DependsOnHealthy: []string{"db"}},
 		}},
 		"healthy dependency with disabled healthcheck": {Version: 1, Services: map[string]Service{
-			"db": {Command: []string{"/bin/true"}, Options: container.Options{Healthcheck: &container.HealthcheckConfig{Test: []string{"NONE"}}}},
+			"db":  {Command: []string{"/bin/true"}, Options: container.Options{Healthcheck: &container.HealthcheckConfig{Test: []string{"NONE"}}}},
 			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"db"}, DependsOnHealthy: []string{"db"}},
 		}},
 		"duplicate container names": {Version: 1, Services: map[string]Service{
