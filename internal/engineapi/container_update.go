@@ -111,14 +111,21 @@ func (s *Server) handleContainerUpdate(writer http.ResponseWriter, request *http
 		}
 		options.MemoryLowBytes = *input.MemoryReservation
 	}
-	if input.MemorySwap != nil {
+		if input.MemorySwap != nil {
 		switch {
 		case *input.MemorySwap < -1:
-			writeError(writer, http.StatusBadRequest, fmt.Errorf("MemorySwap must be -1 (unlimited), 0 (reset), or a positive total memory-plus-swap limit"))
+			writeError(writer, http.StatusBadRequest, fmt.Errorf("MemorySwap must be -1 (unlimited), 0 (Docker default), or a positive total memory-plus-swap limit"))
 			return
-		case *input.MemorySwap == -1 || *input.MemorySwap == 0:
+		case *input.MemorySwap == -1:
 			options.MemorySwapMaxBytes = 0
 			options.MemorySwapMaxSet = false
+			options.MemorySwapDefaulted = false
+			options.MemorySwapUnlimited = true
+		case *input.MemorySwap == 0:
+			options.MemorySwapMaxBytes = options.MemoryLimitBytes
+			options.MemorySwapMaxSet = options.MemoryLimitBytes > 0
+			options.MemorySwapDefaulted = true
+			options.MemorySwapUnlimited = false
 		case options.MemoryLimitBytes <= 0:
 			writeError(writer, http.StatusBadRequest, fmt.Errorf("MemorySwap requires a positive Memory limit"))
 			return
@@ -128,9 +135,25 @@ func (s *Server) handleContainerUpdate(writer http.ResponseWriter, request *http
 		default:
 			options.MemorySwapMaxBytes = *input.MemorySwap - options.MemoryLimitBytes
 			options.MemorySwapMaxSet = true
+			options.MemorySwapDefaulted = false
+			options.MemorySwapUnlimited = false
+		}
+	} else if input.Memory != nil {
+		switch {
+		case record.Options.MemorySwapDefaulted || (!record.Options.MemorySwapUnlimited && !record.Options.MemorySwapMaxSet && record.Options.MemorySwapMaxBytes == 0):
+			options.MemorySwapMaxBytes = options.MemoryLimitBytes
+			options.MemorySwapMaxSet = options.MemoryLimitBytes > 0
+			options.MemorySwapDefaulted = true
+		case record.Options.MemorySwapMaxSet || record.Options.MemorySwapMaxBytes > 0:
+			previousTotal := record.Options.MemoryLimitBytes + record.Options.MemorySwapMaxBytes
+			if options.MemoryLimitBytes > previousTotal {
+				writeError(writer, http.StatusBadRequest, fmt.Errorf("Memory cannot exceed the existing total MemorySwap limit; update MemorySwap in the same request"))
+				return
+			}
+			options.MemorySwapMaxBytes = previousTotal - options.MemoryLimitBytes
 		}
 	}
-	if options.MemoryLimitBytes > 0 && options.MemoryLowBytes > options.MemoryLimitBytes {
+		if options.MemoryLimitBytes > 0 && options.MemoryLowBytes >= options.MemoryLimitBytes && options.MemoryLowBytes > 0 {
 		writeError(writer, http.StatusBadRequest, fmt.Errorf("MemoryReservation cannot exceed the effective Memory limit"))
 		return
 	}

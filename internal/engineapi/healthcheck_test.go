@@ -96,7 +96,24 @@ func TestDockerCreateHealthcheckOverridesImageAndAppearsInInspect(t *testing.T) 
 		t.Fatalf("create container with healthcheck override: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := state.RemoveCreated(record.ID); err != nil {
+		current, err := state.Get(record.ID)
+		if err != nil {
+			t.Errorf("get healthcheck container for cleanup: %v", err)
+			return
+		}
+		if current.Status == "running" {
+			if err := state.Finish(record.ID, nil); err != nil {
+				t.Errorf("finish healthcheck container: %v", err)
+				return
+			}
+			current.Status = "exited"
+		}
+		if current.Status == "created" {
+			err = state.RemoveCreated(record.ID)
+		} else {
+			err = state.Remove(record.ID)
+		}
+		if err != nil {
 			t.Errorf("remove container: %v", err)
 		}
 	})

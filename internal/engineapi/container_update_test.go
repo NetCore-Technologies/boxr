@@ -39,8 +39,12 @@ func TestDockerContainerUpdateAppliesAndPersistsLiveResourceChanges(t *testing.T
 	if warnings, ok := payload["Warnings"]; !ok || len(warnings) != 0 {
 		t.Fatalf("update response = %#v", payload)
 	}
-	if gotPID != record.PID {
-		t.Fatalf("updated PID = %d, want %d", gotPID, record.PID)
+	running, err := state.Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPID != running.PID {
+		t.Fatalf("updated PID = %d, want %d", gotPID, running.PID)
 	}
 	if gotOptions.MemoryLimitBytes != 128<<20 || gotOptions.MemoryLowBytes != 32<<20 ||
 		gotOptions.MemorySwapMaxBytes != 128<<20 || gotOptions.CPUs != 0.5 || gotOptions.PidsLimit != 128 {
@@ -202,7 +206,7 @@ func TestDockerOptionsDefaultSwapCanBeActivatedByLaterMemoryUpdate(t *testing.T)
 }
 
 func TestDockerContainerUpdatePreservesMemorySwapSemanticsWhenMemoryChanges(t *testing.T) {
-	for _, test := range []struct {
+	for index, test := range []struct {
 		name          string
 		initial       container.Options
 		body          string
@@ -229,7 +233,7 @@ func TestDockerContainerUpdatePreservesMemorySwapSemanticsWhenMemoryChanges(t *t
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server := setupEngineAPITest(t)
-			record := createEngineAPITestContainer(t, "resource-swap-"+strings.ReplaceAll(test.name, " ", "-"), test.initial)
+			record := createEngineAPITestContainer(t, "swap-update-"+string(rune('a'+index)), test.initial)
 			server.verifyUpdatePID = func(state.Record) error { return nil }
 			var applied container.Options
 			server.updateCgroupResources = func(_ int, options container.Options, _ container.CgroupResourceUpdate) error {

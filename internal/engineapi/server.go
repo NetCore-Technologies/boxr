@@ -519,7 +519,7 @@ func containerStatus(record state.Record) string {
 }
 
 func dockerStatusWithHealth(status string, health *state.HealthState) string {
-	if health == nil || !strings.HasPrefix(status, "Up ") {
+	if health == nil || (status != "Up" && !strings.HasPrefix(status, "Up ")) {
 		return status
 	}
 	switch health.Status {
