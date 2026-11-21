@@ -66,7 +66,7 @@ The default API version advertised is `1.45` (minimum `1.24`). Implemented endpo
 | POST | `/containers/{id}/attach` | Attach to the combined output stream, optionally replay logs and follow future output with Docker multiplex framing; stdin is rejected because container workloads do not expose a persistent input stream |
 | GET | `/containers/{id}/stats` | cgroup v2 CPU, memory and PID samples (snapshot or stream) |
 | GET | `/containers/{id}/top` | Container process table with PID/UID namespace translation and bounded `/proc` traversal |
-| POST | `/containers/create` | Create a container from a verified local image; `HostConfig.Binds` and a strict `HostConfig.Mounts` subset support existing host paths, pre-created Boxr volumes and basic tmpfs mounts |
+| POST | `/containers/create` | Create a container from a verified local image; `HostConfig.Binds` and a strict `HostConfig.Mounts` subset support existing host paths, pre-created Boxr volumes and basic tmpfs mounts; `HostConfig.ShmSize` creates a private `/dev/shm` tmpfs (maximum 1 GiB) |
 | POST | `/containers/{id}/start` | Start a created container or restart an exited/failed container through the native detached supervisor |
 | POST | `/containers/{id}/wait` | Wait for the `not-running` condition and return the persisted workload exit status |
 | POST | `/containers/{id}/rename` | Rename a container while preserving its ID and rejecting duplicate names |
