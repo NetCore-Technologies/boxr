@@ -163,7 +163,7 @@ func TestDockerContainerCommitRejectsRunningContainersAndUnsafeTargets(t *testin
 	if _, err := dockerCommitReference(record.ID, "", "latest"); err == nil {
 		t.Fatal("commit accepted a tag without a repository")
 	}
-	if !strings.Contains(response.Body.String(), "must be stopped") {
+	if !bytes.Contains(response.Body.Bytes(), []byte("must be stopped")) {
 		t.Fatalf("running-container rejection = %s", response.Body.String())
 	}
 }
