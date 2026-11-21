@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -48,8 +49,10 @@ type Network struct {
 	Gateway     string                   `json:"gateway"`
 	NAT         bool                     `json:"nat"`
 	CreatedAt   time.Time                `json:"createdAt"`
-	Allocations map[string]string        `json:"allocations,omitempty"`
-	Published   map[string][]PortMapping `json:"published,omitempty"`
+	Allocations  map[string]string        `json:"allocations,omitempty"`
+	MACAddresses map[string]string        `json:"macAddresses,omitempty"`
+	EndpointIDs  map[string]string        `json:"endpointIDs,omitempty"`
+	Published    map[string][]PortMapping `json:"published,omitempty"`
 	Labels      map[string]string        `json:"labels,omitempty"`
 }
 
@@ -309,6 +312,28 @@ func validateStoredNetworks(networks []Network) error {
 				return fmt.Errorf("network store contains a duplicate IPAM address")
 			}
 			allocated[addressText] = struct{}{}
+		}
+		for containerID, mac := range network.MACAddresses {
+			if _, exists := network.Allocations[containerID]; !exists {
+				return fmt.Errorf("network store has a MAC address without an IPAM lease")
+			}
+			address, err := net.ParseMAC(mac)
+			if err != nil || len(address) != 6 || address[0]&1 != 0 || address[0]&2 == 0 || address.String() != mac {
+				return fmt.Errorf("network store contains an invalid locally administered MAC address")
+			}
+			if network.EndpointIDs[containerID] == "" {
+				return fmt.Errorf("network store has a MAC address without an endpoint ID")
+			}
+		}
+		for containerID, endpointID := range network.EndpointIDs {
+			if _, exists := network.Allocations[containerID]; !exists {
+				return fmt.Errorf("network store has an endpoint ID without an IPAM lease")
+			}
+			decoded, err := hex.DecodeString(endpointID)
+			if err != nil || len(decoded) != 32 || hex.EncodeToString(decoded) != endpointID ||
+				network.MACAddresses[containerID] == "" {
+				return fmt.Errorf("network store contains an invalid endpoint identity")
+			}
 		}
 		for containerID, mappings := range network.Published {
 			if _, allocatedAddress := network.Allocations[containerID]; !allocatedAddress {
@@ -638,10 +663,19 @@ func JoinWithRunner(ctx context.Context, networkName string, pid int, containerI
 	if err != nil {
 		return "", err
 	}
+	endpointID, macAddress := endpointIdentity(network.ID, containerID)
 	if network.Allocations == nil {
 		network.Allocations = make(map[string]string)
 	}
 	network.Allocations[containerID] = address
+	if network.MACAddresses == nil {
+		network.MACAddresses = make(map[string]string)
+	}
+	if network.EndpointIDs == nil {
+		network.EndpointIDs = make(map[string]string)
+	}
+	network.MACAddresses[containerID] = macAddress
+	network.EndpointIDs[containerID] = endpointID
 	if len(normalizedPorts) > 0 {
 		if network.Published == nil {
 			network.Published = make(map[string][]PortMapping)
@@ -650,12 +684,16 @@ func JoinWithRunner(ctx context.Context, networkName string, pid int, containerI
 	}
 	if err := saveStore(dir, current); err != nil {
 		delete(network.Allocations, containerID)
+		delete(network.MACAddresses, containerID)
+		delete(network.EndpointIDs, containerID)
 		delete(network.Published, containerID)
 		return "", err
 	}
 	hostVeth, peerVeth := vethNames(containerID)
 	releaseAllocation := func() error {
 		delete(network.Allocations, containerID)
+		delete(network.MACAddresses, containerID)
+		delete(network.EndpointIDs, containerID)
 		delete(network.Published, containerID)
 		return saveStore(dir, current)
 	}
@@ -690,6 +728,7 @@ func JoinWithRunner(ctx context.Context, networkName string, pid int, containerI
 		{"ip", []string{"link", "set", "dev", hostVeth, "up"}},
 		{"ip", []string{"link", "set", peerVeth, "netns", fmt.Sprint(pid)}},
 		{"nsenter", []string{"-t", fmt.Sprint(pid), "-n", "--", "ip", "link", "set", "dev", peerVeth, "name", "eth0"}},
+		{"nsenter", []string{"-t", fmt.Sprint(pid), "-n", "--", "ip", "link", "set", "dev", "eth0", "address", macAddress}},
 		{"nsenter", []string{"-t", fmt.Sprint(pid), "-n", "--", "ip", "link", "set", "dev", "lo", "up"}},
 		{"nsenter", []string{"-t", fmt.Sprint(pid), "-n", "--", "ip", "addr", "add", address + "/" + prefixLength(network.Subnet), "dev", "eth0"}},
 		{"nsenter", []string{"-t", fmt.Sprint(pid), "-n", "--", "ip", "link", "set", "dev", "eth0", "up"}},
@@ -927,6 +966,8 @@ func leaveFromStore(ctx context.Context, runner Runner, current *store, dir stri
 		return fmt.Errorf("disconnect container from network %q: %w", network.Name, err)
 	}
 	delete(network.Allocations, containerID)
+	delete(network.MACAddresses, containerID)
+	delete(network.EndpointIDs, containerID)
 	delete(network.Published, containerID)
 	return saveStore(dir, *current)
 }
@@ -1077,6 +1118,18 @@ func InspectDetails(name string) (Network, error) {
 		item.Allocations = make(map[string]string, len(item.Allocations))
 		for id, address := range current.Networks[index].Allocations {
 			item.Allocations[id] = address
+		}
+	}
+	if len(item.MACAddresses) > 0 {
+		item.MACAddresses = make(map[string]string, len(current.Networks[index].MACAddresses))
+		for id, mac := range current.Networks[index].MACAddresses {
+			item.MACAddresses[id] = mac
+		}
+	}
+	if len(item.EndpointIDs) > 0 {
+		item.EndpointIDs = make(map[string]string, len(current.Networks[index].EndpointIDs))
+		for id, endpointID := range current.Networks[index].EndpointIDs {
+			item.EndpointIDs[id] = endpointID
 		}
 	}
 	if len(item.Published) > 0 {
@@ -1233,6 +1286,15 @@ func verifyVethOwnership(ctx context.Context, runner Runner, networkID, containe
 		}
 	}
 	return fmt.Errorf("interface alias does not match the recorded Boxr network and container identity")
+}
+
+func endpointIdentity(networkID, containerID string) (string, string) {
+	identity := []byte("boxr-network-endpoint\x00" + networkID + "\x00" + containerID)
+	endpointDigest := sha256.Sum256(identity)
+	macDigest := sha256.Sum256(append([]byte("boxr-network-mac\x00"), identity...))
+	mac := fmt.Sprintf("02:%02x:%02x:%02x:%02x:%02x",
+		macDigest[0], macDigest[1], macDigest[2], macDigest[3], macDigest[4])
+	return hex.EncodeToString(endpointDigest[:]), mac
 }
 
 func vethNames(containerID string) (string, string) {
