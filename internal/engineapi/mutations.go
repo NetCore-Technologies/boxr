@@ -826,6 +826,9 @@ func createDockerConfigVolumes(targets []string, options container.Options) ([]c
 			selected = append(selected, target)
 		}
 	}
+	if len(options.BindMounts)+len(options.TmpfsMounts)+len(selected) > maxDockerEngineMountCount {
+		return nil, nil, fmt.Errorf("Docker container supports at most %d combined mounts, including image-declared volumes", maxDockerEngineMountCount)
+	}
 	candidateMounts := append([]container.BindMount(nil), options.BindMounts...)
 	for _, target := range selected {
 		candidateMounts = append(candidateMounts, container.BindMount{

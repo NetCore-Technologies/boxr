@@ -175,3 +175,25 @@ func TestImageConfigVolumesAppearInDockerImageConfigAndCreate(t *testing.T) {
 		t.Fatalf("image-declared volume copy-up = %q, %v", contents, err)
 	}
 }
+
+func TestDockerConfigVolumesRollBackWhenContainerValidationFails(t *testing.T) {
+	setupEngineAPITest(t)
+	t.Setenv("BOXR_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+	root := filepath.Join(t.TempDir(), "empty-rootfs")
+	if err := os.Mkdir(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	image, err := imageStore.ImportRootFSWithConfig(root, "registry.example/team/volume-rollback:v1", "linux", "amd64", "", imageStore.ImageRuntimeConfig{
+		Volumes: map[string]struct{}{"/data": {}},
+	})
+	if err != nil {
+		t.Fatalf("import image: %v", err)
+	}
+	if _, err := createContainerRecord("volume-rollback", dockerCreateRequest{Image: image.Reference}); err == nil {
+		t.Fatal("container without an image command unexpectedly passed validation")
+	}
+	items, err := volume.List()
+	if err != nil || len(items) != 0 {
+		t.Fatalf("failed container create leaked anonymous volumes: %+v, %v", items, err)
+	}
+}
