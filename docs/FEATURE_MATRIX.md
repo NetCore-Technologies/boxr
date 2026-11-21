@@ -935,3 +935,5 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 918. Docker container listing evaluates ancestor image, volume name/source/destination, published host/container port and exposed port/range filters
 
 919. Docker container list `before` and `since` filters resolve existing container IDs/names once per request and compare persisted creation times; invalid and unknown filter inputs return errors
+
+920. Docker container list `size=1` returns `SizeRw` and `SizeRootFs` logical-byte counters using bounded, symlink-safe base-rootfs and OverlayFS-upper walks
