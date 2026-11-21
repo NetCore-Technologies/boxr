@@ -6,7 +6,7 @@ Boxr includes an initial, intentionally limited Docker Engine HTTP API for local
 boxr daemon
 ```
 
-By default it listens on `$XDG_RUNTIME_DIR/boxr/engine.sock`, or `~/.cache/boxr/run/engine.sock` when `XDG_RUNTIME_DIR` is unset. Override the path with `--host unix:///absolute/path/engine.sock`. The socket is owner-only (`0600`); the daemon refuses TCP listeners, symlinked socket paths, unsafe socket directories, replacement of regular files, and a second live listener.
+By default it listens on `$XDG_RUNTIME_DIR/boxr/engine.sock`, or `~/.cache/boxr/run/engine.sock` when `XDG_RUNTIME_DIR` is unset. Override the path with `--host unix:///absolute/path/engine.sock`. The socket is owner-only (`0600`); the daemon refuses symlinked socket paths, unsafe socket directories, replacement of regular files, and a second live listener. For remote administration, one TCP listener is available only with mutual TLS: plaintext TCP is rejected, the server verifies client certificates against the configured CA, TLS 1.2 or newer is required, and the server private key must be owner-only.
 
 A Docker CLI can use that socket for the implemented operations shown below; most container lifecycle and image workflows still require native Boxr commands:
 
@@ -20,6 +20,26 @@ docker inspect CONTAINER
 docker logs CONTAINER
 docker stats --no-stream CONTAINER
 ```
+
+For a remote Engine API listener, provision a CA, a server certificate whose SAN matches the daemon hostname/IP, and client certificates signed by that CA. Start Boxr with:
+
+```sh
+boxr daemon \\
+  --host tcp://0.0.0.0:2376 \\
+  --tlsverify \\
+  --tlscacert /etc/boxr/ca.pem \\
+  --tlscert /etc/boxr/server-cert.pem \\
+  --tlskey /etc/boxr/server-key.pem
+```
+
+Connect from a Docker-compatible client with its own client certificate and the CA:
+
+```sh
+docker --host tcp://boxr.example.com:2376 --tlsverify \\
+  --tlscacert ca.pem --tlscert cert.pem --tlskey key.pem version
+```
+
+Every client certificate trusted by the configured CA receives the full Engine API authority; there is no per-client role model yet. Treat client private keys as privileged host-administration credentials. Only one listener (Unix or mutually authenticated TCP) can be configured per daemon process.
 
 The default API version advertised is `1.45` (minimum `1.24`). Implemented endpoints are:
 

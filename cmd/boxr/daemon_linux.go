@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -29,9 +31,13 @@ func runDaemon(args []string, stdout, stderr io.Writer) int {
 	host := defaultDaemonHost()
 	flags.StringVar(&host, "host", host, "listen on a local unix:// socket")
 	flags.StringVar(&host, "H", host, "alias for --host")
+	tlsVerify := flags.Bool("tlsverify", false, "require TLS and verify every remote client certificate")
+	tlsCACert := flags.String("tlscacert", "", "CA certificate bundle trusted to authenticate remote clients")
+	tlsCert := flags.String("tlscert", "", "server TLS certificate chain")
+	tlsKey := flags.String("tlskey", "", "server TLS private key (must be owner-only)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			fmt.Fprintln(stdout, "Usage: boxr daemon [--host unix:///absolute/path/engine.sock]")
+			fmt.Fprintln(stdout, "Usage: boxr daemon [--host unix:///absolute/path/engine.sock | --host tcp://HOST:PORT --tlsverify --tlscacert CA --tlscert CERT --tlskey KEY]")
 			return 0
 		}
 		return 2
@@ -40,20 +46,62 @@ func runDaemon(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "boxr daemon: unexpected positional arguments")
 		return 2
 	}
-	socketPath, err := parseDaemonHost(host)
-	if err != nil {
-		fmt.Fprintf(stderr, "boxr daemon: %v\n", err)
-		return 2
-	}
-	listener, socketInfo, err := listenDaemonSocket(socketPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "boxr daemon: %v\n", err)
-		return 1
+	var (
+		err         error
+		listener    net.Listener
+		serveListener net.Listener
+		socketPath  string
+		socketInfo  os.FileInfo
+	)
+	tcpListener := strings.HasPrefix(strings.ToLower(host), "tcp://")
+	if tcpListener {
+		if !*tlsVerify {
+			fmt.Fprintln(stderr, "boxr daemon: TCP listeners require --tlsverify; plaintext remote access is disabled")
+			return 2
+		}
+		if strings.TrimSpace(*tlsCACert) == "" || strings.TrimSpace(*tlsCert) == "" || strings.TrimSpace(*tlsKey) == "" {
+			fmt.Fprintln(stderr, "boxr daemon: --tlsverify requires --tlscacert, --tlscert, and --tlskey")
+			return 2
+		}
+		address, parseErr := parseDaemonTCPHost(host)
+		if parseErr != nil {
+			fmt.Fprintf(stderr, "boxr daemon: %v\n", parseErr)
+			return 2
+		}
+		tlsConfig, tlsErr := loadDaemonTLSConfig(*tlsCACert, *tlsCert, *tlsKey)
+		if tlsErr != nil {
+			fmt.Fprintf(stderr, "boxr daemon: configure mutual TLS: %v\n", tlsErr)
+			return 2
+		}
+		listener, err = net.Listen("tcp", address)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr daemon: listen on %s: %v\n", address, err)
+			return 1
+		}
+		serveListener = tls.NewListener(listener, tlsConfig)
+	} else {
+		if *tlsVerify || strings.TrimSpace(*tlsCACert) != "" || strings.TrimSpace(*tlsCert) != "" || strings.TrimSpace(*tlsKey) != "" {
+			fmt.Fprintln(stderr, "boxr daemon: TLS options require a tcp:// listener")
+			return 2
+		}
+		socketPath, err = parseDaemonHost(host)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr daemon: %v\n", err)
+			return 2
+		}
+		listener, socketInfo, err = listenDaemonSocket(socketPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr daemon: %v\n", err)
+			return 1
+		}
+		serveListener = listener
 	}
 	defer func() {
 		_ = listener.Close()
-		if current, statErr := os.Lstat(socketPath); statErr == nil && os.SameFile(socketInfo, current) {
-			_ = os.Remove(socketPath)
+		if socketPath != "" && socketInfo != nil {
+			if current, statErr := os.Lstat(socketPath); statErr == nil && os.SameFile(socketInfo, current) {
+				_ = os.Remove(socketPath)
+			}
 		}
 	}()
 
@@ -66,9 +114,13 @@ func runDaemon(args []string, stdout, stderr io.Writer) int {
 	}
 	serveResult := make(chan error, 1)
 	go func() {
-		serveResult <- server.Serve(listener)
+		serveResult <- server.Serve(serveListener)
 	}()
-	fmt.Fprintf(stdout, "Boxr Engine API listening on unix://%s (owner-only socket)\n", socketPath)
+	if tcpListener {
+		fmt.Fprintf(stdout, "Boxr Engine API listening on https://%s (mutual TLS; client certificates required)\n", listener.Addr())
+	} else {
+		fmt.Fprintf(stdout, "Boxr Engine API listening on unix://%s (owner-only socket)\n", socketPath)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -95,6 +147,101 @@ func runDaemon(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
+
+func parseDaemonTCPHost(value string) (string, error) {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return "", fmt.Errorf("invalid --host: %w", err)
+	}
+	if parsed.Scheme != "tcp" || parsed.Opaque != "" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.ForceQuery {
+		return "", fmt.Errorf("TCP host must be tcp://HOST:PORT without a path, query, fragment, or user information")
+	}
+	host, port, err := net.SplitHostPort(parsed.Host)
+	if err != nil || host == "" || strings.TrimSpace(host) != host || port == "" {
+		return "", fmt.Errorf("TCP host must include an explicit bind address and port")
+	}
+	for _, character := range port {
+		if character < '0' || character > '9' {
+			return "", fmt.Errorf("TCP port must be a decimal number")
+		}
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", fmt.Errorf("TCP port must be between 1 and 65535")
+	}
+	return net.JoinHostPort(host, strconv.Itoa(portNumber)), nil
+}
+
+const maxDaemonTLSFileBytes = 1 << 20
+
+func readDaemonTLSFile(path string, private bool) ([]byte, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, fmt.Errorf("certificate path is required")
+	}
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("inspect TLS file %s: %w", path, err)
+	}
+	if before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
+		return nil, fmt.Errorf("TLS file %s must be a regular non-symlink file", path)
+	}
+	if before.Size() > maxDaemonTLSFileBytes {
+		return nil, fmt.Errorf("TLS file %s exceeds %d bytes", path, maxDaemonTLSFileBytes)
+	}
+	if private && before.Mode().Perm()&0077 != 0 {
+		return nil, fmt.Errorf("private key %s must not be accessible by group or others (use chmod 0400 or 0600)", path)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open TLS file %s: %w", path, err)
+	}
+	defer file.Close()
+	after, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat TLS file %s: %w", path, err)
+	}
+	if !os.SameFile(before, after) {
+		return nil, fmt.Errorf("TLS file %s changed while opening", path)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxDaemonTLSFileBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read TLS file %s: %w", path, err)
+	}
+	if len(data) > maxDaemonTLSFileBytes {
+		return nil, fmt.Errorf("TLS file %s exceeds %d bytes", path, maxDaemonTLSFileBytes)
+	}
+	return data, nil
+}
+
+func loadDaemonTLSConfig(caPath, certPath, keyPath string) (*tls.Config, error) {
+	caPEM, err := readDaemonTLSFile(caPath, false)
+	if err != nil {
+		return nil, fmt.Errorf("read client CA certificate: %w", err)
+	}
+	clientCAs := x509.NewCertPool()
+	if !clientCAs.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("client CA file %s contains no valid PEM certificates", caPath)
+	}
+	certPEM, err := readDaemonTLSFile(certPath, false)
+	if err != nil {
+		return nil, fmt.Errorf("read server certificate: %w", err)
+	}
+	keyPEM, err := readDaemonTLSFile(keyPath, true)
+	if err != nil {
+		return nil, fmt.Errorf("read server private key: %w", err)
+	}
+	certificate, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("load server certificate and private key: %w", err)
+	}
+	return &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{certificate},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    clientCAs,
+	}, nil
+}
+
 func defaultDaemonHost() string {
 	if runtimeDir := strings.TrimSpace(os.Getenv("XDG_RUNTIME_DIR")); runtimeDir != "" {
 		return "unix://" + filepath.Join(runtimeDir, "boxr", "engine.sock")
@@ -112,7 +259,7 @@ func parseDaemonHost(value string) (string, error) {
 		return "", fmt.Errorf("invalid --host: %w", err)
 	}
 	if parsed.Scheme != "unix" || parsed.Host != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
-		return "", fmt.Errorf("only unix:///absolute/path sockets are supported; TCP listeners are disabled")
+		return "", fmt.Errorf("expected unix:///absolute/path; use tcp://HOST:PORT with --tlsverify for remote access")
 	}
 	if !filepath.IsAbs(parsed.Path) || strings.ContainsRune(parsed.Path, '\x00') {
 		return "", fmt.Errorf("unix socket path must be an absolute path")

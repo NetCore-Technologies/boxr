@@ -3727,7 +3727,8 @@ var implementedFeatures = []string{
 	"Dockerfile multi-stage builds support named and numeric earlier-stage COPY --from references",
 	"Dockerfile COPY --from supports verified local image references without implicit network pulls",
 	"Docker Engine API creates starts inspects and streams non-TTY exec sessions through Boxr namespace-aware execution",
-	"Engine API prunes stopped and created containers using Docker until and label filters and emits Docker prune events",
+	"Engine API prunes stopped and created containers using Docker until and label filters and emits Docker prune events"
+	"Engine API can expose remote TCP access only through mutually authenticated TLS with client certificates verified by a configured CA",
 }
 
 func printFeatures(stdout io.Writer) {
