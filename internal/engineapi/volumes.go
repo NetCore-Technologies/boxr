@@ -239,7 +239,6 @@ func (s *Server) handleVolumeDelete(writer http.ResponseWriter, name string) {
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-
 type dockerVolumePruneResponse struct {
 	VolumesDeleted []string `json:"VolumesDeleted"`
 	SpaceReclaimed int64    `json:"SpaceReclaimed"`
