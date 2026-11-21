@@ -72,6 +72,14 @@ func configureCgroupOptionsAt(root string, pid int, options Options) (func() err
 	if err := enableControllersForChildren(root, parent, controllers); err != nil {
 		return nil, fmt.Errorf("prepare cgroup controllers: %w", err)
 	}
+	if options.CgroupEnabled {
+		// Docker-compatible Engine API containers always create a cgroup, even
+		// when no hard limit was requested. Enable any additional controllers
+		// already delegated to Boxr so `docker stats` can report useful
+		// CPU, memory, I/O and PID counters for default containers too. Missing
+		// optional controllers do not make an otherwise valid workload fail.
+		enableAvailableOptionalControllers(root, parent, []string{"cpu", "memory", "io", "pids"})
+	}
 
 	path := filepath.Join(parent, strconv.Itoa(pid))
 	if err := os.Mkdir(path, 0755); err != nil {
@@ -152,6 +160,36 @@ func configureCgroupOptionsAt(root string, pid int, options Options) (func() err
 // requested controllers in boxr's empty parent cgroup before creating a child.
 // cgroup v2 requires controllers to be enabled at every parent level; checking
 // only the mount root is not enough for /sys/fs/cgroup/boxr/<pid>.
+func enableAvailableOptionalControllers(root, parent string, requested []string) {
+	rootAvailable, err := readControllerSet(filepath.Join(root, "cgroup.controllers"))
+	if err != nil {
+		return
+	}
+	rootEnabled, err := readControllerSet(filepath.Join(root, "cgroup.subtree_control"))
+	if err != nil {
+		return
+	}
+	parentAvailable, err := readControllerSet(filepath.Join(parent, "cgroup.controllers"))
+	if err != nil {
+		return
+	}
+	parentEnabled, err := readControllerSet(filepath.Join(parent, "cgroup.subtree_control"))
+	if err != nil {
+		return
+	}
+	available := make([]string, 0, len(requested))
+	for _, controller := range requested {
+		if rootAvailable[controller] && rootEnabled[controller] && parentAvailable[controller] && !parentEnabled[controller] {
+			available = append(available, controller)
+		}
+	}
+	if len(available) > 0 {
+		// This is best-effort telemetry enablement. Explicitly requested
+		// resource controllers above remain fail-closed and are never skipped.
+		_ = enableControllersForChildren(root, parent, available)
+	}
+}
+
 func enableControllersForChildren(root, parent string, requested []string) error {
 	if len(requested) == 0 {
 		return nil
