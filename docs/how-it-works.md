@@ -74,7 +74,7 @@ Do not run untrusted workloads. See [SECURITY.md](../SECURITY.md).
 
 A context-level `.boxrignore` is optional, bounded to 64 KiB, and must be a regular non-symlink file. It supports comments, blank lines, basename and relative-path globs, and directory-subtree exclusions. Negation patterns and parent traversal are rejected so an excluded directory cannot be re-included by a later rule. An explicit `COPY` of an ignored source fails rather than silently producing a partial image.
 
-Image runtime metadata (`Env`, `Entrypoint`, `Cmd`, `WorkingDir`, `User` and `Labels`) is stored in the OCI config. `boxr run --image` applies the environment, entrypoint/command, working-directory and labels as defaults; run configuration and CLI overrides take precedence. A non-empty image `User` is currently rejected at run time because UID/GID switching from image metadata is not yet implemented.
+Image runtime metadata (`Env`, `Entrypoint`, `Cmd`, `WorkingDir`, `User` and `Labels`) is stored in the OCI config. `boxr run --image` applies the environment, entrypoint/command, working-directory, user and labels as defaults; run configuration and CLI overrides take precedence. Numeric IDs and names from `/etc/passwd` and `/etc/group` are resolved inside the container rootfs, supplementary groups are applied before the final UID drop, and non-root IDs are rejected with the current single-ID user-namespace mapping.
 
 ## Local image layout
 
