@@ -467,7 +467,6 @@ func verifyDockerContainerPID(record state.Record) error {
 	return nil
 }
 
-
 type dockerNetworkPruneResponse struct {
 	NetworksDeleted []string `json:"NetworksDeleted"`
 }
