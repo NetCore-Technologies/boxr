@@ -179,7 +179,12 @@ func (s *Server) handleVolumeCreate(writer http.ResponseWriter, request *http.Re
 		writeError(writer, http.StatusBadRequest, fmt.Errorf("local volume DriverOpts are not supported"))
 		return
 	}
-	created, err := volume.Create(input.Name, input.Labels)
+	var created volume.Volume
+	if input.Name == "" {
+		created, err = volume.CreateAnonymous(input.Labels)
+	} else {
+		created, err = volume.Create(input.Name, input.Labels)
+	}
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") {
 			writeError(writer, http.StatusConflict, err)
@@ -234,4 +239,137 @@ func (s *Server) handleVolumeDelete(writer http.ResponseWriter, name string) {
 		return
 	}
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+
+type dockerVolumePruneResponse struct {
+	VolumesDeleted []string `json:"VolumesDeleted"`
+	SpaceReclaimed int64    `json:"SpaceReclaimed"`
+}
+
+type measuredDockerVolume struct {
+	item  volume.Volume
+	bytes int64
+}
+
+func (s *Server) handleVolumePrune(writer http.ResponseWriter, request *http.Request) {
+	s.volumeMu.Lock()
+	defer s.volumeMu.Unlock()
+
+	filters, err := parseFilters(request.URL.Query().Get("filters"))
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	includeNamed, err := volumePruneIncludesNamed(filters)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	items, err := volume.List()
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, fmt.Errorf("list volumes for prune: %w", err))
+		return
+	}
+	records, err := state.List(true)
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, fmt.Errorf("inspect container volume references: %w", err))
+		return
+	}
+
+	// Measure every candidate before deleting anything. A filesystem walk error
+	// therefore cannot leave a half-pruned set just because the reclaim report
+	// could not be calculated.
+	candidates := make([]measuredDockerVolume, 0, len(items))
+	for _, item := range items {
+		if dockerVolumeReferenced(item.Path, records) {
+			continue
+		}
+		if !includeNamed && !item.Anonymous {
+			continue
+		}
+		matched, err := matchesDockerVolumePruneFilters(item, filters)
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, err)
+			return
+		}
+		if !matched {
+			continue
+		}
+		usage, err := volume.Measure(item.Name)
+		if err != nil {
+			writeError(writer, http.StatusInternalServerError, fmt.Errorf("measure volume %q before prune: %w", item.Name, err))
+			return
+		}
+		candidates = append(candidates, measuredDockerVolume{item: item, bytes: usage.TotalBytes})
+	}
+
+	result := dockerVolumePruneResponse{VolumesDeleted: make([]string, 0, len(candidates))}
+	const maxInt64 = int64(^uint64(0) >> 1)
+	for _, candidate := range candidates {
+		if err := volume.Remove(candidate.item.Name); err != nil {
+			writeError(writer, http.StatusInternalServerError, fmt.Errorf("remove volume %q during prune: %w", candidate.item.Name, err))
+			return
+		}
+		result.VolumesDeleted = append(result.VolumesDeleted, candidate.item.Name)
+		if candidate.bytes > 0 {
+			if result.SpaceReclaimed > maxInt64-candidate.bytes {
+				result.SpaceReclaimed = maxInt64
+			} else {
+				result.SpaceReclaimed += candidate.bytes
+			}
+		}
+	}
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func volumePruneIncludesNamed(filters map[string][]string) (bool, error) {
+	values, ok := filters["all"]
+	if !ok {
+		return false, nil
+	}
+	if len(values) == 0 {
+		return false, fmt.Errorf("volume prune filter all must contain a boolean value")
+	}
+	includeNamed := false
+	for _, value := range values {
+		parsed, err := parseBooleanFilter(value)
+		if err != nil {
+			return false, fmt.Errorf("volume prune filter all: %w", err)
+		}
+		includeNamed = includeNamed || parsed
+	}
+	return includeNamed, nil
+}
+
+func matchesDockerVolumePruneFilters(item volume.Volume, filters map[string][]string) (bool, error) {
+	for key, values := range filters {
+		if key == "all" {
+			continue
+		}
+		if key != "label" && key != "label!" {
+			return false, fmt.Errorf("unsupported volume prune filter %q", key)
+		}
+		if len(values) == 0 {
+			return false, fmt.Errorf("volume prune filter %q must contain at least one value", key)
+		}
+		negate := key == "label!"
+		matched := false
+		for _, value := range values {
+			labelKey, expected, hasValue := strings.Cut(value, "=")
+			if strings.TrimSpace(labelKey) == "" || len(labelKey) > 128 {
+				return false, fmt.Errorf("invalid volume label filter %q", value)
+			}
+			actual, exists := item.Labels[labelKey]
+			valueMatches := exists && (!hasValue || actual == expected)
+			if negate {
+				valueMatches = !valueMatches
+			}
+			matched = matched || valueMatches
+		}
+		if !matched {
+			return false, nil
+		}
+	}
+	return true, nil
 }
