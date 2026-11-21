@@ -80,6 +80,15 @@ func TestDockerStatsSnapshotUsesDistinctPreviousCounters(t *testing.T) {
 	}
 }
 
+func findDockerStatsBlockIOEntry(entries []map[string]any, major, minor int64, operation string) (map[string]any, bool) {
+	for _, entry := range entries {
+		if entry["major"] == major && entry["minor"] == minor && entry["op"] == operation {
+			return entry, true
+		}
+	}
+	return nil, false
+}
+
 func TestDockerStatsBlockIOConvertsCgroupCounters(t *testing.T) {
 	result := dockerStatsBlockIO(map[string]string{
 		"8:0":     "rbytes=4096 wbytes=2048 rios=4 wios=2",
@@ -91,11 +100,15 @@ func TestDockerStatsBlockIOConvertsCgroupCounters(t *testing.T) {
 	if len(serviceBytes) != 4 || len(serviced) != 4 {
 		t.Fatalf("Docker block IO entries: bytes=%#v serviced=%#v", serviceBytes, serviced)
 	}
-	if serviceBytes[0]["major"] != int64(8) || serviceBytes[0]["minor"] != int64(0) ||
-		serviceBytes[0]["op"] != "Read" || serviceBytes[0]["value"] != int64(4096) {
-		t.Fatalf("Docker read-byte entry = %#v", serviceBytes[0])
+	readBytes, ok := findDockerStatsBlockIOEntry(serviceBytes, int64(8), int64(0), "Read")
+	if !ok || readBytes["value"] != int64(4096) {
+		t.Fatalf("Docker 8:0 read-byte entry = %#v, found=%t", readBytes, ok)
 	}
-	if serviced[1]["op"] != "Write" || serviced[1]["value"] != int64(2) {
-		t.Fatalf("Docker write-I/O entry = %#v", serviced[1])
+	writeIO, ok := findDockerStatsBlockIOEntry(serviced, int64(8), int64(0), "Write")
+	if !ok || writeIO["value"] != int64(2) {
+		t.Fatalf("Docker 8:0 write-I/O entry = %#v, found=%t", writeIO, ok)
+	}
+	if serviceBytes[0]["major"] != int64(8) || serviceBytes[0]["minor"] != int64(0) {
+		t.Fatalf("Docker block IO device ordering is not deterministic: %#v", serviceBytes)
 	}
 }
