@@ -275,7 +275,10 @@ func TestMergeDockerArchiveTreeRemovesWhiteoutsAndPreservesSafeSymlinks(t *testi
 	if err := os.MkdirAll(target, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(target, ".wh.new.txt"), nil, 0600); err != nil {
+	if err := os.MkdirAll(filepath.Join(target, "sub"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "sub", ".wh.new.txt"), nil, 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := mergeDockerArchiveTree(stage, upper, "app"); err != nil {
