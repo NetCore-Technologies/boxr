@@ -894,7 +894,7 @@ func TestNetworkIPRangeBoundsAutomaticAndStaticAllocations(t *testing.T) {
 func TestCreateRejectsInvalidOrOutOfSubnetIPRange(t *testing.T) {
 	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
 	for _, value := range []string{
-		"172.30.51.0/23", "172.30.52.0/24", "172.30.51.128/25",
+		"172.30.51.0/23", "172.30.52.0/24", "172.30.51.128/31",
 		"172.30.51.128", "not-a-prefix", "172.030.051.0/25",
 	} {
 		t.Run(value, func(t *testing.T) {
