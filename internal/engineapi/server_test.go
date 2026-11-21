@@ -2232,7 +2232,6 @@ func TestDockerNetworkCreateRejectsUnsupportedModesAndOptions(t *testing.T) {
 		"internal":          `{"Name":"unsupported","Driver":"bridge","Internal":true,"IPAM":{"Config":[{"Subnet":"172.28.40.0/24"}]}}`,
 		"ipv6":              `{"Name":"unsupported","Driver":"bridge","EnableIPv6":true,"IPAM":{"Config":[{"Subnet":"172.28.40.0/24"}]}}`,
 		"empty ipam":        `{"Name":"unsupported","Driver":"bridge","IPAM":{"Config":[]}}`,
-		"auxiliary addresses": `{"Name":"unsupported","Driver":"bridge","IPAM":{"Config":[{"Subnet":"172.28.40.0/24","AuxiliaryAddresses":{"reserved":"172.28.40.10"}}]}}`,
 		"unknown option":    `{"Name":"unsupported","Driver":"bridge","IPAM":{"Config":[{"Subnet":"172.28.40.0/24"}]},"Options":{"unsafe":"true"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -2264,7 +2263,7 @@ func TestDockerNetworkConnectDisconnectAndInspectEndpoint(t *testing.T) {
 	server.verifyNetworkPID = func(state.Record) error { return nil }
 
 	createRequest := httptest.NewRequest(http.MethodPost, "/v1.45/networks/create", strings.NewReader(
-		`{"Name":"connect-test","Driver":"bridge","IPAM":{"Config":[{"Subnet":"172.29.41.0/24","IPRange":"172.29.41.128/25","Gateway":"172.29.41.1"}]},"Options":{"com.docker.network.bridge.enable_ip_masquerade":"false"}}`,
+		`{"Name":"connect-test","Driver":"bridge","IPAM":{"Config":[{"Subnet":"172.29.41.0/24","IPRange":"172.29.41.128/25","Gateway":"172.29.41.1","AuxiliaryAddresses":{"reserved":"172.29.41.132"}}]},"Options":{"com.docker.network.bridge.enable_ip_masquerade":"false"}}`,
 	))
 	createResponse := httptest.NewRecorder()
 	server.ServeHTTP(createResponse, createRequest)
@@ -2313,7 +2312,8 @@ func TestDockerNetworkConnectDisconnectAndInspectEndpoint(t *testing.T) {
 		endpoint["MacAddress"] != "02:aa:bb:cc:dd:ee" || len(endpoint["EndpointID"]) != 64 {
 		t.Fatalf("network inspect endpoint = %#v", inspected.Containers)
 	}
-	if len(inspected.IPAM.Config) != 1 || inspected.IPAM.Config[0].IPRange != "172.29.41.128/25" {
+	if len(inspected.IPAM.Config) != 1 || inspected.IPAM.Config[0].IPRange != "172.29.41.128/25" ||
+		inspected.IPAM.Config[0].AuxAddress["reserved"] != "172.29.41.132" {
 		t.Fatalf("network inspect IPAM range = %#v", inspected.IPAM.Config)
 	}
 
