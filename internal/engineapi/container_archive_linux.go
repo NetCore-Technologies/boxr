@@ -633,7 +633,7 @@ func resolveDockerOverlayPathWithSymlinks(lowerRoot, upperRoot, relative string,
 			if linkErr != nil {
 				return "", "", nil, fmt.Errorf("read container symlink %q: %w", name, linkErr)
 			}
-			if linkTarget == "" || strings.ContainsRune(linkTarget, '\\x00') {
+			if linkTarget == "" || strings.ContainsRune(linkTarget, '\x00') {
 				return "", "", nil, fmt.Errorf("container symlink %q has an invalid target", name)
 			}
 			parent := strings.Join(parts[:index], "/")
