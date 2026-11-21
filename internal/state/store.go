@@ -578,7 +578,7 @@ func CancelStopRequest(id string) error {
 
 func Finish(id string, runErr error) error {
 	return update(id, func(record *Record) error {
-		if record.Status != "running" && record.Status != "created" && record.Status != "restarting" {
+		if record.Status != "running" && record.Status != "paused" && record.Status != "created" && record.Status != "restarting" {
 			return fmt.Errorf("cannot finish container in %q state", record.Status)
 		}
 		now := time.Now().UTC()
@@ -628,7 +628,7 @@ func remove(query string, allowCreated bool) error {
 	if err != nil {
 		return err
 	}
-	if record.Status == "running" || record.Status == "restarting" {
+	if record.Status == "running" || record.Status == "paused" || record.Status == "restarting" {
 		return fmt.Errorf("container %s is %s; stop it before removal", record.ID, record.Status)
 	}
 	if record.Status == "created" && !allowCreated {
@@ -775,7 +775,7 @@ func listRecordsLocked(all bool) ([]Record, error) {
 		if err := json.Unmarshal(data, &record); err != nil {
 			return nil, fmt.Errorf("decode state record %s: %w", entry.Name(), err)
 		}
-		if all || record.Status == "created" || record.Status == "running" || record.Status == "restarting" {
+		if all || record.Status == "created" || record.Status == "running" || record.Status == "paused" || record.Status == "restarting" {
 			records = append(records, record)
 		}
 	}
@@ -919,7 +919,7 @@ func Prune(before time.Time) (int, error) {
 	}
 	removed := 0
 	for _, record := range records {
-		if record.Status == "running" || record.Status == "created" || record.CreatedAt.After(before) {
+		if record.Status == "running" || record.Status == "paused" || record.Status == "created" || record.Status == "restarting" || record.CreatedAt.After(before) {
 			continue
 		}
 		if err := removeEngineConfigLocked(record.ID); err != nil {

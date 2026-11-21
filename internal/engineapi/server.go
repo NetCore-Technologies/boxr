@@ -584,7 +584,7 @@ func (s *Server) handleContainers(writer http.ResponseWriter, request *http.Requ
 	}
 	result := make([]map[string]any, 0, len(records))
 	for _, record := range records {
-		if !all && record.Status != "running" && record.Status != "restarting" {
+		if !all && record.Status != "running" && record.Status != "paused" && record.Status != "restarting" {
 			continue
 		}
 		if !matchesContainerFilters(record, filters) {
@@ -741,10 +741,23 @@ func (s *Server) handleContainerKill(writer http.ResponseWriter, request *http.R
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
+	unlock := s.containerTransitions.lock(query)
+	defer unlock()
 	record, err := state.Get(query)
 	if err != nil {
 		writeError(writer, http.StatusNotFound, err)
 		return
+	}
+	if record.Status == "paused" {
+		if err := s.resumePausedContainer(record); err != nil {
+			writeError(writer, http.StatusConflict, fmt.Errorf("resume paused container before kill: %w", err))
+			return
+		}
+		record, err = state.Get(record.ID)
+		if err != nil {
+			writeError(writer, http.StatusInternalServerError, fmt.Errorf("refresh resumed container: %w", err))
+			return
+		}
 	}
 	if record.Status != "running" {
 		writeError(writer, http.StatusConflict, fmt.Errorf("container %s is %s, not running", record.ID, record.Status))
@@ -784,7 +797,7 @@ func (s *Server) handleContainerWait(writer http.ResponseWriter, request *http.R
 			writeError(writer, http.StatusNotFound, err)
 			return
 		}
-		if record.Status != "running" && record.Status != "restarting" {
+		if record.Status != "running" && record.Status != "paused" && record.Status != "restarting" {
 			statusCode := 0
 			if record.ExitCode != nil {
 				statusCode = *record.ExitCode
@@ -852,12 +865,14 @@ func (s *Server) handleContainerDelete(writer http.ResponseWriter, request *http
 		s.volumeMu.Lock()
 		defer s.volumeMu.Unlock()
 	}
+	unlock := s.containerTransitions.lock(query)
+	defer unlock()
 	record, err := state.Get(query)
 	if err != nil {
 		writeError(writer, http.StatusNotFound, err)
 		return
 	}
-	if record.Status == "running" || record.Status == "restarting" {
+	if record.Status == "running" || record.Status == "paused" || record.Status == "restarting" {
 		if !force {
 			writeError(writer, http.StatusConflict, fmt.Errorf("container %s is %s; stop it before removal or set force=true", record.ID, record.Status))
 			return

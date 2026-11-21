@@ -812,3 +812,48 @@ func TestSetPausedRejectsPendingStopAndRollsBackFailedEventWrite(t *testing.T) {
 		t.Fatalf("event target was changed: %q, %v", got, err)
 	}
 }
+
+func TestPausedContainersRemainActiveUntilTheyFinish(t *testing.T) {
+	useTempState(t)
+	created, err := Create("paused-active", []string{"/bin/sleep", "30"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Start(created.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	running, err := Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if running.ProcessStartTicks == 0 {
+		t.Skip("current platform does not expose process start ticks")
+	}
+	if err := SetPaused(running.ID, running.PID, running.ProcessStartTicks, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(running.ID); err == nil {
+		t.Fatal("paused container was removed as if it were stopped")
+	}
+	removed, err := Prune(time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Fatalf("prune removed %d paused container(s)", removed)
+	}
+	paused, err := Get(running.ID)
+	if err != nil || paused.Status != "paused" {
+		t.Fatalf("paused container disappeared during prune: %+v, %v", paused, err)
+	}
+	if err := Finish(running.ID, nil); err != nil {
+		t.Fatalf("finish externally terminated paused workload: %v", err)
+	}
+	finished, err := Get(running.ID)
+	if err != nil || finished.Status != "exited" {
+		t.Fatalf("finished paused container = %+v, %v", finished, err)
+	}
+	if err := Remove(running.ID); err != nil {
+		t.Fatalf("remove finished container: %v", err)
+	}
+}

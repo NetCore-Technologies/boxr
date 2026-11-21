@@ -1,8 +1,11 @@
 package engineapi
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -215,5 +218,119 @@ func TestDockerContainerPauseAndUnpauseSerializePerContainer(t *testing.T) {
 	}
 	if current.Status != "running" {
 		t.Fatalf("final container state=%q, want running", current.Status)
+	}
+}
+
+func TestResumePausedContainerThawsAndPersistsRunningState(t *testing.T) {
+	server := setupEngineAPITest(t)
+	created := createEngineAPITestContainer(t, "resume-helper", container.Options{CgroupEnabled: true})
+	running, err := state.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SetPaused(running.ID, running.PID, running.ProcessStartTicks, true); err != nil {
+		t.Fatal(err)
+	}
+	paused, err := state.Get(running.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.verifyUpdatePID = func(state.Record) error { return nil }
+	var transitions []bool
+	server.setCgroupFrozen = func(pid int, frozen bool) error {
+		if pid != running.PID {
+			t.Fatalf("freezer PID = %d, want %d", pid, running.PID)
+		}
+		transitions = append(transitions, frozen)
+		return nil
+	}
+	if err := server.resumePausedContainer(paused); err != nil {
+		t.Fatalf("resumePausedContainer(): %v", err)
+	}
+	resumed, err := state.Get(running.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Status != "running" || len(transitions) != 1 || transitions[0] {
+		t.Fatalf("resumed state=%+v transitions=%v", resumed, transitions)
+	}
+}
+
+func TestResumePausedContainerThawsBackOnFailedStatePersistence(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BOXR_STATE_DIR", filepath.Join(root, "state"))
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(root, "images"))
+	server := New("test-version")
+	created, err := state.Create("resume-rollback", []string{"/bin/sleep", "30"}, container.Options{CgroupEnabled: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(created.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	running, err := state.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SetPaused(running.ID, running.PID, running.ProcessStartTicks, true); err != nil {
+		t.Fatal(err)
+	}
+	paused, err := state.Get(running.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventsPath := filepath.Join(root, "state", "events.jsonl")
+	if err := os.Rename(eventsPath, eventsPath+".saved"); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(target, []byte("leave untouched"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, eventsPath); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	server.verifyUpdatePID = func(state.Record) error { return nil }
+	var transitions []bool
+	server.setCgroupFrozen = func(_ int, frozen bool) error {
+		transitions = append(transitions, frozen)
+		return nil
+	}
+	if err := server.resumePausedContainer(paused); err == nil {
+		t.Fatal("resume succeeded with an unsafe event log path")
+	}
+	current, err := state.Get(running.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != "paused" || len(transitions) != 2 || transitions[0] || !transitions[1] {
+		t.Fatalf("rollback state=%+v transitions=%v", current, transitions)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || string(got) != "leave untouched" {
+		t.Fatalf("event target changed: %q, %v", got, err)
+	}
+}
+
+func TestContainerListIncludesPausedContainersByDefault(t *testing.T) {
+	server := setupEngineAPITest(t)
+	created := createEngineAPITestContainer(t, "pause-list", container.Options{CgroupEnabled: true})
+	running, err := state.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SetPaused(running.ID, running.PID, running.ProcessStartTicks, true); err != nil {
+		t.Fatal(err)
+	}
+	response := engineAPIRequest(server, http.MethodGet, "/containers/json")
+	if response.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
+	}
+	var items []map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0]["State"] != "paused" {
+		t.Fatalf("default container list omitted paused workload: %#v", items)
 	}
 }

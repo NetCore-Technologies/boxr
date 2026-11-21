@@ -160,6 +160,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runDeploy(args[1:], stdout, stderr)
 	case "ps":
 		return runPS(args[1:], stdout, stderr)
+	case "pause":
+		return runPause(args[1:], stdout, stderr)
+	case "unpause":
+		return runUnpause(args[1:], stdout, stderr)
 	case "stop":
 		return runStop(args[1:], stdout, stderr)
 	case "kill":
@@ -209,7 +213,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 func runContainerCommand(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "Usage: boxr container create|run|start|restart|rename|stop|kill|wait|logs|exec|ls|ps|inspect|rm|stats|prune ...")
+		fmt.Fprintln(stderr, "Usage: boxr container create|run|start|restart|rename|pause|unpause|stop|kill|wait|logs|exec|ls|ps|inspect|rm|stats|prune ...")
 		return 2
 	}
 	switch args[0] {
@@ -223,6 +227,10 @@ func runContainerCommand(args []string, stdout, stderr io.Writer) int {
 		return runRestart(args[1:], stdout, stderr)
 	case "rename":
 		return runRename(args[1:], stdout, stderr)
+	case "pause":
+		return runPause(args[1:], stdout, stderr)
+	case "unpause":
+		return runUnpause(args[1:], stdout, stderr)
 	case "stop":
 		return runStop(args[1:], stdout, stderr)
 	case "kill":
@@ -1136,7 +1144,7 @@ func runContainerPrune(args []string, stdout, stderr io.Writer) int {
 		Removed: make([]string, 0),
 	}
 	for _, record := range records {
-		if record.Status == "running" || record.Status == "restarting" {
+		if record.Status == "running" || record.Status == "paused" || record.Status == "restarting" {
 			continue
 		}
 		matched, filterErr := matchesContainerPruneFilters(record, filters)
@@ -1254,7 +1262,7 @@ func runStart(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "boxr start: %v\n", err)
 		return 1
 	}
-	if record.Status == "running" || record.Status == "restarting" {
+	if record.Status == "running" || record.Status == "restarting" || record.Status == "paused" {
 		fmt.Fprintf(stdout, "container %s is already running\n", record.ID)
 		return 0
 	}
@@ -1491,7 +1499,7 @@ func runRemove(args []string, stdout, stderr io.Writer) int {
 		}
 		removed := 0
 		for _, record := range records {
-			if record.Status == "running" || record.Status == "created" {
+			if record.Status == "running" || record.Status == "paused" || record.Status == "created" {
 				continue
 			}
 			if err := state.Remove(record.ID); err != nil {
@@ -1513,7 +1521,7 @@ func runRemove(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "boxr rm: %v\n", err)
 			return 1
 		}
-		if record.Status == "running" || record.Status == "restarting" {
+		if record.Status == "running" || record.Status == "paused" || record.Status == "restarting" {
 			if !*force {
 				fmt.Fprintf(stderr, "boxr rm: container %s is %s; use --force to stop it before removal\n", record.ID, record.Status)
 				return 1
@@ -1597,7 +1605,7 @@ func runStats(args []string, stdout, stderr io.Writer) int {
 			return false, err
 		}
 		current = next
-		return current.Status == "running", nil
+		return current.Status == "running" || current.Status == "paused", nil
 	}
 	read := func() (state.Stats, error) {
 		return state.ReadStats(current.PID)
@@ -2189,7 +2197,9 @@ Usage:
   boxr start ID|NAME
   boxr restart [--time 10s] ID|NAME
   boxr rename ID|NAME NEW_NAME
-  boxr container create|run|start|restart|rename|stop|kill|wait|logs|exec|ls|inspect|rm|stats|prune ...
+  boxr pause ID|NAME [...]
+  boxr unpause ID|NAME [...]
+  boxr container create|run|start|restart|rename|pause|unpause|stop|kill|wait|logs|exec|ls|inspect|rm|stats|prune ...
   boxr run [options] [--detach|-d] [--dry-run] COMMAND [ARG...]
   boxr exec [options] CONTAINER COMMAND [ARG...]
   boxr version [--json]
@@ -2199,6 +2209,8 @@ Usage:
   boxr support-bundle --output PATH [--force] [--json]
   boxr ps [--all] [--last N] [--quiet] [--no-trunc] [--filter KEY=VALUE]
   boxr inspect [--size] ID|NAME
+  boxr pause ID|NAME [...]
+  boxr unpause ID|NAME [...]
   boxr stop [--time 10s] ID|NAME [...]
   boxr kill [--signal KILL] ID|NAME [...]
   boxr wait [--condition running|stopped] [--timeout 30s] [--interval 100ms] [--json] ID|NAME [...]
@@ -5216,6 +5228,19 @@ func runStop(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "cancelled pending restart for %s\n", record.ID)
 			continue
 		}
+		if record.Status == "paused" {
+			if err := transitionContainerPause(record, false, container.SetCgroupFrozen); err != nil {
+				fmt.Fprintf(stderr, "boxr stop: %s: resume paused container: %v\n", record.ID, err)
+				failed = true
+				continue
+			}
+			record, err = state.Get(record.ID)
+			if err != nil {
+				fmt.Fprintf(stderr, "boxr stop: %s: refresh resumed container: %v\n", record.ID, err)
+				failed = true
+				continue
+			}
+		}
 		if record.Status != "running" {
 			fmt.Fprintf(stdout, "%s is already %s\n", record.ID, record.Status)
 			continue
@@ -5267,7 +5292,7 @@ func runStop(args []string, stdout, stderr io.Writer) int {
 func waitForStopped(query string, pid int, deadline time.Time) bool {
 	for {
 		record, err := state.Get(query)
-		if err != nil || record.Status != "running" {
+		if err != nil || (record.Status != "running" && record.Status != "paused") {
 			return true
 		}
 		if !state.ProcessAlive(pid) {
@@ -5305,6 +5330,12 @@ func runKill(args []string, stdout, stderr io.Writer) int {
 			if err == nil {
 				fmt.Fprintf(stdout, "cancelled pending restart for %s\n", record.ID)
 				continue
+			}
+		}
+		if err == nil && record.Status == "paused" {
+			err = transitionContainerPause(record, false, container.SetCgroupFrozen)
+			if err == nil {
+				record, err = state.Get(record.ID)
 			}
 		}
 		if err == nil && record.Status != "running" {
@@ -5406,7 +5437,7 @@ func waitForCondition(query, condition string, timeout, interval time.Duration) 
 	for {
 		switch condition {
 		case "running":
-			if record.Status == "running" {
+			if record.Status == "running" || record.Status == "paused" {
 				return waitResult{ID: record.ID, Condition: condition, Status: record.Status, ExitCode: record.ExitCode, WaitedMS: time.Since(started).Milliseconds()}, nil
 			}
 			if record.Status == "exited" || record.Status == "failed" {
@@ -5478,7 +5509,7 @@ func runLogs(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "boxr logs: %v\n", getErr)
 			return 1
 		}
-		if record.Status != "running" {
+		if record.Status != "running" && record.Status != "paused" {
 			// Drain one final time in case the last write raced with process exit.
 			offset, err = state.CopyLogFrom(query, offset, stdout)
 			if err != nil {

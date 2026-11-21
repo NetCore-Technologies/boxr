@@ -19,6 +19,7 @@ func TestSetCgroupFrozenAtWaitsForKernelState(t *testing.T) {
 	}
 	for path, value := range map[string]string{
 		filepath.Join(directory, "cgroup.freeze"): "0",
+		filepath.Join(directory, "cgroup.procs"):  "5157",
 		filepath.Join(directory, "cgroup.events"): "populated 1\nfrozen 0\n",
 	} {
 		if err := os.WriteFile(path, []byte(value), 0644); err != nil {
@@ -62,6 +63,7 @@ func TestSetCgroupFrozenAtRejectsMissingKernelConfirmation(t *testing.T) {
 	}
 	for path, value := range map[string]string{
 		filepath.Join(directory, "cgroup.freeze"): "0",
+		filepath.Join(directory, "cgroup.procs"):  "5158",
 		filepath.Join(directory, "cgroup.events"): "populated 1\nfrozen 0\n",
 	} {
 		if err := os.WriteFile(path, []byte(value), 0644); err != nil {
@@ -93,6 +95,9 @@ func TestSetCgroupFrozenAtRejectsSymlinkedControlFiles(t *testing.T) {
 	}
 	if err := os.Symlink(target, filepath.Join(directory, "cgroup.freeze")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "cgroup.procs"), []byte("5159"), 0644); err != nil {
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(directory, "cgroup.events"), []byte("frozen 0\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -136,6 +141,7 @@ func TestSetCgroupFrozenAtWaitsForThawConfirmation(t *testing.T) {
 	}
 	for path, value := range map[string]string{
 		filepath.Join(directory, "cgroup.freeze"): "1",
+		filepath.Join(directory, "cgroup.procs"):  "5160",
 		filepath.Join(directory, "cgroup.events"): "populated 1\nfrozen 1\n",
 	} {
 		if err := os.WriteFile(path, []byte(value), 0644); err != nil {
@@ -159,4 +165,32 @@ func TestSetCgroupFrozenAtWaitsForThawConfirmation(t *testing.T) {
 		t.Fatalf("setCgroupFrozenAt(thawed): %v", err)
 	}
 	<-done
+}
+
+func TestSetCgroupFrozenAtRejectsProcessOutsideTargetCgroup(t *testing.T) {
+	root := newExtendedCgroupFixture(t)
+	const pid = 5161
+	directory := filepath.Join(root, "boxr", "5161")
+	if err := os.Mkdir(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for path, value := range map[string]string{
+		filepath.Join(directory, "cgroup.freeze"): "0",
+		filepath.Join(directory, "cgroup.procs"):  "9999",
+		filepath.Join(directory, "cgroup.events"): "populated 1\nfrozen 0\n",
+	} {
+		if err := os.WriteFile(path, []byte(value), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := setCgroupFrozenAt(root, pid, true, time.Second, time.Millisecond); err == nil {
+		t.Fatal("freezer accepted a process outside the target cgroup")
+	}
+	got, err := os.ReadFile(filepath.Join(directory, "cgroup.freeze"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(got)) != "0" {
+		t.Fatalf("cgroup.freeze changed for a non-member process: %q", got)
+	}
 }

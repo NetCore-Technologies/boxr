@@ -41,7 +41,8 @@ func setCgroupFrozenAt(root string, pid int, frozen bool, timeout, poll time.Dur
 
 	freezePath := filepath.Join(directory, "cgroup.freeze")
 	eventsPath := filepath.Join(directory, "cgroup.events")
-	for _, path := range []string{freezePath, eventsPath} {
+	processesPath := filepath.Join(directory, "cgroup.procs")
+	for _, path := range []string{freezePath, eventsPath, processesPath} {
 		info, err := os.Lstat(path)
 		if err != nil {
 			return fmt.Errorf("inspect cgroup freezer control %s: %w", filepath.Base(path), err)
@@ -49,6 +50,9 @@ func setCgroupFrozenAt(root string, pid int, frozen bool, timeout, poll time.Dur
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return fmt.Errorf("cgroup freezer control %s is not a regular file", filepath.Base(path))
 		}
+	}
+	if err := verifyCgroupProcessMembership(processesPath, pid); err != nil {
+		return fmt.Errorf("verify container process cgroup membership: %w", err)
 	}
 	current, err := os.ReadFile(freezePath)
 	if err != nil {
@@ -127,4 +131,21 @@ func parseCgroupFrozenEvent(data []byte) (bool, bool, error) {
 		}
 	}
 	return false, false, nil
+}
+
+func verifyCgroupProcessMembership(path string, pid int) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	for _, field := range strings.Fields(string(data)) {
+		current, err := strconv.Atoi(field)
+		if err != nil {
+			return fmt.Errorf("invalid process ID %q in cgroup.procs", field)
+		}
+		if current == pid {
+			return nil
+		}
+	}
+	return fmt.Errorf("process %d is not a member of the target cgroup", pid)
 }

@@ -8,6 +8,41 @@ import (
 	"github.com/manit6752025/boxr/internal/state"
 )
 
+
+func (s *Server) resumePausedContainer(record state.Record) error {
+	if record.Status != "paused" {
+		return fmt.Errorf("container %s is not paused", record.ID)
+	}
+	if record.PID <= 1 || record.ProcessStartTicks == 0 {
+		return fmt.Errorf("container %s has no verifiable paused process identity", record.ID)
+	}
+	if err := state.VerifyProcessIdentity(record); err != nil {
+		return fmt.Errorf("refuse to resume an unverified process: %w", err)
+	}
+	if s.verifyUpdatePID == nil || s.setCgroupFrozen == nil {
+		return fmt.Errorf("container process verification or cgroup freezer is unavailable")
+	}
+	if err := s.verifyUpdatePID(record); err != nil {
+		return fmt.Errorf("refuse to resume an unverified Boxr container: %w", err)
+	}
+	if err := s.setCgroupFrozen(record.PID, false); err != nil {
+		return fmt.Errorf("thaw container cgroup: %w", err)
+	}
+	if err := state.VerifyProcessIdentity(record); err != nil {
+		rollbackErr := s.setCgroupFrozen(record.PID, true)
+		return errors.Join(fmt.Errorf("container process changed during unpause: %w", err), rollbackErr)
+	}
+	if err := s.verifyUpdatePID(record); err != nil {
+		rollbackErr := s.setCgroupFrozen(record.PID, true)
+		return errors.Join(fmt.Errorf("container identity changed during unpause: %w", err), rollbackErr)
+	}
+	if err := state.SetPaused(record.ID, record.PID, record.ProcessStartTicks, false); err != nil {
+		rollbackErr := s.setCgroupFrozen(record.PID, true)
+		return errors.Join(fmt.Errorf("persist container unpause: %w", err), rollbackErr)
+	}
+	return nil
+}
+
 func (s *Server) handleContainerPause(writer http.ResponseWriter, request *http.Request, rawID string) {
 	s.handleContainerPauseTransition(writer, request, rawID, true)
 }

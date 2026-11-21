@@ -1470,7 +1470,7 @@ func (s *Server) handleContainerStart(writer http.ResponseWriter, request *http.
 		writeError(writer, http.StatusNotFound, err)
 		return
 	}
-	if record.Status == "running" || record.Status == "restarting" {
+	if record.Status == "running" || record.Status == "paused" || record.Status == "restarting" {
 		writeError(writer, http.StatusNotModified, fmt.Errorf("container is already running"))
 		return
 	}
@@ -1537,6 +1537,17 @@ func (s *Server) handleContainerStop(writer http.ResponseWriter, request *http.R
 	if err != nil {
 		writeError(writer, http.StatusNotFound, err)
 		return
+	}
+	if record.Status == "paused" {
+		if err := s.resumePausedContainer(record); err != nil {
+			writeError(writer, http.StatusConflict, fmt.Errorf("resume paused container before stop: %w", err))
+			return
+		}
+		record, err = state.Get(record.ID)
+		if err != nil {
+			writeError(writer, http.StatusInternalServerError, fmt.Errorf("refresh resumed container: %w", err))
+			return
+		}
 	}
 	if record.Status == "restarting" {
 		if err := state.RequestStop(record.ID); err != nil {
