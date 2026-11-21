@@ -61,6 +61,7 @@ func openEngineContainerStdinBridge(id string, stdinOnce bool) (io.Reader, func(
 			_, copyErr := io.Copy(writer, connection)
 			_ = connection.Close()
 			if stdinOnce {
+				_ = listener.Close()
 				return
 			}
 			if copyErr != nil {
