@@ -128,7 +128,10 @@ func readContainerProcessTree(procRoot string, rootPID int) ([]dockerTopProcess,
 		}
 		children, err := readProcChildren(procRoot, pid)
 		if err != nil {
-			continue
+			if os.IsNotExist(err) {
+				continue // the process exited after its stat record was verified
+			}
+			return nil, 0, fmt.Errorf("read process %d child list: %w", pid, err)
 		}
 		if len(queue)+len(children)+len(processes) > maxContainerTopProcesses*2 {
 			return nil, 0, fmt.Errorf("container process tree exceeds the scan limit")
@@ -322,7 +325,10 @@ func readProcChildren(procRoot string, pid int) ([]int, error) {
 		path := filepath.Join(procRoot, strconv.Itoa(pid), "task", strconv.Itoa(tid), "children")
 		data, readErr := readProcFile(path, 256<<10)
 		if readErr != nil {
-			continue
+			if os.IsNotExist(readErr) {
+				continue // the thread exited during inspection
+			}
+			return nil, fmt.Errorf("read children for task %d: %w", tid, readErr)
 		}
 		for _, field := range strings.Fields(string(data)) {
 			child, parseErr := strconv.Atoi(field)
