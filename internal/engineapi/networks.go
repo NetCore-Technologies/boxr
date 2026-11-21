@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	boxrnetwork "github.com/manit6752025/boxr/internal/network"
+	"github.com/manit6752025/boxr/internal/state"
 )
 
 type dockerNetworkIPAMConfig struct {
@@ -240,8 +244,42 @@ func (s *Server) handleNetworkCreate(writer http.ResponseWriter, request *http.R
 	writeJSON(writer, http.StatusCreated, dockerNetworkCreateResponse{ID: created.ID, Warning: ""})
 }
 
+func dockerNetworkWithContainers(item boxrnetwork.Network, records []state.Record) dockerNetworkResponse {
+	summary := boxrnetwork.Summary{
+		ID: item.ID, Name: item.Name, Driver: item.Driver, Bridge: item.Bridge,
+		Subnet: item.Subnet, Gateway: item.Gateway, NAT: item.NAT,
+		ContainerCount: len(item.Allocations), CreatedAt: item.CreatedAt,
+		Labels: item.Labels,
+	}
+	result := dockerNetwork(summary)
+	result.Containers = make(map[string]map[string]string, len(item.Allocations))
+	names := make(map[string]string, len(records))
+	for _, record := range records {
+		name := record.Name
+		if name == "" {
+			name = record.ID
+		}
+		names[record.ID] = "/" + name
+	}
+	mask := ""
+	if _, value, ok := strings.Cut(item.Subnet, "/"); ok {
+		mask = "/" + value
+	}
+	for id, address := range item.Allocations {
+		name := names[id]
+		if name == "" {
+			name = "/" + id
+		}
+		result.Containers[id] = map[string]string{
+			"Name": name, "EndpointID": "", "MacAddress": "",
+			"IPv4Address": address + mask, "IPv6Address": "",
+		}
+	}
+	return result
+}
+
 func (s *Server) handleNetworkInspect(writer http.ResponseWriter, name string) {
-	item, err := boxrnetwork.Inspect(name)
+	item, err := boxrnetwork.InspectDetails(name)
 	if err != nil {
 		if strings.Contains(err.Error(), "does not exist") {
 			writeError(writer, http.StatusNotFound, err)
@@ -250,7 +288,12 @@ func (s *Server) handleNetworkInspect(writer http.ResponseWriter, name string) {
 		}
 		return
 	}
-	writeJSON(writer, http.StatusOK, dockerNetwork(item))
+	records, err := state.List(true)
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, fmt.Errorf("list containers for network inspection: %w", err))
+		return
+	}
+	writeJSON(writer, http.StatusOK, dockerNetworkWithContainers(item, records))
 }
 
 func (s *Server) handleNetworkDelete(writer http.ResponseWriter, name string) {
@@ -265,4 +308,161 @@ func (s *Server) handleNetworkDelete(writer http.ResponseWriter, name string) {
 		return
 	}
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+
+type dockerNetworkConnectRequest struct {
+	Container      string          `json:"Container"`
+	EndpointConfig json.RawMessage `json:"EndpointConfig"`
+}
+
+type dockerNetworkDisconnectRequest struct {
+	Container string `json:"Container"`
+	Force     bool   `json:"Force"`
+}
+
+func decodeDockerNetworkBody(request *http.Request, target any) error {
+	data, err := io.ReadAll(io.LimitReader(request.Body, maxCreateBodyBytes+1))
+	if err != nil {
+		return fmt.Errorf("read network request: %w", err)
+	}
+	if len(data) == 0 || len(data) > maxCreateBodyBytes {
+		return fmt.Errorf("network request must be between 1 byte and %d bytes", maxCreateBodyBytes)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("decode network request: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return fmt.Errorf("network request must contain one JSON object")
+	}
+	return nil
+}
+
+func validateDockerEndpointConfig(raw json.RawMessage) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return fmt.Errorf("EndpointConfig must be an object")
+	}
+	if len(fields) != 0 {
+		return fmt.Errorf("EndpointConfig aliases, static addresses, links, MAC addresses and driver options are not supported yet")
+	}
+	return nil
+}
+
+func (s *Server) handleNetworkConnect(writer http.ResponseWriter, request *http.Request, networkName string) {
+	var input dockerNetworkConnectRequest
+	if err := decodeDockerNetworkBody(request, &input); err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(input.Container) == "" {
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("Container is required"))
+		return
+	}
+	if err := validateDockerEndpointConfig(input.EndpointConfig); err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	s.networkMu.Lock()
+	defer s.networkMu.Unlock()
+	record, err := state.Get(input.Container)
+	if err != nil {
+		writeError(writer, http.StatusNotFound, err)
+		return
+	}
+	if record.Status != "running" || record.PID <= 1 {
+		writeError(writer, http.StatusConflict, fmt.Errorf("container %s must be running to connect a network", record.ID))
+		return
+	}
+	if record.Options.NetworkMode != "none" || record.Options.UserNamespace {
+		writeError(writer, http.StatusConflict, fmt.Errorf("live network attachment requires a running container started with network mode none and without a user namespace"))
+		return
+	}
+	if err := s.verifyNetworkPID(record); err != nil {
+		writeError(writer, http.StatusConflict, fmt.Errorf("refuse to enter container PID %d: %w", record.PID, err))
+		return
+	}
+	if _, err := s.joinNetwork(networkName, record.PID, record.ID); err != nil {
+		if strings.Contains(err.Error(), "does not exist") {
+			writeError(writer, http.StatusNotFound, err)
+		} else {
+			writeError(writer, http.StatusConflict, err)
+		}
+		return
+	}
+	writer.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleNetworkDisconnect(writer http.ResponseWriter, request *http.Request, networkName string) {
+	var input dockerNetworkDisconnectRequest
+	if err := decodeDockerNetworkBody(request, &input); err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(input.Container) == "" {
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("Container is required"))
+		return
+	}
+	s.networkMu.Lock()
+	defer s.networkMu.Unlock()
+	record, err := state.Get(input.Container)
+	if err != nil {
+		writeError(writer, http.StatusNotFound, err)
+		return
+	}
+	if err := s.leaveNetwork(networkName, record.ID); err != nil {
+		if strings.Contains(err.Error(), "does not exist") {
+			writeError(writer, http.StatusNotFound, err)
+		} else {
+			writeError(writer, http.StatusConflict, err)
+		}
+		return
+	}
+	writer.WriteHeader(http.StatusOK)
+}
+
+func verifyDockerContainerPID(record state.Record) error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("live Docker network attachment requires Linux")
+	}
+	if err := state.VerifyProcessIdentity(record); err != nil {
+		return err
+	}
+	if record.PID <= 1 {
+		return fmt.Errorf("container PID must be greater than 1")
+	}
+	procDir := filepath.Join("/proc", strconv.Itoa(record.PID))
+	currentExecutable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve Boxr executable: %w", err)
+	}
+	currentInfo, err := os.Stat(currentExecutable)
+	if err != nil {
+		return fmt.Errorf("inspect Boxr executable: %w", err)
+	}
+	processInfo, err := os.Stat(filepath.Join(procDir, "exe"))
+	if err != nil {
+		return fmt.Errorf("inspect container process executable: %w", err)
+	}
+	if !os.SameFile(currentInfo, processInfo) {
+		return fmt.Errorf("PID does not belong to this Boxr executable")
+	}
+	commandLine, err := os.ReadFile(filepath.Join(procDir, "cmdline"))
+	if err != nil {
+		return fmt.Errorf("read container process command line: %w", err)
+	}
+	arguments := strings.Split(strings.TrimSuffix(string(commandLine), "\x00"), "\x00")
+	if len(arguments) < 3 || arguments[1] != "__boxr-init" {
+		return fmt.Errorf("PID is not a Boxr container namespace helper")
+	}
+	if _, err := os.Stat(filepath.Join(procDir, "ns", "net")); err != nil {
+		return fmt.Errorf("inspect container network namespace: %w", err)
+	}
+	return nil
 }
