@@ -192,6 +192,8 @@ func (s *Server) handleVolumeInspect(writer http.ResponseWriter, name string) {
 }
 
 func (s *Server) handleVolumeDelete(writer http.ResponseWriter, name string) {
+	s.volumeMu.Lock()
+	defer s.volumeMu.Unlock()
 	item, err := volume.Get(name)
 	if err != nil {
 		if strings.Contains(err.Error(), "does not exist") {
@@ -201,15 +203,15 @@ func (s *Server) handleVolumeDelete(writer http.ResponseWriter, name string) {
 		}
 		return
 	}
-	active, err := state.List(false)
+	records, err := state.List(true)
 	if err != nil {
-		writeError(writer, http.StatusInternalServerError, fmt.Errorf("inspect active volume users: %w", err))
+		writeError(writer, http.StatusInternalServerError, fmt.Errorf("inspect volume users: %w", err))
 		return
 	}
-	for _, record := range active {
+	for _, record := range records {
 		for _, mount := range record.Options.BindMounts {
 			if mount.Source == item.Path {
-				writeError(writer, http.StatusConflict, fmt.Errorf("volume %q is in use by container %s", name, record.ID))
+				writeError(writer, http.StatusConflict, fmt.Errorf("volume %q is referenced by container %s", name, record.ID))
 				return
 			}
 		}
