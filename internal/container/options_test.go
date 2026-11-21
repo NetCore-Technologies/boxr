@@ -8,6 +8,36 @@ import (
 	"testing"
 )
 
+func TestNormalizeExposedPortsExpandsAndCanonicalizes(t *testing.T) {
+	got, err := NormalizeExposedPorts([]string{"80", "443/tcp", "53/UDP", "8000-8002/udp", "80/tcp"})
+	if err != nil {
+		t.Fatalf("NormalizeExposedPorts(): %v", err)
+	}
+	want := []string{"443/tcp", "53/udp", "80/tcp", "8000/udp", "8001/udp", "8002/udp"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("NormalizeExposedPorts() = %#v, want %#v", got, want)
+	}
+}
+
+func TestNormalizeExposedPortsRejectsUnsafeAndUnboundedValues(t *testing.T) {
+	for _, value := range []string{
+		"", "0/tcp", "65536/tcp", "1-257/tcp", "2-1/tcp", "1--2/tcp",
+		"80/icmp", "80/tcp/udp", " 80", "80 ", "80\n",
+	} {
+		t.Run(strings.ReplaceAll(value, "/", "_"), func(t *testing.T) {
+			if _, err := NormalizeExposedPorts([]string{value}); err == nil {
+				t.Fatalf("NormalizeExposedPorts(%q) unexpectedly succeeded", value)
+			}
+		})
+	}
+	if err := (Options{ExposedPorts: []string{"0/tcp"}}).Validate(); err == nil {
+		t.Fatal("Options.Validate accepted an invalid exposed port")
+	}
+	if _, err := NormalizeExposedPorts([]string{"1/tcp", "2-257/tcp"}); err == nil {
+		t.Fatal("NormalizeExposedPorts accepted more than 256 expanded ports")
+	}
+}
+
 func TestMergeEnvironmentAppliesOverridesWithoutDuplicateKeys(t *testing.T) {
 	base := []string{"PATH=/usr/bin", "APP_ENV=production", "EMPTY=", "APP_ENV=staging"}
 	overrides := []string{"APP_ENV=development", "NEW_SETTING=value"}
