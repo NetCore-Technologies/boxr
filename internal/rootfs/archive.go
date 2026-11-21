@@ -444,7 +444,10 @@ func safeSymlinkTarget(name, linkName string) (string, error) {
 	if filepath.IsAbs(linkName) || strings.HasPrefix(linkName, "/") {
 		// Absolute symlinks in a container refer to the container root. Convert
 		// them to relative links so extraction never follows a host absolute path.
-		target := strings.TrimLeft(filepath.ToSlash(linkName), "/")
+		// Absolute link targets are rooted at the archive's filesystem root.
+		// Clean them before converting to a relative link so embedded /../
+		// components can never create a host-relative escape path.
+		target := strings.TrimPrefix(path.Clean("/"+strings.TrimLeft(filepath.ToSlash(linkName), "/")), "/")
 		base := path.Dir(name)
 		if base == "." {
 			base = ""
