@@ -40,6 +40,7 @@ func setupEngineAPITest(t *testing.T) *Server {
 	root := t.TempDir()
 	t.Setenv("BOXR_STATE_DIR", root+"/state")
 	t.Setenv("BOXR_IMAGE_DIR", root+"/images")
+	t.Setenv("BOXR_NETWORK_DIR", root+"/networks")
 	return New("test-version")
 }
 
@@ -3014,5 +3015,76 @@ func TestDockerStatusWithHealthMatchesDockerPSHealthSuffix(t *testing.T) {
 				t.Fatalf("dockerStatusWithHealth() = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+
+func TestDockerNetworkAttachmentsExposeVerifiedIPv4Leases(t *testing.T) {
+	record := state.Record{
+		ID: "container-123", Name: "api",
+		Options: container.Options{NetworkName: "frontend"},
+	}
+	networks := []boxrnetwork.Network{
+		{
+			ID: "network-frontend-id", Name: "frontend", Driver: "bridge",
+			Bridge: "br-boxr0", Subnet: "10.24.0.0/24", Gateway: "10.24.0.1",
+			Allocations: map[string]string{record.ID: "10.24.0.5", "stale-container": "10.24.0.6"},
+		},
+		{
+			ID: "network-backend-id", Name: "backend", Driver: "bridge",
+			Bridge: "br-boxr1", Subnet: "10.25.0.0/24", Gateway: "10.25.0.1",
+			Allocations: map[string]string{record.ID: "10.25.0.5"},
+		},
+	}
+	attachments, err := dockerNetworkAttachmentsFromNetworks(networks, []state.Record{record})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attachments[record.ID]) != 2 {
+		t.Fatalf("container network attachment count=%d, want 2: %#v", len(attachments[record.ID]), attachments[record.ID])
+	}
+	frontend := attachments[record.ID]["frontend"].(map[string]any)
+	if frontend["NetworkID"] != "network-frontend-id" ||
+		frontend["Gateway"] != "10.24.0.1" ||
+		frontend["IPAddress"] != "10.24.0.5" ||
+		frontend["IPPrefixLen"] != 24 {
+		t.Fatalf("Docker frontend network metadata = %#v", frontend)
+	}
+	if _, exists := attachments["stale-container"]; exists {
+		t.Fatal("network lease for a missing container was exposed")
+	}
+	settings := dockerContainerNetworkSettings(record, map[string][]map[string]string{}, attachments)
+	if settings["IPAddress"] != "10.24.0.5" || settings["Gateway"] != "10.24.0.1" {
+		t.Fatalf("Docker primary network settings = %#v", settings)
+	}
+	if len(settings["Networks"].(map[string]any)) != 2 {
+		t.Fatalf("Docker inspect did not expose both attached networks: %#v", settings["Networks"])
+	}
+}
+
+func TestDockerNetworkAttachmentsRejectCorruptPersistedLeases(t *testing.T) {
+	record := state.Record{ID: "container-corrupt"}
+	network := boxrnetwork.Network{
+		ID: "network-id", Name: "frontend", Subnet: "10.24.0.0/24",
+		Gateway: "10.24.0.1",
+		Allocations: map[string]string{record.ID: "192.0.2.8"},
+	}
+	if _, err := dockerNetworkAttachmentsFromNetworks([]boxrnetwork.Network{network}, []state.Record{record}); err == nil {
+		t.Fatal("out-of-subnet container IPAM lease was accepted")
+	}
+}
+
+func TestDockerNetworkAttachmentsReturnEmptyMapsForUnattachedContainers(t *testing.T) {
+	record := state.Record{ID: "container-unattached"}
+	attachments, err := dockerNetworkAttachmentsFromNetworks(nil, []state.Record{record})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attachments[record.ID] == nil || len(attachments[record.ID]) != 0 {
+		t.Fatalf("unattached container network map = %#v, want an empty object", attachments[record.ID])
+	}
+	settings := dockerContainerNetworkSettings(record, nil, attachments)
+	if networks, ok := settings["Networks"].(map[string]any); !ok || len(networks) != 0 {
+		t.Fatalf("Docker inspect networks = %#v, want empty object", settings["Networks"])
 	}
 }
