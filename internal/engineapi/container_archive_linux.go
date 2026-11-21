@@ -904,6 +904,10 @@ func mergeDockerArchiveTreeVerified(sourceRoot, upperRoot, destination string, v
 		return fmt.Errorf("open writable layer: %w", err)
 	}
 	defer root.Close()
+	openedInfo, err := root.Stat(".")
+	if err != nil || !openedInfo.IsDir() || !os.SameFile(upperInfo, openedInfo) {
+		return fmt.Errorf("writable layer changed while opening")
+	}
 	if verifyRoot != nil {
 		if err := verifyRoot(); err != nil {
 			return fmt.Errorf("container process changed before archive write: %w", err)
