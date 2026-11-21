@@ -3712,6 +3712,10 @@ var implementedFeatures = []string{
 	"Engine API protects persisted container network references during network pruning",
 	"Engine API exports one or more verified local image tags as Docker-save archives",
 	"Engine API imports Docker-save archives after tag preflight and protects images referenced by containers",
+	"Engine API builds images from bounded Docker tar contexts using the supported single-stage Dockerfile subset",
+	"Engine API Docker builds support platform selection declared build arguments and multiple tags",
+	"Engine API maps Docker default build networking to isolated none and requires explicit host network opt-in",
+	"Engine API refuses to replace image tags referenced by persisted containers during builds",
 }
 
 func printFeatures(stdout io.Writer) {
