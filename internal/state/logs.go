@@ -67,6 +67,52 @@ func ReadLogs(query string, tail int) ([]byte, error) {
 	return data, err
 }
 
+// openLogRead resolves an existing container log and verifies the opened
+// descriptor is still the same regular file that was inspected with Lstat.
+func openLogRead(query string) (*os.File, os.FileInfo, error) {
+	path, err := LogPath(query)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, nil, fmt.Errorf("container log must be a regular file")
+	}
+	file, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("open container log: %w", err)
+	}
+	openedInfo, err := file.Stat()
+	if err != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
+		_ = file.Close()
+		if err != nil {
+			return nil, nil, fmt.Errorf("inspect opened container log: %w", err)
+		}
+		return nil, nil, fmt.Errorf("container log changed while opening")
+	}
+	return file, openedInfo, nil
+}
+
+// LogOffset returns the current end-of-file offset without loading log contents.
+// Attach clients use it to follow only new output when logs=false.
+func LogOffset(query string) (int64, error) {
+	file, info, err := openLogRead(query)
+	if err != nil || file == nil {
+		return 0, err
+	}
+	defer file.Close()
+	return info.Size(), nil
+}
+
 // ReadLogsSnapshot reads a bounded snapshot and returns the byte offset at the
 // end of that exact snapshot. It lets --follow start without losing output that
 // is appended between an initial tail read and opening the follow stream.
@@ -74,29 +120,14 @@ func ReadLogsSnapshot(query string, tail int) ([]byte, int64, error) {
 	if tail < 0 {
 		return nil, 0, fmt.Errorf("tail line count cannot be negative")
 	}
-	path, err := LogPath(query)
+	file, info, err := openLogRead(query)
 	if err != nil {
 		return nil, 0, err
 	}
-	if info, statErr := os.Lstat(path); statErr == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return nil, 0, fmt.Errorf("container log must be a regular file")
-		}
-	} else if !os.IsNotExist(statErr) {
-		return nil, 0, statErr
-	}
-	file, err := os.Open(path)
-	if os.IsNotExist(err) {
+	if file == nil {
 		return []byte{}, 0, nil
 	}
-	if err != nil {
-		return nil, 0, fmt.Errorf("open container log: %w", err)
-	}
 	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, 0, fmt.Errorf("inspect container log: %w", err)
-	}
 	if info.Size() > maxLogBytes {
 		return nil, 0, fmt.Errorf("container log exceeds %d bytes; rotate or remove it before reading", maxLogBytes)
 	}
@@ -121,39 +152,18 @@ func ReadLogsSnapshot(query string, tail int) ([]byte, int64, error) {
 	return bytes.Join(lines[len(lines)-tail:], nil), offset, nil
 }
 
-// CopyLogFrom streams new bytes from offset to dst. It returns the number of
-// bytes copied and the current file size; callers can poll while the process is
-// running without rereading earlier output.
+// CopyLogFrom streams new bytes from offset to dst. It returns the new offset;
+// each call copies at most maxLogBytes so a large or unbounded log cannot force
+// a follow stream to buffer the entire file in memory.
 func CopyLogFrom(query string, offset int64, dst io.Writer) (int64, error) {
 	if offset < 0 {
 		return offset, fmt.Errorf("log offset cannot be negative")
 	}
-	path, err := LogPath(query)
-	if err != nil {
-		return offset, err
-	}
-	if info, statErr := os.Lstat(path); statErr == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return offset, fmt.Errorf("container log must be a regular file")
-		}
-	} else if !os.IsNotExist(statErr) {
-		return offset, statErr
-	}
-	file, err := os.Open(path)
-	if os.IsNotExist(err) {
-		return offset, nil
-	}
-	if err != nil {
+	file, info, err := openLogRead(query)
+	if err != nil || file == nil {
 		return offset, err
 	}
 	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return offset, err
-	}
-	if info.Size() > maxLogBytes {
-		return offset, fmt.Errorf("container log exceeds %d bytes", maxLogBytes)
-	}
 	if offset > info.Size() {
 		offset = 0 // log was rotated or truncated
 	}
@@ -163,6 +173,9 @@ func CopyLogFrom(query string, offset int64, dst io.Writer) (int64, error) {
 	remaining := info.Size() - offset
 	if remaining <= 0 {
 		return offset, nil
+	}
+	if remaining > maxLogBytes {
+		remaining = maxLogBytes
 	}
 	written, err := io.CopyN(dst, file, remaining)
 	if err != nil && err != io.EOF {
