@@ -278,6 +278,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		switch parts[1] {
+		case "":
+			if !requireMethod(writer, request, http.MethodDelete) {
+				return
+			}
+			s.handleExecDelete(writer, execID)
 		case "start":
 			if !requireMethod(writer, request, http.MethodPost) {
 				return
