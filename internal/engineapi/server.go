@@ -1395,6 +1395,18 @@ func (s *Server) handleContainerStats(writer http.ResponseWriter, request *http.
 		writeError(writer, http.StatusConflict, fmt.Errorf("container is not running"))
 		return
 	}
+	if err := state.VerifyProcessIdentity(record); err != nil {
+		writeError(writer, http.StatusConflict, fmt.Errorf("container process identity is invalid: %w", err))
+		return
+	}
+	if s.verifyExecPID == nil {
+		writeError(writer, http.StatusServiceUnavailable, fmt.Errorf("container process verification is unavailable"))
+		return
+	}
+	if err := s.verifyExecPID(record); err != nil {
+		writeError(writer, http.StatusConflict, fmt.Errorf("container process is not a verified Boxr workload: %w", err))
+		return
+	}
 	stream := true
 	if raw := request.URL.Query().Get("stream"); raw != "" {
 		stream, err = strconv.ParseBool(raw)
@@ -1405,7 +1417,7 @@ func (s *Server) handleContainerStats(writer http.ResponseWriter, request *http.
 	}
 	writer.Header().Set("Content-Type", "application/json")
 	if !stream {
-		payload, statsErr := dockerStatsSnapshot(record)
+		payload, _, statsErr := dockerStatsSnapshotWithPrevious(record, nil)
 		if statsErr != nil {
 			writeError(writer, http.StatusNotImplemented, statsErr)
 			return
@@ -1422,8 +1434,9 @@ func (s *Server) handleContainerStats(writer http.ResponseWriter, request *http.
 	encoder := json.NewEncoder(writer)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	var previous *dockerStatsSample
 	for {
-		payload, statsErr := dockerStatsSnapshot(record)
+		payload, currentSample, statsErr := dockerStatsSnapshotWithPrevious(record, previous)
 		if statsErr != nil {
 			return
 		}
@@ -1431,6 +1444,7 @@ func (s *Server) handleContainerStats(writer http.ResponseWriter, request *http.
 			return
 		}
 		flusher.Flush()
+		previous = &currentSample
 		select {
 		case <-request.Context().Done():
 			return
@@ -1439,38 +1453,158 @@ func (s *Server) handleContainerStats(writer http.ResponseWriter, request *http.
 			if getErr != nil || current.Status != "running" || current.PID <= 0 {
 				return
 			}
+			if current.PID != record.PID || current.ProcessStartTicks != record.ProcessStartTicks {
+				previous = nil
+			}
+			if state.VerifyProcessIdentity(current) != nil || s.verifyExecPID(current) != nil {
+				return
+			}
 			record = current
 		}
 	}
 }
 
+type dockerStatsSample struct {
+	stats state.Stats
+	read  time.Time
+}
+
 func dockerStatsSnapshot(record state.Record) (map[string]any, error) {
+	payload, _, err := dockerStatsSnapshotWithPrevious(record, nil)
+	return payload, err
+}
+
+func dockerStatsSnapshotWithPrevious(record state.Record, previous *dockerStatsSample) (map[string]any, dockerStatsSample, error) {
 	stats, err := state.ReadStats(record.PID)
 	if err != nil {
-		return nil, err
+		return nil, dockerStatsSample{}, err
 	}
-	memoryLimit := int64(0)
+	now := time.Now().UTC()
+	memoryLimit := stats.SystemMemoryTotalBytes
 	if value, parseErr := strconv.ParseInt(stats.MemoryMax, 10, 64); parseErr == nil && value > 0 {
 		memoryLimit = value
 	}
-	cpuUsage := map[string]any{
-		"total_usage":         stats.CPUUsageUsec * 1000,
+	if memoryLimit < 0 {
+		memoryLimit = 0
+	}
+	pidsLimit := stats.PIDsMax
+	if pidsLimit <= 0 && record.Options.PidsLimit > 0 {
+		pidsLimit = record.Options.PidsLimit
+	}
+
+	cpuUsage := dockerStatsCPUUsage(stats)
+	preCPUUsage := map[string]any{
+		"total_usage": int64(0), "usage_in_kernelmode": int64(0), "usage_in_usermode": int64(0),
+		"percpu_usage": []int64{},
+	}
+	preSystemCPUUsage := int64(0)
+	preread := ""
+	if previous != nil {
+		preCPUUsage = dockerStatsCPUUsage(previous.stats)
+		preSystemCPUUsage = previous.stats.SystemCPUUsageNS
+		preread = previous.read.Format(time.RFC3339Nano)
+	}
+	memoryStats := make(map[string]int64, len(stats.MemoryStats))
+	for key, value := range stats.MemoryStats {
+		memoryStats[key] = value
+	}
+	if memoryStats == nil {
+		memoryStats = make(map[string]int64)
+	}
+	maxUsage := memoryStats["max_usage"]
+	networks := make(map[string]any, len(stats.Networks))
+	for name, counters := range stats.Networks {
+		networks[name] = map[string]any{
+			"rx_bytes": counters.RxBytes, "rx_packets": counters.RxPackets,
+			"rx_errors": counters.RxErrors, "rx_dropped": counters.RxDropped,
+			"tx_bytes": counters.TxBytes, "tx_packets": counters.TxPackets,
+			"tx_errors": counters.TxErrors, "tx_dropped": counters.TxDropped,
+		}
+	}
+	payload := map[string]any{
+		"read":    now.Format(time.RFC3339Nano),
+		"preread": preread,
+		"pids_stats": map[string]any{
+			"current": stats.PIDsCurrent, "limit": pidsLimit,
+		},
+		"memory_stats": map[string]any{
+			"usage": stats.MemoryCurrent, "max_usage": maxUsage, "limit": memoryLimit,
+			"failcnt": memoryStats["oom"], "stats": memoryStats,
+		},
+		"cpu_stats": map[string]any{
+			"cpu_usage": cpuUsage, "system_cpu_usage": stats.SystemCPUUsageNS,
+			"online_cpus": runtime.NumCPU(),
+			"throttling_data": map[string]any{
+				"periods": stats.CPUPeriods, "throttled_periods": stats.CPUThrottledPeriods,
+				"throttled_time": stats.CPUThrottledUsec * 1000,
+			},
+		},
+		"precpu_stats": map[string]any{
+			"cpu_usage": preCPUUsage, "system_cpu_usage": preSystemCPUUsage,
+			"online_cpus": runtime.NumCPU(),
+		},
+		"blkio_stats": dockerStatsBlockIO(stats.IOCounters),
+		"networks":    networks,
+		"name":        displayName(record), "id": record.ID,
+	}
+	return payload, dockerStatsSample{stats: stats, read: now}, nil
+}
+
+func dockerStatsCPUUsage(stats state.Stats) map[string]any {
+	return map[string]any{
+		"total_usage": stats.CPUUsageUsec * 1000,
 		"usage_in_kernelmode": stats.CPUSystemUsec * 1000,
-		"usage_in_usermode":   stats.CPUUserUsec * 1000,
+		"usage_in_usermode": stats.CPUUserUsec * 1000,
+		"percpu_usage": []int64{},
+	}
+}
+
+func dockerStatsBlockIO(counters map[string]string) map[string]any {
+	serviceBytes := make([]map[string]any, 0, len(counters)*2)
+	serviced := make([]map[string]any, 0, len(counters)*2)
+	for device, raw := range counters {
+		majorText, minorText, ok := strings.Cut(device, ":")
+		if !ok {
+			continue
+		}
+		major, majorErr := strconv.ParseInt(majorText, 10, 64)
+		minor, minorErr := strconv.ParseInt(minorText, 10, 64)
+		if majorErr != nil || minorErr != nil {
+			continue
+		}
+		values := make(map[string]int64)
+		for _, field := range strings.Fields(raw) {
+			key, valueText, found := strings.Cut(field, "=")
+			if !found {
+				continue
+			}
+			value, parseErr := strconv.ParseInt(valueText, 10, 64)
+			if parseErr == nil {
+				values[key] = value
+			}
+		}
+		for _, operation := range []struct {
+			name string
+			bytes string
+			ios string
+		}{{name: "Read", bytes: "rbytes", ios: "rios"}, {name: "Write", bytes: "wbytes", ios: "wios"}} {
+			serviceBytes = append(serviceBytes, map[string]any{
+				"major": major, "minor": minor, "op": operation.name, "value": values[operation.bytes],
+			})
+			serviced = append(serviced, map[string]any{
+				"major": major, "minor": minor, "op": operation.name, "value": values[operation.ios],
+			})
+		}
 	}
 	return map[string]any{
-		"read":         time.Now().UTC().Format(time.RFC3339Nano),
-		"preread":      "",
-		"pids_stats":   map[string]any{"current": stats.PIDsCurrent, "limit": record.Options.PidsLimit},
-		"memory_stats": map[string]any{"usage": stats.MemoryCurrent, "limit": memoryLimit, "stats": map[string]int64{}},
-		"cpu_stats": map[string]any{
-			"cpu_usage": cpuUsage, "system_cpu_usage": 0, "online_cpus": runtime.NumCPU(),
-		},
-		"precpu_stats": map[string]any{"cpu_usage": cpuUsage, "system_cpu_usage": 0, "online_cpus": runtime.NumCPU()},
-		"blkio_stats":  map[string]any{"io_service_bytes_recursive": []any{}},
-		"networks":     map[string]any{},
-		"name":         displayName(record), "id": record.ID,
-	}, nil
+		"io_service_bytes_recursive": serviceBytes,
+		"io_serviced_recursive": serviced,
+		"io_service_time_recursive": []any{},
+		"io_wait_time_recursive": []any{},
+		"io_merged_recursive": []any{},
+		"io_time_recursive": []any{},
+		"sectors_recursive": []any{},
+	}
 }
 
 func (s *Server) handleImages(writer http.ResponseWriter) {
