@@ -807,11 +807,18 @@ func TestJoinWithOptionsUsesStaticIPv4AndMAC(t *testing.T) {
 	}
 
 	before := len(runner.calls)
-	if _, err := JoinWithRunnerOptions(context.Background(), "static-endpoint", 2402, "container-duplicate", runner, options); err == nil {
+	if _, err := JoinWithRunnerOptions(context.Background(), "static-endpoint", 2402, "container-duplicate-ip", runner, options); err == nil {
 		t.Fatal("duplicate static IPv4 address unexpectedly allocated")
 	}
 	if len(runner.calls) != before {
 		t.Fatalf("duplicate address touched host interfaces: %v", runner.calls[before:])
+	}
+	duplicateMAC := EndpointOptions{IPv4Address: "172.30.48.6", MACAddress: options.MACAddress}
+	if _, err := JoinWithRunnerOptions(context.Background(), "static-endpoint", 2403, "container-duplicate-mac", runner, duplicateMAC); err == nil {
+		t.Fatal("duplicate endpoint MAC unexpectedly allocated")
+	}
+	if len(runner.calls) != before {
+		t.Fatalf("duplicate MAC touched host interfaces: %v", runner.calls[before:])
 	}
 }
 
@@ -912,6 +919,19 @@ func TestCreateRejectsInvalidOrOutOfSubnetIPRange(t *testing.T) {
 				t.Fatalf("invalid IPAM range %q was accepted", value)
 			}
 		})
+	}
+}
+
+func TestStoredIPAMLeasesCannotOverlapAuxiliaryReservations(t *testing.T) {
+	network := Network{
+		ID: "0123456789abcdef", Name: "reserved-overlap",
+		Driver: "bridge", Bridge: "br-reserved0",
+		Subnet: "192.0.2.0/24", Gateway: "192.0.2.1",
+		Allocations: map[string]string{"container-lease": "192.0.2.10"},
+		AuxiliaryAddresses: map[string]string{"database": "192.0.2.10"},
+	}
+	if err := validateStoredNetworks([]Network{network}); err == nil {
+		t.Fatal("persisted IPAM lease overlapping an auxiliary reservation was accepted")
 	}
 }
 
