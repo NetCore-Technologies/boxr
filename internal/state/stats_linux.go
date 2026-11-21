@@ -92,6 +92,7 @@ func ReadStats(pid int) (Stats, error) {
 		}
 	}
 	result.SystemCPUUsageNS, _ = readHostCPUUsageNS()
+	result.SystemMemoryTotalBytes, _ = readHostMemoryTotalBytes()
 	result.Networks, _ = readProcessNetworkCounters(pid)
 	entries, err := os.ReadDir(cgroupPath)
 	if err == nil {
@@ -140,6 +141,9 @@ func readHostCPUUsageNS() (int64, error) {
 		return 0, fmt.Errorf("/proc/stat aggregate CPU line is malformed")
 	}
 	var ticks int64
+	if len(fields) > 9 {
+		fields = fields[:9]
+	}
 	for _, field := range fields[1:] {
 		value, parseErr := strconv.ParseInt(field, 10, 64)
 		if parseErr != nil {
@@ -156,6 +160,29 @@ func readHostCPUUsageNS() (int64, error) {
 		return 0, fmt.Errorf("host CPU nanosecond counter overflow")
 	}
 	return ticks * 10_000_000, scanner.Err()
+}
+
+func readHostMemoryTotalBytes() (int64, error) {
+	file, err := os.Open("/proc/meminfo")
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) >= 2 && fields[0] == "MemTotal:" {
+			kibibytes, parseErr := strconv.ParseInt(fields[1], 10, 64)
+			if parseErr != nil || kibibytes < 0 || kibibytes > int64(^uint64(0)>>1)/1024 {
+				return 0, fmt.Errorf("invalid MemTotal in /proc/meminfo")
+			}
+			return kibibytes * 1024, nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, err
+	}
+	return 0, fmt.Errorf("/proc/meminfo has no MemTotal entry")
 }
 
 func readProcessNetworkCounters(pid int) (map[string]NetworkCounters, error) {
