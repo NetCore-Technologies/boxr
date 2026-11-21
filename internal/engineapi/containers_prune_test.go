@@ -159,6 +159,33 @@ func TestEngineAPIContainerPruneHonorsNegativeLabelFilters(t *testing.T) {
 	}
 }
 
+func TestEngineAPIContainerPruneCombinesMultipleNegativeLabelsLikeDocker(t *testing.T) {
+	server := setupEngineAPITest(t)
+	both := createContainerPruneRecord(t, "prune-both-labels", map[string]string{"foo": "", "bar": ""})
+	fooOnly := createContainerPruneRecord(t, "prune-foo-only", map[string]string{"foo": ""})
+	barOnly := createContainerPruneRecord(t, "prune-bar-only", map[string]string{"bar": ""})
+	neither := createContainerPruneRecord(t, "prune-no-labels", nil)
+
+	response := requestContainerPrune(t, server, map[string][]string{"label!": {"foo", "bar"}})
+	if response.Code != http.StatusOK {
+		t.Fatalf("prune status=%d body=%s", response.Code, response.Body.String())
+	}
+	var result dockerContainerPruneResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	deleted := make(map[string]bool, len(result.ContainersDeleted))
+	for _, id := range result.ContainersDeleted {
+		deleted[id] = true
+	}
+	if deleted[both.ID] || !deleted[fooOnly.ID] || !deleted[barOnly.ID] || !deleted[neither.ID] {
+		t.Fatalf("multiple negative labels did not match Docker's combined-exclusion semantics: %#v", result)
+	}
+	if _, err := state.Get(both.ID); err != nil {
+		t.Fatalf("container with both excluded labels should be protected: %v", err)
+	}
+}
+
 func TestEngineAPIContainerPruneRejectsInvalidFiltersWithoutMutation(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record := createContainerPruneRecord(t, "prune-invalid", map[string]string{"team": "platform"})
@@ -171,6 +198,7 @@ func TestEngineAPIContainerPruneRejectsInvalidFiltersWithoutMutation(t *testing.
 	}{
 		{name: "unsupported key", filters: map[string][]string{"status": {"exited"}}},
 		{name: "invalid timestamp", filters: map[string][]string{"until": {"not-a-timestamp"}}},
+		{name: "multiple until values", filters: map[string][]string{"until": {"1h", "2h"}}},
 		{name: "empty label key", filters: map[string][]string{"label": {"=value"}}},
 		{name: "empty filter values", filters: map[string][]string{"label": {}}},
 	}

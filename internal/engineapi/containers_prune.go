@@ -89,6 +89,9 @@ func validateDockerContainerPruneFilters(filters map[string][]string, now time.T
 			if len(values) == 0 {
 				return fmt.Errorf("container prune filter until must contain at least one timestamp")
 			}
+			if len(values) > 1 {
+				return fmt.Errorf("container prune accepts only one until timestamp")
+			}
 			for _, value := range values {
 				if strings.TrimSpace(value) == "" || len(value) > 256 {
 					return fmt.Errorf("invalid container prune until filter %q", value)
@@ -140,15 +143,17 @@ func matchesDockerContainerPruneFilters(record state.Record, filters map[string]
 				}
 			}
 		case "label!":
-			// Every negative label expression is an exclusion. A container
-			// must satisfy all exclusions to remain a prune candidate.
-			matched = true
+			// Docker combines multiple negative label expressions into one
+			// protected set. A container is excluded from prune only when
+			// it satisfies every negative-label expression.
+			allExcludedLabelsMatch := true
 			for _, value := range values {
-				if dockerContainerHasLabel(record.Labels, value) {
-					matched = false
+				if !dockerContainerHasLabel(record.Labels, value) {
+					allExcludedLabelsMatch = false
 					break
 				}
 			}
+			matched = !allExcludedLabelsMatch
 		default:
 			return false, fmt.Errorf("unsupported container prune filter %q", key)
 		}
