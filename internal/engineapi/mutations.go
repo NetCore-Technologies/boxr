@@ -649,9 +649,6 @@ func createContainerRecord(name string, input dockerCreateRequest) (result state
 	if input.User != "" {
 		return empty, fmt.Errorf("Config.User is unsupported because image user switching is not implemented")
 	}
-	if len(input.Entrypoint) > 0 {
-		return empty, fmt.Errorf("Config.Entrypoint overrides are not supported; use the image's configured entrypoint")
-	}
 	if input.Tty || input.OpenStdin || input.StdinOnce || input.AttachStdin || input.AttachStdout || input.AttachStderr {
 		return empty, fmt.Errorf("interactive create/attach settings are not supported; use boxr exec -it after the container starts")
 	}
@@ -706,12 +703,21 @@ func createContainerRecord(name string, input dockerCreateRequest) (result state
 	}
 	anonymousVolumeNames = append(anonymousVolumeNames, createdVolumeNames...)
 	options.BindMounts = append(options.BindMounts, anonymousMounts...)
+	for index, argument := range input.Entrypoint {
+		if strings.ContainsRune(argument, '\x00') {
+			return empty, fmt.Errorf("Entrypoint argument %d contains a NUL byte", index+1)
+		}
+	}
+	entrypoint := image.RuntimeConfig.Entrypoint
+	if input.Entrypoint != nil {
+		entrypoint = input.Entrypoint
+	}
 	command := append([]string(nil), input.Cmd...)
-	if len(image.RuntimeConfig.Entrypoint) > 0 {
+	if len(entrypoint) > 0 {
 		if len(command) == 0 {
 			command = append(command, image.RuntimeConfig.Cmd...)
 		}
-		command = append(append([]string(nil), image.RuntimeConfig.Entrypoint...), command...)
+		command = append(append([]string(nil), entrypoint...), command...)
 	} else if len(command) == 0 {
 		command = append(command, image.RuntimeConfig.Cmd...)
 	}

@@ -197,3 +197,54 @@ func TestDockerConfigVolumesRollBackWhenContainerValidationFails(t *testing.T) {
 		t.Fatalf("failed container create leaked anonymous volumes: %+v, %v", items, err)
 	}
 }
+
+func TestDockerCreateEntrypointOverrideAndExplicitClear(t *testing.T) {
+	setupEngineAPITest(t)
+	image := importEngineAPITestImage(t, "registry.example/team/entrypoint-override:v1")
+	tests := []struct {
+		name       string
+		entrypoint []string
+		cmd        []string
+		want       []string
+	}{
+		{
+			name:       "replace image entrypoint",
+			entrypoint: []string{"/usr/local/bin/custom"},
+			cmd:        []string{"--custom"},
+			want:       []string{"/usr/local/bin/custom", "--custom"},
+		},
+		{
+			name:       "clear image entrypoint",
+			entrypoint: []string{},
+			want:       []string{"--serve"},
+		},
+		{
+			name: "inherit image entrypoint",
+			cmd:  []string{"--request"},
+			want: []string{"/bin/app", "--request"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record, err := createContainerRecord(test.name, dockerCreateRequest{
+				Image: image.Reference, Entrypoint: test.entrypoint, Cmd: test.cmd,
+			})
+			if err != nil {
+				t.Fatalf("create with Entrypoint=%v Cmd=%v: %v", test.entrypoint, test.cmd, err)
+			}
+			t.Cleanup(func() {
+				if err := state.RemoveCreated(record.ID); err != nil {
+					t.Errorf("remove container: %v", err)
+				}
+			})
+			if len(record.Command) != len(test.want) {
+				t.Fatalf("container command = %v, want %v", record.Command, test.want)
+			}
+			for index := range test.want {
+				if record.Command[index] != test.want[index] {
+					t.Fatalf("container command = %v, want %v", record.Command, test.want)
+				}
+			}
+		})
+	}
+}
