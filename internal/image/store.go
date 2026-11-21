@@ -444,48 +444,48 @@ func Remove(reference string) error {
 }
 
 // RemoveMany removes a set of local references with one atomic OCI index update.
- // Every requested tag is validated and must exist before any reference is removed.
- // Content-addressed blobs remain in place until PruneDetailed reclaims those that
- // are no longer reachable from any surviving tag.
+// Every requested tag is validated and must exist before any reference is removed.
+// Content-addressed blobs remain in place until PruneDetailed reclaims those that
+// are no longer reachable from any surviving tag.
 func RemoveMany(references []string) error {
- 	targets := make(map[string]struct{}, len(references))
- 	for _, reference := range references {
- 		if err := ValidateReference(reference); err != nil {
- 			return err
- 		}
- 		targets[reference] = struct{}{}
- 	}
- 	if len(targets) == 0 {
- 		return nil
- 	}
+	targets := make(map[string]struct{}, len(references))
+	for _, reference := range references {
+		if err := ValidateReference(reference); err != nil {
+			return err
+		}
+		targets[reference] = struct{}{}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
 
- 	storeMu.Lock()
- 	defer storeMu.Unlock()
- 	dir, err := ensureStore()
- 	if err != nil {
- 		return err
- 	}
- 	index, err := loadIndex(dir)
- 	if err != nil {
- 		return err
- 	}
- 	found := make(map[string]struct{}, len(targets))
- 	updated := make([]Descriptor, 0, len(index.Manifests))
- 	for _, descriptor := range index.Manifests {
- 		reference := descriptor.Annotations["org.opencontainers.image.ref.name"]
- 		if _, remove := targets[reference]; remove {
- 			found[reference] = struct{}{}
- 			continue
- 		}
- 		updated = append(updated, descriptor)
- 	}
- 	for reference := range targets {
- 		if _, exists := found[reference]; !exists {
- 			return fmt.Errorf("image %q not found", reference)
- 		}
- 	}
- 	index.Manifests = updated
- 	return writeIndex(dir, index)
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	dir, err := ensureStore()
+	if err != nil {
+		return err
+	}
+	index, err := loadIndex(dir)
+	if err != nil {
+		return err
+	}
+	found := make(map[string]struct{}, len(targets))
+	updated := make([]Descriptor, 0, len(index.Manifests))
+	for _, descriptor := range index.Manifests {
+		reference := descriptor.Annotations["org.opencontainers.image.ref.name"]
+		if _, remove := targets[reference]; remove {
+			found[reference] = struct{}{}
+			continue
+		}
+		updated = append(updated, descriptor)
+	}
+	for reference := range targets {
+		if _, exists := found[reference]; !exists {
+			return fmt.Errorf("image %q not found", reference)
+		}
+	}
+	index.Manifests = updated
+	return writeIndex(dir, index)
  }
 
 func Unpack(reference, destination string) (rootfs.Manifest, error) {
