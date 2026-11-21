@@ -107,6 +107,50 @@ func TestEngineAPIContainerPruneRemovesCreatedAndExitedButKeepsRunning(t *testin
 	}
 }
 
+
+func TestEngineAPIContainerPruneWaitsForLifecycleTransitionLock(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record := createContainerPruneRecord(t, "prune-lock", nil)
+	release := server.containerTransitions.lock(record.ID)
+
+	responseCh := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		responseCh <- requestContainerPrune(t, server, nil)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		server.containerTransitions.mu.Lock()
+		entry := server.containerTransitions.locks[record.ID]
+		refs := 0
+		if entry != nil {
+			refs = entry.refs
+		}
+		server.containerTransitions.mu.Unlock()
+		if refs >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			release()
+			t.Fatal("container prune did not wait for the active lifecycle transition")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	release()
+	select {
+	case response := <-responseCh:
+		if response.Code != http.StatusOK {
+			t.Fatalf("prune status=%d body=%s", response.Code, response.Body.String())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("container prune did not complete after the lifecycle transition released")
+	}
+	if _, err := state.Get(record.ID); err == nil {
+		t.Fatal("container remains after the serialized prune operation")
+	}
+}
+
 func TestEngineAPIContainerPruneHonorsUntilAndPositiveLabelFilters(t *testing.T) {
 	server := setupEngineAPITest(t)
 	oldMatch := createContainerPruneRecord(t, "prune-old-match", map[string]string{"team": "cleanup"})
