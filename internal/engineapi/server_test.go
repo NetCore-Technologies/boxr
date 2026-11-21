@@ -3180,10 +3180,9 @@ func TestParseDockerEndpointConfigRejectsUnsupportedAndMalformedFields(t *testin
 	}
 }
 
-
 func TestDockerContainerFiltersMatchAncestorVolumeAndPorts(t *testing.T) {
 	record := state.Record{
-		ID: "container-filter-metadata",
+		ID:     "container-filter-metadata",
 		Labels: map[string]string{"io.boxr.image": "registry.example/api:1.2"},
 		Options: container.Options{
 			BindMounts: []container.BindMount{{
@@ -3196,10 +3195,10 @@ func TestDockerContainerFiltersMatchAncestorVolumeAndPorts(t *testing.T) {
 		},
 	}
 	for _, filter := range []struct {
-		name   string
-		key    string
-		value  string
-		want   bool
+		name  string
+		key   string
+		value string
+		want  bool
 	}{
 		{name: "ancestor exact reference", key: "ancestor", value: "registry.example/api:1.2", want: true},
 		{name: "ancestor reference prefix", key: "ancestor", value: "registry.example/api", want: true},
