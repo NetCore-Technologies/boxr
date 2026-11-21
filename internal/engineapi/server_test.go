@@ -1900,3 +1900,126 @@ func TestDockerAnonymousVolumeCreateAndPruneProtectsContainerReferences(t *testi
 		t.Fatalf("invalid all filter status=%d body=%s", response.Code, response.Body.String())
 	}
 }
+
+
+func TestDockerNetworkPruneFiltersAndProtectsContainerReferences(t *testing.T) {
+	server := setupEngineAPITest(t)
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	runner := &engineAPINetworkRunner{aliases: make(map[string]string)}
+	server.createNetwork = func(name string, options boxrnetwork.CreateOptions) (boxrnetwork.Network, error) {
+		return boxrnetwork.CreateWithRunner(context.Background(), name, options, runner)
+	}
+	server.removeNetwork = func(name string) error {
+		return boxrnetwork.RemoveWithRunner(context.Background(), name, runner)
+	}
+	createNetwork := func(name, subnet, label string) {
+		t.Helper()
+		_, err := server.createNetwork(name, boxrnetwork.CreateOptions{
+			Subnet: subnet, Gateway: strings.TrimSuffix(subnet, "0/24") + "1",
+			NAT: false, Labels: map[string]string{"team": label},
+		})
+		if err != nil {
+			t.Fatalf("create network %s: %v", name, err)
+		}
+	}
+
+	createNetwork("prune-candidate", "172.29.50.0/24", "prune")
+	createNetwork("keep-network", "172.29.51.0/24", "prune")
+	createNetwork("other-network", "172.29.52.0/24", "other")
+	record, err := state.Create("network-config-reference", []string{"/bin/true"}, container.Options{
+		NetworkMode: "bridge", NetworkName: "keep-network",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.RemoveCreated(record.ID)
+
+	postPrune := func(filters map[string][]string) *httptest.ResponseRecorder {
+		t.Helper()
+		data, err := json.Marshal(filters)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded := base64.RawURLEncoding.EncodeToString(data)
+		return engineAPIRequest(server, http.MethodPost, "/v1.45/networks/prune?filters="+url.QueryEscape(encoded))
+	}
+
+	response := postPrune(map[string][]string{"label": {"team=prune"}})
+	if response.Code != http.StatusOK {
+		t.Fatalf("label prune status=%d body=%s", response.Code, response.Body.String())
+	}
+	var first dockerNetworkPruneResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.NetworksDeleted) != 1 || first.NetworksDeleted[0] != "prune-candidate" {
+		t.Fatalf("label prune deleted %v; expected only prune-candidate", first.NetworksDeleted)
+	}
+	if _, err := boxrnetwork.Inspect("keep-network"); err != nil {
+		t.Fatalf("network referenced by a persisted container was pruned: %v", err)
+	}
+	if _, err := boxrnetwork.Inspect("other-network"); err != nil {
+		t.Fatalf("network with a non-matching label was pruned: %v", err)
+	}
+
+	response = postPrune(map[string][]string{"label!": {"team=prune"}})
+	if response.Code != http.StatusOK {
+		t.Fatalf("negative label prune status=%d body=%s", response.Code, response.Body.String())
+	}
+	var second dockerNetworkPruneResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if len(second.NetworksDeleted) != 1 || second.NetworksDeleted[0] != "other-network" {
+		t.Fatalf("negative label prune deleted %v; expected only other-network", second.NetworksDeleted)
+	}
+
+	createNetwork("until-network", "172.29.53.0/24", "old")
+	futureTimestamp := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)
+	response = postPrune(map[string][]string{"until": {futureTimestamp}})
+	if response.Code != http.StatusOK {
+		t.Fatalf("until prune status=%d body=%s", response.Code, response.Body.String())
+	}
+	var third dockerNetworkPruneResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &third); err != nil {
+		t.Fatal(err)
+	}
+	if len(third.NetworksDeleted) != 1 || third.NetworksDeleted[0] != "until-network" {
+		t.Fatalf("until prune deleted %v; expected until-network", third.NetworksDeleted)
+	}
+	if _, err := boxrnetwork.Inspect("keep-network"); err != nil {
+		t.Fatalf("until prune removed a network still referenced by a container: %v", err)
+	}
+
+	response = postPrune(map[string][]string{"unknown": {"value"}})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("unknown filter status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = postPrune(map[string][]string{"until": {"not-a-timestamp"}})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid until filter status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestParseDockerNetworkUntilAcceptsDockerTimestampForms(t *testing.T) {
+	now := time.Date(2026, time.November, 21, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		value string
+		want  time.Time
+	}{
+		{"1795262400", time.Unix(1795262400, 0)},
+		{"1795262400.125", time.Unix(1795262400, 125000000)},
+		{"1h", now.Add(-time.Hour)},
+		{"2026-11-21T11:00:00Z", time.Date(2026, time.November, 21, 11, 0, 0, 0, time.UTC)},
+	}
+	for _, test := range cases {
+		got, err := parseDockerNetworkUntil(test.value, now)
+		if err != nil {
+			t.Errorf("parse %q: %v", test.value, err)
+			continue
+		}
+		if !got.Equal(test.want) {
+			t.Errorf("parse %q = %s, want %s", test.value, got, test.want)
+		}
+	}
+}
