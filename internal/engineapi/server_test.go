@@ -1204,6 +1204,37 @@ func TestDockerOptionsMapsResourcesPortsAndSafeNetworkDefaults(t *testing.T) {
 	}
 }
 
+func TestDockerOptionsMapsSharedMemorySizeToPrivateTmpfs(t *testing.T) {
+	options, err := dockerOptions(dockerHostConfig{ShmSize: 64 << 20})
+	if err != nil {
+		t.Fatalf("dockerOptions ShmSize: %v", err)
+	}
+	if len(options.TmpfsMounts) != 1 {
+		t.Fatalf("tmpfs mounts = %+v, want one /dev/shm mount", options.TmpfsMounts)
+	}
+	mount := options.TmpfsMounts[0]
+	if mount.Target != "/dev/shm" || mount.SizeBytes != 64<<20 || mount.Mode != 01777 {
+		t.Fatalf("shared-memory mount = %+v", mount)
+	}
+}
+
+func TestDockerOptionsRejectsUnsafeSharedMemorySizes(t *testing.T) {
+	for _, size := range []int64{-1, (1 << 30) + 1} {
+		if _, err := dockerOptions(dockerHostConfig{ShmSize: size}); err == nil {
+			t.Fatalf("ShmSize %d unexpectedly accepted", size)
+		}
+	}
+	_, err := dockerOptions(dockerHostConfig{
+		ShmSize: 64 << 20,
+		Mounts: []json.RawMessage{
+			json.RawMessage(`{"Type":"tmpfs","Target":"/dev/shm","TmpfsOptions":{"SizeBytes":4096}}`),
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "multiple Docker mounts target") {
+		t.Fatalf("duplicate /dev/shm mount error = %v", err)
+	}
+}
+
 func TestDockerOptionsSupportsStructuredBindVolumeAndTmpfsMounts(t *testing.T) {
 	t.Setenv("BOXR_DATA_DIR", filepath.Join(t.TempDir(), "data"))
 	volumeItem, err := volume.Create("structured-data", nil)
