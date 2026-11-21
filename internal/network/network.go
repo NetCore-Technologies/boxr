@@ -1285,6 +1285,10 @@ func allocateEndpointAddress(network Network, requested string) (string, error) 
 	return address.String(), nil
 }
 
+func ValidateEndpointMAC(value string) error {
+	return validateEndpointMAC(value)
+}
+
 func validateEndpointMAC(value string) error {
 	address, err := net.ParseMAC(value)
 	if err != nil || len(address) != 6 || address.String() != strings.ToLower(value) ||
