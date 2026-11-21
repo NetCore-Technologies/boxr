@@ -473,12 +473,13 @@ func CreateWithRunner(ctx context.Context, name string, options CreateOptions, r
 	if err != nil {
 		return empty, err
 	}
-	var allocationRange netip.Prefix
+	allocationRange := ""
 	if options.IPRange != "" {
-		allocationRange, err = parseIPv4IPRange(prefix, options.IPRange)
+		pool, err := parseIPv4IPRange(prefix, options.IPRange)
 		if err != nil {
 			return empty, err
 		}
+		allocationRange = pool.String()
 	}
 	unlock, err := lockStore()
 	if err != nil {
@@ -523,7 +524,7 @@ func CreateWithRunner(ctx context.Context, name string, options CreateOptions, r
 		Driver:      "bridge",
 		Bridge:      bridge,
 		Subnet:      prefix.String(),
-		IPRange:     allocationRange.String(),
+		IPRange:     allocationRange,
 		Gateway:     gateway.String(),
 		NAT:         options.NAT,
 		CreatedAt:   time.Now().UTC(),
