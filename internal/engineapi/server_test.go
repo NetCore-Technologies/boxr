@@ -3242,7 +3242,6 @@ func TestDockerPortFilterMatchesRejectsInvalidAndUnboundedRanges(t *testing.T) {
 	}
 }
 
-
 func TestDockerContainerFiltersResolveBeforeAndSinceReferences(t *testing.T) {
 	setupEngineAPITest(t)
 	reference, err := state.Create("filter-reference", []string{"/bin/true"}, container.Options{}, nil)
@@ -3292,23 +3291,8 @@ func TestDockerContainerFiltersRejectUnknownAndMissingReferences(t *testing.T) {
 	for name, filters := range map[string]map[string][]string{
 		"unknown":        {"unsupported": {"value"}},
 		"missing before": {"before": {"missing-container"}},
-		"missing since": {"since": {"missing-container"}},
+		"missing since":  {"since": {"missing-container"}},
 		"empty value":    {"since": {""}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := resolveDockerContainerFilterTimes(filters); err == nil {
-				t.Fatalf("invalid container filters %#v were accepted", filters)
-			}
-		})
-	}
-}
-
-func TestDockerContainerFiltersRejectUnknownAndMissingReferences(t *testing.T) {
-	for name, filters := range map[string]map[string][]string{
-		"unknown": {"unsupported": {"value"}},
-		"missing before": {"before": {"missing-container"}},
-		"missing since": {"since": {"missing-container"}},
-		"empty value": {"since": {""}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := resolveDockerContainerFilterTimes(filters); err == nil {
