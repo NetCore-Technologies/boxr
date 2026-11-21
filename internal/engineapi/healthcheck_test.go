@@ -104,4 +104,17 @@ func TestDockerCreateHealthcheckOverridesImageAndAppearsInInspect(t *testing.T) 
 		record.Options.Healthcheck.Interval != container.DefaultHealthcheckInterval || record.Options.Healthcheck.Retries != 6 {
 		t.Fatalf("container healthcheck = %+v", record.Options.Healthcheck)
 	}
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatalf("start healthcheck container state: %v", err)
+	}
+	if err := state.SetHealth(record.ID, state.HealthState{
+		Status: "healthy",
+		Log: []state.HealthLog{{Start: time.Now(), End: time.Now(), ExitCode: 0, Output: "ready"}},
+	}); err != nil {
+		t.Fatalf("persist container health status: %v", err)
+	}
+	persisted, err := state.Get(record.ID)
+	if err != nil || persisted.Health == nil || persisted.Health.Status != "healthy" || len(persisted.Health.Log) != 1 {
+		t.Fatalf("persisted container health = %+v, %v", persisted.Health, err)
+	}
 }
