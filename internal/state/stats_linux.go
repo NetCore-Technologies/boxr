@@ -18,8 +18,11 @@ func ReadStats(pid int) (Stats, error) {
 	}
 	cgroupPath := filepath.Join("/sys/fs/cgroup/boxr", strconv.Itoa(pid))
 	info, err := os.Stat(cgroupPath)
-	if err != nil || !info.IsDir() {
+	if err != nil {
 		return result, fmt.Errorf("container cgroup is unavailable: %w", err)
+	}
+	if !info.IsDir() {
+		return result, fmt.Errorf("container cgroup path is not a directory")
 	}
 	result.PID = pid
 	readInt := func(name string) (int64, error) {
