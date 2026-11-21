@@ -109,6 +109,23 @@ func TestDockerArchiveResolveRejectsEscapingAndLoopingSymlinks(t *testing.T) {
 	}
 }
 
+func TestDockerArchiveSingleRootPreservesLiteralWhiteoutFilenames(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "literal"), []byte("visible lower name"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".wh.literal"), []byte("visible whiteout-like name"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	lowerPath, upperPath, info, err := resolveDockerOverlayPath(root, root, "literal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lowerPath != filepath.Join(root, "literal") || upperPath != lowerPath || !info.Mode().IsRegular() {
+		t.Fatalf("single-root resolution unexpectedly treated a literal .wh file as overlay metadata: lower=%q upper=%q mode=%v", lowerPath, upperPath, info.Mode())
+	}
+}
+
 func TestDockerArchiveNoOverwriteRejectsDirectoryTypeMismatch(t *testing.T) {
 	stage := t.TempDir()
 	lower := t.TempDir()
