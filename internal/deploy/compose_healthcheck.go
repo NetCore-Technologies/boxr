@@ -82,6 +82,9 @@ func parseComposeHealthcheck(node *yaml.Node) (*container.HealthcheckConfig, err
 		if parseErr != nil {
 			return nil, fmt.Errorf("healthcheck %s: %w", item.name, parseErr)
 		}
+		if duration < 0 || ((item.name == "interval" || item.name == "timeout" || item.name == "start_interval") && duration < time.Millisecond) {
+			return nil, fmt.Errorf("healthcheck %s must be %s", item.name, map[bool]string{true: "at least 1ms", false: "non-negative"}[item.name == "interval" || item.name == "timeout" || item.name == "start_interval"])
+		}
 		*item.destination = duration
 	}
 	if value, exists := fields["retries"]; exists {
@@ -91,6 +94,9 @@ func parseComposeHealthcheck(node *yaml.Node) (*container.HealthcheckConfig, err
 		retries, parseErr := strconv.Atoi(value.Value)
 		if parseErr != nil {
 			return nil, fmt.Errorf("healthcheck retries: %w", parseErr)
+		}
+		if retries < 1 {
+			return nil, fmt.Errorf("healthcheck retries must be between 1 and 1000 when specified")
 		}
 		config.Retries = retries
 	}
