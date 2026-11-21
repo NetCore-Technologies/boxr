@@ -18,6 +18,9 @@ func TestDockerConfigExposedPortsMergeImageAndCreateMetadata(t *testing.T) {
 	if err := os.Mkdir(root, 0755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "seed.txt"), []byte("fixture data\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	image, err := imageStore.ImportRootFSWithConfig(root, "registry.example/team/exposed-ports:v1", "linux", "amd64", "", imageStore.ImageRuntimeConfig{
 		Cmd: []string{"/bin/true"},
 		ExposedPorts: map[string]struct{}{
