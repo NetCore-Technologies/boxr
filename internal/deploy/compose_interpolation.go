@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -103,7 +105,7 @@ func parseComposeDotEnvValue(raw string) (string, error) {
 				escaped = true
 				continue
 			}
-			if raw[index] == '\\' {
+			if raw[index] == '"' {
 				end = index
 				break
 			}
