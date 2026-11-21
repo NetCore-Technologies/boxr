@@ -444,7 +444,6 @@ func TestEngineConfigRejectsOversizedAndUnsafeFiles(t *testing.T) {
 	}
 }
 
-
 func TestRenamePersistsUniqueContainerNamesAndEvents(t *testing.T) {
 	useTempState(t)
 	first, err := Create("before-rename", []string{"/bin/true"}, container.Options{}, nil)
