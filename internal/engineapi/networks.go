@@ -81,7 +81,7 @@ func dockerNetwork(item boxrnetwork.Summary) dockerNetworkResponse {
 		Scope: "local", Driver: "bridge", EnableIPv6: false,
 		IPAM: dockerNetworkIPAMResponse{
 			Driver: "default",
-			Config: []dockerNetworkIPAMConfig{{Subnet: item.Subnet, Gateway: item.Gateway}},
+			Config: []dockerNetworkIPAMConfig{{Subnet: item.Subnet, IPRange: item.IPRange, Gateway: item.Gateway}},
 		},
 		Internal: false, Attachable: true, Ingress: false, ConfigOnly: false,
 		Options: options, Labels: item.Labels,
@@ -184,8 +184,8 @@ func parseDockerNetworkCreate(data []byte) (string, boxrnetwork.CreateOptions, e
 		return "", options, fmt.Errorf("IPAM.Config must contain exactly one IPv4 subnet")
 	}
 	config := input.IPAM.Config[0]
-	if config.Subnet == "" || config.IPRange != "" || len(config.AuxAddress) > 0 {
-		return "", options, fmt.Errorf("IPAM requires Subnet; IPRange and AuxiliaryAddresses are not supported")
+	if config.Subnet == "" || len(config.AuxAddress) > 0 {
+		return "", options, fmt.Errorf("IPAM requires Subnet; AuxiliaryAddresses are not supported")
 	}
 	for key, value := range input.Options {
 		switch key {
@@ -205,6 +205,7 @@ func parseDockerNetworkCreate(data []byte) (string, boxrnetwork.CreateOptions, e
 		options.NAT = true
 	}
 	options.Subnet = config.Subnet
+	options.IPRange = config.IPRange
 	options.Gateway = config.Gateway
 	return input.Name, options, nil
 }
