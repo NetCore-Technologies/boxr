@@ -38,6 +38,20 @@ func ReadStats(pid int) (Stats, error) {
 	if data, err := os.ReadFile(filepath.Join(cgroupPath, "memory.stat")); err == nil {
 		result.MemoryStats = parseCgroupKeyValues(string(data))
 	}
+	if value, err := readInt("memory.peak"); err == nil {
+		if result.MemoryStats == nil {
+			result.MemoryStats = make(map[string]int64)
+		}
+		result.MemoryStats["max_usage"] = value
+	}
+	if data, err := os.ReadFile(filepath.Join(cgroupPath, "memory.events")); err == nil {
+		if result.MemoryStats == nil {
+			result.MemoryStats = make(map[string]int64)
+		}
+		for key, value := range parseCgroupKeyValues(string(data)) {
+			result.MemoryStats[key] = value
+		}
+	}
 	if value, err := readInt("pids.current"); err == nil {
 		result.PIDsCurrent = value
 	}
@@ -62,6 +76,12 @@ func ReadStats(pid int) (Stats, error) {
 				result.CPUUserUsec = value
 			case "system_usec":
 				result.CPUSystemUsec = value
+			case "nr_periods":
+				result.CPUPeriods = value
+			case "nr_throttled":
+				result.CPUThrottledPeriods = value
+			case "throttled_usec":
+				result.CPUThrottledUsec = value
 			}
 		}
 		scanErr := scanner.Err()
