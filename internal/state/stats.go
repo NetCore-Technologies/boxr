@@ -24,6 +24,9 @@ type Stats struct {
 	CPUUsageUsec       int64                `json:"cpuUsageUsec,omitempty"`
 	CPUUserUsec        int64                `json:"cpuUserUsec,omitempty"`
 	CPUSystemUsec      int64                `json:"cpuSystemUsec,omitempty"`
+	CPUPeriods         int64                `json:"cpuPeriods,omitempty"`
+	CPUThrottledPeriods int64               `json:"cpuThrottledPeriods,omitempty"`
+	CPUThrottledUsec   int64                `json:"cpuThrottledUsec,omitempty"`
 	SystemCPUUsageNS   int64                `json:"systemCpuUsageNs,omitempty"`
 	SystemMemoryTotalBytes int64             `json:"systemMemoryTotalBytes,omitempty"`
 	IOCounters         map[string]string    `json:"ioCounters,omitempty"`
