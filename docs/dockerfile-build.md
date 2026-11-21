@@ -4,6 +4,7 @@ Boxr can build a bounded, single-stage Dockerfile subset. `RUN` commands execute
 
 - One `FROM` stage, using `scratch` or a base image already pulled into Boxr's local image store.
 - Local-context `COPY` and `ADD` (including JSON form and `COPY .`), with paths kept inside the build context. Local ADD files/directories are copied; plain and gzip tar archives are automatically extracted.
+- `COPY --chmod=MODE` for bounded octal file permissions (000–0777), including JSON-form COPY and directory-tree copies. Setuid, setgid, sticky and symbolic modes are rejected.
 - `RUN` in shell or exec form, `WORKDIR`, `ENV`, `LABEL`, `USER`, and shell/exec forms of `CMD` and `ENTRYPOINT`.
 - Bounded `.dockerignore` filtering. Negation patterns and advanced Docker ignore semantics are rejected.
 
@@ -34,6 +35,18 @@ boxr image build --tag example/api:dev -f Dockerfile .
 `ADD` supports local files, directories and plain/gzip tar archives only. Remote URL/Git ADD sources, multi-stage `FROM`, `COPY --from`, build secrets, cache mounts, remote contexts, `RUN --mount`, and advanced Dockerfile frontend features are not implemented. They fail explicitly. Dockerfile RUN executes in Boxr's namespaces and staged rootfs, but Boxr is not yet a BuildKit replacement. The builder currently flattens the result into Boxr's canonical local image layer, so it does not preserve source layer history or Docker build cache metadata.
 
 This is a compatibility subset, not a complete Dockerfile frontend or BuildKit replacement.
+
+## COPY permissions
+
+Use `COPY --chmod=MODE` to set permissions on copied files without changing the build context:
+
+```dockerfile
+FROM scratch
+COPY --chmod=0755 scripts/entrypoint.sh /usr/local/bin/entrypoint
+COPY --chmod=0640 config/ /etc/myapp/
+```
+
+Modes use three- or four-digit octal notation and are limited to ordinary permission bits. Setuid, setgid, sticky and symbolic modes are rejected as a security boundary. Symlinks are never followed when applying the mode, and host source permissions are left unchanged.
 
 ## ADD archive handling
 

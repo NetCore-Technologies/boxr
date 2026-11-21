@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -18,6 +19,8 @@ type dockerfileStep struct {
 	source      string
 	destination string
 	value       string
+	copyMode    os.FileMode
+	hasCopyMode bool
 	command     []string
 	env         []string
 	user        string
@@ -153,19 +156,41 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 			}
 			spec.Base = words[0]
 			fromSeen = true
-			// Global ARG declarations are used for FROM expansion only.
-			args = make(map[string]string)
-
-		case "COPY", "ADD":
+			// Global ARG declarations are used for FR		case "COPY", "ADD":
 			instructionName := instruction
+			remaining := strings.TrimSpace(expanded)
+			copyMode := os.FileMode(0)
+			hasCopyMode := false
+			for strings.HasPrefix(remaining, "--") {
+				split := strings.IndexFunc(remaining, unicode.IsSpace)
+				option := remaining
+				if split >= 0 {
+					option = remaining[:split]
+					remaining = strings.TrimSpace(remaining[split:])
+				} else {
+					remaining = ""
+				}
+				name, value, hasValue := strings.Cut(option, "=")
+				if instructionName != "COPY" || name != "--chmod" || !hasValue || hasCopyMode {
+					return fmt.Errorf("line %d: unsupported %s option %q; COPY supports one octal --chmod=MODE option", lineNumber, instructionName, option)
+				}
+				if len(value) < 3 || len(value) > 4 {
+					return fmt.Errorf("line %d: COPY --chmod must be a three- or four-digit octal mode from 000 to 0777", lineNumber)
+				}
+				mode, modeErr := strconv.ParseUint(value, 8, 12)
+				if modeErr != nil || mode > 0777 {
+					return fmt.Errorf("line %d: COPY --chmod mode %q is invalid; setuid, setgid and sticky bits are not supported", lineNumber, value)
+				}
+				copyMode, hasCopyMode = os.FileMode(mode), true
+			}
 			var words []string
-			if strings.HasPrefix(expanded, "[") {
-				if err := json.Unmarshal([]byte(expanded), &words); err != nil {
+			if strings.HasPrefix(remaining, "[") {
+				if err := json.Unmarshal([]byte(remaining), &words); err != nil {
 					return fmt.Errorf("line %d: invalid JSON %s: %w", lineNumber, instructionName, err)
 				}
 			} else {
 				var err error
-				words, err = dockerfileWords(expanded)
+				words, err = dockerfileWords(remaining)
 				if err != nil {
 					return fmt.Errorf("line %d: parse %s: %w", lineNumber, instructionName, err)
 				}
@@ -175,7 +200,7 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 			}
 			for _, option := range words[:len(words)-1] {
 				if strings.HasPrefix(option, "--") {
-					return fmt.Errorf("line %d: %s flags such as --from, --chown and --chmod are not supported yet", lineNumber, instructionName)
+					return fmt.Errorf("line %d: %s option %q is unsupported", lineNumber, instructionName, option)
 				}
 			}
 			rawDestination := path.Clean(words[len(words)-1])
@@ -209,6 +234,10 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 				}
 				spec.dockerfileSteps = append(spec.dockerfileSteps, dockerfileStep{
 					kind: stepKind, source: cleanSource, destination: stepDestination,
+					copyMode: copyMode, hasCopyMode: hasCopyMode,
+				})
+			}
+leanSource, destination: stepDestination,
 				})
 			}
 

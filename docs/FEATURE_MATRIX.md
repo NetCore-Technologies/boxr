@@ -898,3 +898,4 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 889. Engine API applies Docker-compatible image prune until label and label-exclusion filters
 890. Engine API protects all aliases sharing image digests used by persisted containers during prune
 891. Engine API removes selected image tags atomically and reports reclaimed content-addressed blob bytes
+892. Dockerfile COPY supports safe octal --chmod modes for copied files

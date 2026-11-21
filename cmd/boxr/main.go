@@ -3723,6 +3723,7 @@ var implementedFeatures = []string{
 	"Engine API applies Docker-compatible image prune until label and label-exclusion filters",
 	"Engine API protects all aliases sharing image digests used by persisted containers during prune",
 	"Engine API removes selected image tags atomically and reports reclaimed content-addressed blob bytes",
+	"Dockerfile COPY supports safe octal --chmod modes for copied files",
 }
 
 func printFeatures(stdout io.Writer) {

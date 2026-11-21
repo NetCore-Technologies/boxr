@@ -287,6 +287,40 @@ func TestBuildDockerfileWithBuildArgsPassesOverridesOnlyToRun(t *testing.T) {
 	}
 }
 
+func TestParseDockerfileCopyChmodSupportsBoundedOctalModes(t *testing.T) {
+	spec, err := ParseDockerfile([]byte("FROM scratch\nCOPY --chmod=0755 runner /usr/local/bin/runner\nCOPY --chmod=640 config /etc/app.conf\n"))
+	if err != nil {
+		t.Fatalf("ParseDockerfile with COPY --chmod: %v", err)
+	}
+	if len(spec.dockerfileSteps) != 2 {
+		t.Fatalf("captured %d build steps, want 2", len(spec.dockerfileSteps))
+	}
+	if !spec.dockerfileSteps[0].hasCopyMode || spec.dockerfileSteps[0].copyMode != 0755 {
+		t.Fatalf("first COPY mode = %04o (set=%t), want 0755", spec.dockerfileSteps[0].copyMode, spec.dockerfileSteps[0].hasCopyMode)
+	}
+	if !spec.dockerfileSteps[1].hasCopyMode || spec.dockerfileSteps[1].copyMode != 0640 {
+		t.Fatalf("second COPY mode = %04o (set=%t), want 0640", spec.dockerfileSteps[1].copyMode, spec.dockerfileSteps[1].hasCopyMode)
+	}
+	jsonSpec, err := ParseDockerfile([]byte("FROM scratch\nCOPY --chmod=0755 [\"runner\", \"/usr/bin/runner\"]\n"))
+	if err != nil || len(jsonSpec.dockerfileSteps) != 1 || jsonSpec.dockerfileSteps[0].copyMode != 0755 {
+		t.Fatalf("JSON-form COPY --chmod parse = %#v, error=%v", jsonSpec.dockerfileSteps, err)
+	}
+	for _, mode := range []string{"7", "75", "888", "10000", "4755", "u+x", ""} {
+		if _, err := ParseDockerfile([]byte("FROM scratch\nCOPY --chmod=" + mode + " runner /runner\n")); err == nil {
+			t.Errorf("unsafe or malformed chmod mode %q was accepted", mode)
+		}
+	}
+	for _, instruction := range []string{
+		"COPY --chown=0:0 runner /runner",
+		"ADD --chmod=0755 runner /runner",
+		"COPY --chmod=0755 --chmod=0644 runner /runner",
+	} {
+		if _, err := ParseDockerfile([]byte("FROM scratch\n" + instruction + "\n")); err == nil {
+			t.Errorf("unsupported COPY/ADD options were accepted: %s", instruction)
+		}
+	}
+}
+
 func TestParseDockerfileSupportsLocalADDAndRejectsRemoteSources(t *testing.T) {
 	spec, err := ParseDockerfile([]byte("FROM scratch\nADD payload.tar /opt/app/\nADD config.txt /etc/app.conf\n"))
 	if err != nil {

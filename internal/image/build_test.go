@@ -21,6 +21,52 @@ func writeBuildSpec(t *testing.T, dir string, spec BuildSpec) string {
 	return path
 }
 
+func TestBuildDockerfileCopyChmodAppliesModesInsideImageRootfs(t *testing.T) {
+	useStore(t)
+	contextDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(contextDir, "tools"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(contextDir, "assets", "nested"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	runnerPath := filepath.Join(contextDir, "tools", "runner")
+	if err := os.WriteFile(runnerPath, []byte("#!/bin/sh\necho ready\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	assetPath := filepath.Join(contextDir, "assets", "nested", "config.ini")
+	if err := os.WriteFile(assetPath, []byte("mode=production\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dockerfile := filepath.Join(contextDir, "Dockerfile")
+	content := "FROM scratch\nCOPY --chmod=0755 tools/runner /usr/local/bin/runner\nCOPY --chmod=0640 assets/ /opt/assets/\n"
+	if err := os.WriteFile(dockerfile, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BuildDockerfileForPlatform(contextDir, dockerfile, "demo:copy-chmod", ""); err != nil {
+		t.Fatalf("BuildDockerfileForPlatform: %v", err)
+	}
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if _, err := Unpack("demo:copy-chmod", root); err != nil {
+		t.Fatalf("unpack image: %v", err)
+	}
+	for relative, want := range map[string]os.FileMode{
+		"usr/local/bin/runner":         0755,
+		"opt/assets/nested/config.ini": 0640,
+	} {
+		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(relative)))
+		if err != nil {
+			t.Fatalf("stat %s: %v", relative, err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Errorf("%s mode = %04o, want %04o", relative, got, want)
+		}
+	}
+	if info, err := os.Stat(runnerPath); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("COPY --chmod modified host source mode: info=%v error=%v", info, err)
+	}
+}
+
 func TestBuildCopiesFilesAndPersistsRuntimeConfig(t *testing.T) {
 	useStore(t)
 	contextDir := t.TempDir()

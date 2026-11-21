@@ -276,6 +276,9 @@ func buildWithSpec(contextDir string, spec BuildSpec, reference, platform, ignor
 				} else {
 					copyErr = applyCopy(contextAbs, root, instruction, ignorePatterns)
 				}
+				if copyErr == nil && step.kind == "copy" && step.hasCopyMode {
+					copyErr = applyDockerfileCopyMode(contextAbs, root, instruction, ignorePatterns, step.copyMode)
+				}
 				if copyErr != nil {
 					return Image{}, fmt.Errorf("%s %d: %w", strings.ToUpper(step.kind), copyNumber, copyErr)
 				}
@@ -612,6 +615,103 @@ func applyCopy(contextRoot, root string, instruction CopyInstruction, ignorePatt
 // applyAdd supports local ADD files/directories and plain or gzip tar archives.
 // Remote sources are rejected by the Dockerfile parser. Archive extraction is
 // bounded and staged before the contents are copied into the image rootfs.
+
+// applyDockerfileCopyMode applies COPY --chmod to regular files copied by one
+// instruction. It does not follow source/destination symlinks and leaves the
+// build context unchanged.
+func applyDockerfileCopyMode(contextRoot, root string, instruction CopyInstruction, ignorePatterns []ignorePattern, mode os.FileMode) error {
+	if err := validateContextPath(instruction.Source); err != nil {
+		return err
+	}
+	source := filepath.Join(contextRoot, filepath.Clean(instruction.Source))
+	info, err := os.Lstat(source)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("COPY --chmod source may not be a symlink")
+	}
+	destination, err := rootfsDestination(root, instruction.Destination)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		if targetInfo, statErr := os.Lstat(destination); statErr == nil && targetInfo.IsDir() {
+			destination = filepath.Join(destination, filepath.Base(source))
+		} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return fmt.Errorf("inspect COPY --chmod destination: %w", statErr)
+		}
+		target, err := resolveRootfsTarget(root, destination)
+		if err != nil {
+			return err
+		}
+		targetInfo, err := os.Lstat(target)
+		if err != nil {
+			return err
+		}
+		if targetInfo.Mode()&os.ModeSymlink != 0 || !targetInfo.Mode().IsRegular() {
+			return fmt.Errorf("COPY --chmod destination is not a regular file")
+		}
+		return os.Chmod(target, mode)
+	}
+	destination, err = ensureRootfsDirectory(root, destination)
+	if err != nil {
+		return err
+	}
+	var targets []string
+	err = filepath.WalkDir(source, func(current string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if current == source {
+			return nil
+		}
+		relative, err := filepath.Rel(source, current)
+		if err != nil {
+			return err
+		}
+		contextRelative := filepath.Join(instruction.Source, relative)
+		sourceInfo, err := os.Lstat(current)
+		if err != nil {
+			return err
+		}
+		if ignoredPath(contextRelative, sourceInfo.IsDir(), ignorePatterns) {
+			if sourceInfo.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if sourceInfo.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if !sourceInfo.Mode().IsRegular() {
+			if sourceInfo.IsDir() {
+				return nil
+			}
+			return fmt.Errorf("COPY --chmod source contains unsupported special file %s", relative)
+		}
+		target := filepath.Join(destination, relative)
+		targetInfo, err := os.Lstat(target)
+		if err != nil {
+			return err
+		}
+		if targetInfo.Mode()&os.ModeSymlink != 0 || !targetInfo.Mode().IsRegular() {
+			return fmt.Errorf("COPY --chmod destination %s is not a regular file", relative)
+		}
+		targets = append(targets, target)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	for _, target := range targets {
+		if err := os.Chmod(target, mode); err != nil {
+			return fmt.Errorf("apply COPY --chmod to %s: %w", target, err)
+		}
+	}
+	return nil
+}
+
 func applyAdd(contextRoot, root string, instruction CopyInstruction, ignorePatterns []ignorePattern) error {
 	if err := validateContextPath(instruction.Source); err != nil {
 		return err
