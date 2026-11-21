@@ -1799,3 +1799,105 @@ func TestVerifyDockerContainerPIDRejectsNonBoxrProcess(t *testing.T) {
 		t.Fatal("current Go test process was accepted as a Boxr namespace helper")
 	}
 }
+
+
+func TestDockerAnonymousVolumeCreateAndPruneProtectsContainerReferences(t *testing.T) {
+	server := setupEngineAPITest(t)
+	t.Setenv("BOXR_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1.45/volumes/create",
+		strings.NewReader(`{"Driver":"local","Labels":{"purpose":"api-prune"}}`))
+	createResponse := httptest.NewRecorder()
+	server.ServeHTTP(createResponse, createRequest)
+	if createResponse.Code != http.StatusCreated {
+		t.Fatalf("anonymous create status=%d body=%s", createResponse.Code, createResponse.Body.String())
+	}
+	var created dockerVolumeResponse
+	if err := json.Unmarshal(createResponse.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	anonymous, err := volume.Get(created.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !anonymous.Anonymous || len(anonymous.Name) != 64 {
+		t.Fatalf("Engine API did not create an anonymous volume: %+v", anonymous)
+	}
+	payload := []byte("anonymous volume data")
+	if err := os.WriteFile(filepath.Join(anonymous.Path, "payload"), payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	named, err := volume.Create("named-prune-volume", map[string]string{"purpose": "api-prune"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(named.Path, "payload"), []byte("named"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	used, err := volume.Create("referenced-prune-volume", map[string]string{"purpose": "api-prune"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := state.Create("stopped-volume-user", []string{"/bin/true"}, container.Options{
+		BindMounts: []container.BindMount{{Source: used.Path, Target: "/data"}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.RemoveCreated(record.ID)
+
+	postPrune := func(filters map[string][]string) *httptest.ResponseRecorder {
+		encodedJSON, err := json.Marshal(filters)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded := base64.RawURLEncoding.EncodeToString(encodedJSON)
+		return engineAPIRequest(server, http.MethodPost, "/v1.45/volumes/prune?filters="+url.QueryEscape(encoded))
+	}
+
+	response := postPrune(map[string][]string{"label": {"purpose=api-prune"}})
+	if response.Code != http.StatusOK {
+		t.Fatalf("default prune status=%d body=%s", response.Code, response.Body.String())
+	}
+	var first dockerVolumePruneResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.VolumesDeleted) != 1 || first.VolumesDeleted[0] != anonymous.Name {
+		t.Fatalf("default prune must remove only the unused anonymous volume: %+v", first)
+	}
+	if first.SpaceReclaimed != int64(len(payload)) {
+		t.Fatalf("default prune reclaimed %d bytes, want %d", first.SpaceReclaimed, len(payload))
+	}
+	if _, err := volume.Get(named.Name); err != nil {
+		t.Fatalf("default prune removed named volume: %v", err)
+	}
+	if _, err := volume.Get(used.Name); err != nil {
+		t.Fatalf("default prune removed a container-referenced volume: %v", err)
+	}
+
+	response = postPrune(map[string][]string{"all": {"true"}, "label": {"purpose=api-prune"}})
+	if response.Code != http.StatusOK {
+		t.Fatalf("all prune status=%d body=%s", response.Code, response.Body.String())
+	}
+	var second dockerVolumePruneResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if len(second.VolumesDeleted) != 1 || second.VolumesDeleted[0] != named.Name {
+		t.Fatalf("all prune must remove unused named volumes but protect referenced ones: %+v", second)
+	}
+	if _, err := volume.Get(used.Name); err != nil {
+		t.Fatalf("all prune removed a container-referenced volume: %v", err)
+	}
+
+	response = postPrune(map[string][]string{"unknown": {"value"}})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("unknown prune filter status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = postPrune(map[string][]string{"all": {"sometimes"}})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid all filter status=%d body=%s", response.Code, response.Body.String())
+	}
+}
