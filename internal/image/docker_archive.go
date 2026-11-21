@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
@@ -136,6 +137,83 @@ type stagedDockerImage struct {
 	root   string
 	config dockerImageConfig
 	tags   []string
+}
+
+// DockerArchiveTags reads and validates the tag manifest of a Docker-save archive
+// without importing layers or mutating the image store. The Engine API uses this
+// preflight to protect tags referenced by persisted containers before import.
+func DockerArchiveTags(archivePath string) ([]string, error) {
+	input, err := openDockerArchive(archivePath)
+	if err != nil {
+		return nil, err
+	}
+	defer input.Close()
+	reader := tar.NewReader(input)
+	var count, totalBytes int64
+	for {
+		header, nextErr := reader.Next()
+		if errors.Is(nextErr, io.EOF) {
+			return nil, fmt.Errorf("Docker archive is missing manifest.json")
+		}
+		if nextErr != nil {
+			return nil, fmt.Errorf("read Docker archive manifest: %w", nextErr)
+		}
+		count++
+		if count > maxDockerArchiveEntries {
+			return nil, fmt.Errorf("Docker archive exceeds %d entries", maxDockerArchiveEntries)
+		}
+		if header.Size < 0 || header.Size > maxDockerArchiveBytes-totalBytes {
+			return nil, fmt.Errorf("Docker archive exceeds %d uncompressed bytes", maxDockerArchiveBytes)
+		}
+		totalBytes += header.Size
+		name, err := cleanDockerArchivePath(header.Name)
+		if err != nil {
+			return nil, fmt.Errorf("unsafe Docker archive path %q: %w", header.Name, err)
+		}
+		if name != "manifest.json" {
+			continue
+		}
+		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+			return nil, fmt.Errorf("Docker archive manifest.json must be a regular file")
+		}
+		const maxManifestBytes = int64(8 << 20)
+		if header.Size == 0 || header.Size > maxManifestBytes {
+			return nil, fmt.Errorf("Docker archive manifest.json must be between 1 byte and %d bytes", maxManifestBytes)
+		}
+		data, err := io.ReadAll(io.LimitReader(reader, maxManifestBytes+1))
+		if err != nil {
+			return nil, fmt.Errorf("read Docker archive manifest.json: %w", err)
+		}
+		if int64(len(data)) != header.Size {
+			return nil, fmt.Errorf("Docker archive manifest.json is truncated")
+		}
+		var entries []dockerManifestEntry
+		if err := json.Unmarshal(data, &entries); err != nil {
+			return nil, fmt.Errorf("decode Docker archive manifest.json: %w", err)
+		}
+		if len(entries) == 0 || len(entries) > maxDockerImageCount {
+			return nil, fmt.Errorf("Docker manifest must contain between 1 and %d images", maxDockerImageCount)
+		}
+		seen := make(map[string]struct{})
+		tags := make([]string, 0, len(entries))
+		for imageIndex, entry := range entries {
+			if len(entry.RepoTags) == 0 {
+				return nil, fmt.Errorf("Docker image %d has no RepoTags", imageIndex+1)
+			}
+			for _, tag := range entry.RepoTags {
+				if err := ValidateReference(tag); err != nil {
+					return nil, fmt.Errorf("Docker image %d has invalid repository tag: %w", imageIndex+1, err)
+				}
+				if _, exists := seen[tag]; exists {
+					return nil, fmt.Errorf("Docker archive contains duplicate repository tag %q", tag)
+				}
+				seen[tag] = struct{}{}
+				tags = append(tags, tag)
+			}
+		}
+		sort.Strings(tags)
+		return tags, nil
+	}
 }
 
 // LoadDockerArchive imports the output of "docker save". Every archive path,
