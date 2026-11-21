@@ -2193,6 +2193,7 @@ func TestEngineAPIDockerBuildCreatesAndTagsVerifiedImage(t *testing.T) {
 	query.Add("t", "registry.example/team/boxr-build:v1")
 	query.Add("t", "registry.example/team/boxr-build:stable")
 	query.Set("platform", "linux/amd64")
+	query.Set("networkmode", "default")
 	query.Set("buildargs", `{"BUILD_VERSION":"1.2.3"}`)
 	request := httptest.NewRequest(http.MethodPost, "/v1.45/build?"+query.Encode(), bytes.NewReader(contextArchive))
 	request.Header.Set("Content-Type", "application/x-tar")
@@ -2289,6 +2290,7 @@ func TestEngineAPIDockerBuildRejectsInvalidQueriesAndUnsafeContexts(t *testing.T
 		"/v1.45/build?t=invalid%20reference",
 		"/v1.45/build?t=demo%3Alatest&dockerfile=..%2Foutside",
 		"/v1.45/build?t=demo%3Alatest&networkmode=bridge",
+		"/v1.45/build?t=demo%3Alatest&rm=0",
 		"/v1.45/build?t=demo%3Alatest&pull=1",
 		"/v1.45/build?t=demo%3Alatest&nocache=1",
 		"/v1.45/build?t=demo%3Alatest&unknown=value",
