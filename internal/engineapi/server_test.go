@@ -3365,6 +3365,7 @@ func TestDockerContainerListSizeReportsBaseAndWritableLayerBytes(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("ordinary list status=%d body=%s", response.Code, response.Body.String())
 	}
+	items = nil
 	if err := json.Unmarshal(response.Body.Bytes(), &items); err != nil {
 		t.Fatal(err)
 	}
