@@ -24,18 +24,18 @@ docker stats --no-stream CONTAINER
 For a remote Engine API listener, provision a CA, a server certificate whose SAN matches the daemon hostname/IP, and client certificates signed by that CA. Start Boxr with:
 
 ```sh
-boxr daemon \\
-  --host tcp://0.0.0.0:2376 \\
-  --tlsverify \\
-  --tlscacert /etc/boxr/ca.pem \\
-  --tlscert /etc/boxr/server-cert.pem \\
+boxr daemon \
+  --host tcp://0.0.0.0:2376 \
+  --tlsverify \
+  --tlscacert /etc/boxr/ca.pem \
+  --tlscert /etc/boxr/server-cert.pem \
   --tlskey /etc/boxr/server-key.pem
 ```
 
 Connect from a Docker-compatible client with its own client certificate and the CA:
 
 ```sh
-docker --host tcp://boxr.example.com:2376 --tlsverify \\
+docker --host tcp://boxr.example.com:2376 --tlsverify \
   --tlscacert ca.pem --tlscert cert.pem --tlskey key.pem version
 ```
 
