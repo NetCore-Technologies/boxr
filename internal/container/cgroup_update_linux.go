@@ -132,7 +132,7 @@ func updateCgroupResourcesAt(root string, pid int, options Options, update Cgrou
 	}
 
 	written := 0
-	for index, change := range changes {
+	for _, change := range changes {
 		controlPath := filepath.Join(path, change.name)
 		if err := writeCgroupFile(controlPath, change.value); err != nil {
 			rollbackErr := rollbackCgroupResourceChanges(path, changes[:written], oldValues[:written])
