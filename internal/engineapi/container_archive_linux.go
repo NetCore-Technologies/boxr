@@ -432,6 +432,9 @@ func addDockerArchiveDirectoryContentsExcluding(lowerPath, upperPath, archiveNam
 		child := children[name]
 		archiveName := path.Join(archiveName, name)
 		if _, skip := excludedDockerArchivePath(archiveName, excluded); skip {
+			if err := addDockerArchiveMountpoint(child.lowerPath, child.upperPath, archiveName, tarWriter, visited); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := addDockerArchiveNodeExcluding(child.lowerPath, child.upperPath, archiveName, tarWriter, visited, depth+1, limiter, excluded); err != nil {
@@ -530,6 +533,45 @@ func addDockerArchiveNodeExcluding(lowerPath, upperPath, archiveName string, tar
 		return fmt.Errorf("refuse to archive special file %q", archiveName)
 	}
 	return nil
+}
+
+func addDockerArchiveMountpoint(lowerPath, upperPath, archiveName string, tarWriter *tar.Writer, visited *int) error {
+	var lowerInfo, upperInfo os.FileInfo
+	var err error
+	if lowerPath != "" {
+		lowerInfo, err = os.Lstat(lowerPath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect lower mountpoint %q: %w", archiveName, err)
+		}
+	}
+	if upperPath != "" {
+		upperInfo, err = os.Lstat(upperPath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect upper mountpoint %q: %w", archiveName, err)
+		}
+	}
+	info := lowerInfo
+	if upperInfo != nil {
+		info = upperInfo
+	}
+	// Preserve empty directory mountpoints in the exported/committed image.
+	// The mount's contents are intentionally never traversed or copied.
+	if info == nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil
+	}
+	(*visited)++
+	if *visited > maxDockerArchiveEntries {
+		return fmt.Errorf("container archive exceeds %d entries", maxDockerArchiveEntries)
+	}
+	if len(archiveName) > maxDockerArchivePath {
+		return fmt.Errorf("archive path exceeds %d bytes", maxDockerArchivePath)
+	}
+	header, err := tar.FileInfoHeader(info, "")
+	if err != nil {
+		return fmt.Errorf("create mountpoint tar header for %q: %w", archiveName, err)
+	}
+	header.Name = strings.TrimSuffix(archiveName, "/") + "/"
+	return tarWriter.WriteHeader(header)
 }
 
 func excludedDockerArchivePath(archiveName string, excluded map[string]struct{}) (string, bool) {
