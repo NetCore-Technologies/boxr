@@ -1055,6 +1055,39 @@ func Inspect(name string) (Summary, error) {
 	return summarize(current.Networks[index]), nil
 }
 
+// InspectDetails returns an owner-local copy of a network including IPAM leases.
+// Callers receive detached maps so they cannot mutate the persisted network store.
+func InspectDetails(name string) (Network, error) {
+	unlock, err := lockStore()
+	if err != nil {
+		return Network{}, err
+	}
+	defer unlock()
+	current, _, err := loadStore()
+	if err != nil {
+		return Network{}, err
+	}
+	index := findNetwork(current.Networks, name)
+	if index < 0 {
+		return Network{}, fmt.Errorf("network %q does not exist", name)
+	}
+	item := current.Networks[index]
+	item.Labels = cloneNetworkLabels(item.Labels)
+	if len(item.Allocations) > 0 {
+		item.Allocations = make(map[string]string, len(item.Allocations))
+		for id, address := range current.Networks[index].Allocations {
+			item.Allocations[id] = address
+		}
+	}
+	if len(item.Published) > 0 {
+		item.Published = make(map[string][]PortMapping, len(current.Networks[index].Published))
+		for id, mappings := range current.Networks[index].Published {
+			item.Published[id] = append([]PortMapping(nil), mappings...)
+		}
+	}
+	return item, nil
+}
+
 // Remove deletes a bridge only after every container has disconnected.
 func Remove(name string) error {
 	return RemoveWithRunner(context.Background(), name, commandRunner{})
