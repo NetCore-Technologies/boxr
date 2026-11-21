@@ -3782,6 +3782,7 @@ var implementedFeatures = []string{
 	"Engine API volume mounts populate empty pre-created local volumes from the immutable image rootfs by default and honor Docker VolumeOptions.NoCopy",
 	"Compose YAML supports bounded Docker-style environment variable interpolation with project .env defaults and process-environment precedence",
 	"Compose healthchecks translate Docker CMD CMD-SHELL and NONE tests plus bounded interval timeout start-period and retry settings into container health monitors",
+	"Compose depends_on service_healthy gates dependent services until the declared dependency container healthcheck reports healthy",
 }
 
 func printFeatures(stdout io.Writer) {

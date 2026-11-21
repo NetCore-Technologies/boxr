@@ -57,7 +57,8 @@ type Service struct {
 	Image          string            `json:"image,omitempty"`
 	Command        []string          `json:"command,omitempty"`
 	Options        container.Options `json:"options"`
-	DependsOn      []string          `json:"dependsOn,omitempty"`
+	DependsOn        []string          `json:"dependsOn,omitempty"`
+	DependsOnHealthy []string          `json:"dependsOnHealthy,omitempty"`
 	Volumes        []VolumeMount     `json:"volumes,omitempty"`
 	Profiles       []string          `json:"profiles,omitempty"`
 	EnvFiles       []string          `json:"envFiles,omitempty"`
@@ -74,6 +75,7 @@ type ServicePlan struct {
 	ContainerName            string                  `json:"containerName,omitempty"`
 	Image                    string                  `json:"image,omitempty"`
 	DependsOn                []string                `json:"dependsOn,omitempty"`
+	DependsOnHealthy          []string                `json:"dependsOnHealthy,omitempty"`
 	Profiles                 []string                `json:"profiles,omitempty"`
 	ReadinessType            string                  `json:"readinessType,omitempty"`
 	Volumes                  []VolumeMount           `json:"volumes,omitempty"`
@@ -462,6 +464,7 @@ func buildPlan(file File) (Plan, error) {
 			return plan, fmt.Errorf("service %q has more than %d dependencies", name, MaxServices)
 		}
 		sort.Strings(deps)
+		dependencySet := make(map[string]struct{}, len(deps))
 		for index, dependency := range deps {
 			if !serviceNamePattern.MatchString(dependency) {
 				return plan, fmt.Errorf("service %q has invalid dependency name %q", name, dependency)
@@ -471,6 +474,26 @@ func buildPlan(file File) (Plan, error) {
 			}
 			if index > 0 && deps[index-1] == dependency {
 				return plan, fmt.Errorf("service %q lists dependency %q more than once", name, dependency)
+			}
+			dependencySet[dependency] = struct{}{}
+		}
+		healthyDeps := append([]string(nil), service.DependsOnHealthy...)
+		if len(healthyDeps) > MaxServices {
+			return plan, fmt.Errorf("service %q has more than %d healthy dependencies", name, MaxServices)
+		}
+		sort.Strings(healthyDeps)
+		for index, dependency := range healthyDeps {
+			if !serviceNamePattern.MatchString(dependency) {
+				return plan, fmt.Errorf("service %q has invalid healthy dependency name %q", name, dependency)
+			}
+			if dependency == name {
+				return plan, fmt.Errorf("service %q cannot wait for itself to become healthy", name)
+			}
+			if index > 0 && healthyDeps[index-1] == dependency {
+				return plan, fmt.Errorf("service %q repeats healthy dependency %q", name, dependency)
+			}
+			if _, declared := dependencySet[dependency]; !declared {
+				return plan, fmt.Errorf("service %q marks %q as healthy without declaring it in dependsOn", name, dependency)
 			}
 		}
 		dependencies[name] = deps
@@ -489,6 +512,7 @@ func buildPlan(file File) (Plan, error) {
 			ContainerName:            containerName,
 			Image:                    service.Image,
 			DependsOn:                deps,
+			DependsOnHealthy:          healthyDeps,
 			Profiles:                 append([]string(nil), service.Profiles...),
 			ReadinessType:            readinessType,
 			Volumes:                  append([]VolumeMount(nil), service.Volumes...),
@@ -522,6 +546,12 @@ func buildPlan(file File) (Plan, error) {
 				return plan, fmt.Errorf("service %q depends on unknown service %q", name, dependency)
 			}
 			dependents[dependency] = append(dependents[dependency], name)
+		}
+		for _, dependency := range file.Services[name].DependsOnHealthy {
+			dependencyService := file.Services[dependency]
+			if !container.HealthcheckEnabled(dependencyService.Options.Healthcheck) {
+				return plan, fmt.Errorf("service %q requires %q to become healthy, but that service has no enabled container healthcheck", name, dependency)
+			}
 		}
 	}
 	for name := range dependents {
