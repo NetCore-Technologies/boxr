@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/manit6752025/boxr/internal/container"
+	boxrnetwork "github.com/manit6752025/boxr/internal/network"
 	imageStore "github.com/manit6752025/boxr/internal/image"
 	"github.com/manit6752025/boxr/internal/state"
 	"github.com/manit6752025/boxr/internal/volume"
@@ -30,16 +31,23 @@ const (
 )
 
 type Server struct {
-	version  string
-	imageMu  sync.Mutex
-	volumeMu sync.Mutex
+	version       string
+	imageMu       sync.Mutex
+	volumeMu      sync.Mutex
+	networkMu     sync.Mutex
+	createNetwork func(string, boxrnetwork.CreateOptions) (boxrnetwork.Network, error)
+	removeNetwork func(string) error
 }
 
 func New(version string) *Server {
 	if strings.TrimSpace(version) == "" {
 		version = "dev"
 	}
-	return &Server{version: version}
+	return &Server{
+		version:       version,
+		createNetwork: boxrnetwork.Create,
+		removeNetwork: boxrnetwork.Remove,
+	}
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -208,6 +216,35 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			s.handleVolumeInspect(writer, name)
 		case http.MethodDelete:
 			s.handleVolumeDelete(writer, name)
+		default:
+			writeMethodErrorFor(writer, http.MethodGet+", "+http.MethodDelete)
+		}
+	case path == "/networks":
+		if !requireMethod(writer, request, http.MethodGet) {
+			return
+		}
+		s.handleNetworks(writer, request)
+	case path == "/networks/create":
+		if !requireMethod(writer, request, http.MethodPost) {
+			return
+		}
+		s.handleNetworkCreate(writer, request)
+	case strings.HasPrefix(path, "/networks/"):
+		remainder := strings.TrimPrefix(path, "/networks/")
+		if remainder == "" || strings.Contains(remainder, "/") {
+			writeError(writer, http.StatusNotFound, fmt.Errorf("network endpoint not found"))
+			return
+		}
+		name, err := url.PathUnescape(remainder)
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, fmt.Errorf("invalid network identifier"))
+			return
+		}
+		switch request.Method {
+		case http.MethodGet:
+			s.handleNetworkInspect(writer, name)
+		case http.MethodDelete:
+			s.handleNetworkDelete(writer, name)
 		default:
 			writeMethodErrorFor(writer, http.MethodGet+", "+http.MethodDelete)
 		}
