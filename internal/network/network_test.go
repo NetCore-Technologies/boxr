@@ -914,17 +914,16 @@ func TestCreateRejectsInvalidOrOutOfSubnetIPRange(t *testing.T) {
 	}
 }
 
-
 func TestCreateRejectsInvalidAuxiliaryIPAMAddresses(t *testing.T) {
 	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
 	for name, addresses := range map[string]map[string]string{
-		"outside subnet": {"reserved": "192.0.2.10"},
-		"network address": {"reserved": "172.30.53.0"},
+		"outside subnet":    {"reserved": "192.0.2.10"},
+		"network address":   {"reserved": "172.30.53.0"},
 		"broadcast address": {"reserved": "172.30.53.255"},
-		"gateway": {"reserved": "172.30.53.1"},
-		"duplicate values": {"first": "172.30.53.10", "second": "172.30.53.10"},
-		"invalid name": {"not valid": "172.30.53.10"},
-		"invalid address": {"reserved": "not-an-ip"},
+		"gateway":           {"reserved": "172.30.53.1"},
+		"duplicate values":  {"first": "172.30.53.10", "second": "172.30.53.10"},
+		"invalid name":      {"not valid": "172.30.53.10"},
+		"invalid address":   {"reserved": "not-an-ip"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := CreateWithRunner(context.Background(), "invalid-aux", CreateOptions{
