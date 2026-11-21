@@ -419,6 +419,10 @@ func safeArchiveTarget(root *os.Root, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	relative := filepath.FromSlash(clean)
+	if !filepath.IsLocal(relative) {
+		return "", fmt.Errorf("archive path is not local to the extraction root")
+	}
 	parts := strings.Split(clean, "/")
 	for index := 1; index < len(parts); index++ {
 		parent := strings.Join(parts[:index], "/")
