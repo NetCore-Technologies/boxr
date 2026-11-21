@@ -588,11 +588,12 @@ func resolveDockerOverlayPathWithSymlinks(lowerRoot, upperRoot, relative string,
 	}
 
 	lowerCurrent, upperCurrent := lowerRoot, upperRoot
+	singleRoot := upperRoot != "" && filepath.Clean(lowerRoot) == filepath.Clean(upperRoot)
 	parts := strings.Split(relative, "/")
 	for index, name := range parts {
 		var lowerChild, upperChild string
 		var lowerEntryInfo, upperEntryInfo os.FileInfo
-		if upperCurrent != "" {
+		if upperCurrent != "" && !singleRoot {
 			whiteouted, err := dockerOverlayWhiteouts(upperCurrent, name)
 			if err != nil {
 				return "", "", nil, err
@@ -607,7 +608,7 @@ func resolveDockerOverlayPathWithSymlinks(lowerRoot, upperRoot, relative string,
 				return "", "", nil, statErr
 			}
 		}
-		parentOpaque := upperCurrent != "" && overlayDirectoryOpaque(upperCurrent)
+		parentOpaque := upperCurrent != "" && !singleRoot && overlayDirectoryOpaque(upperCurrent)
 		if lowerCurrent != "" && !parentOpaque {
 			candidate := filepath.Join(lowerCurrent, name)
 			if info, statErr := os.Lstat(candidate); statErr == nil {
