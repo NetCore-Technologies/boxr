@@ -486,7 +486,7 @@ func RemoveMany(references []string) error {
 	}
 	index.Manifests = updated
 	return writeIndex(dir, index)
- }
+}
 
 func Unpack(reference, destination string) (rootfs.Manifest, error) {
 	if err := ValidateReference(reference); err != nil {
