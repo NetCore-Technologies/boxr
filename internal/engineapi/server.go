@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -642,6 +644,106 @@ func displayName(record state.Record) string {
 	return "/" + record.ID
 }
 
+func dockerNetworkAttachments(records []state.Record) (map[string]map[string]any, error) {
+	summaries, err := boxrnetwork.List()
+	if err != nil {
+		return nil, fmt.Errorf("list managed container networks: %w", err)
+	}
+	networks := make([]boxrnetwork.Network, 0, len(summaries))
+	for _, summary := range summaries {
+		item, err := boxrnetwork.InspectDetails(summary.Name)
+		if err != nil {
+			return nil, fmt.Errorf("inspect managed network %q: %w", summary.Name, err)
+		}
+		networks = append(networks, item)
+	}
+	return dockerNetworkAttachmentsFromNetworks(networks, records)
+}
+
+// dockerNetworkAttachmentsFromNetworks maps persisted Boxr IPAM leases into
+// Docker's per-container NetworkSettings.Networks representation. It reports
+// corrupt persisted addresses instead of returning misleading network data.
+func dockerNetworkAttachmentsFromNetworks(networks []boxrnetwork.Network, records []state.Record) (map[string]map[string]any, error) {
+	knownContainers := make(map[string]struct{}, len(records))
+	for _, record := range records {
+		knownContainers[record.ID] = struct{}{}
+	}
+	result := make(map[string]map[string]any, len(records))
+	for _, network := range networks {
+		if len(network.Allocations) == 0 {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(network.Subnet)
+		if err != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() {
+			return nil, fmt.Errorf("managed network %q has an invalid IPv4 subnet", network.Name)
+		}
+		gateway, err := netip.ParseAddr(network.Gateway)
+		if err != nil || !gateway.Is4() || !prefix.Contains(gateway) {
+			return nil, fmt.Errorf("managed network %q has an invalid IPv4 gateway", network.Name)
+		}
+		if strings.TrimSpace(network.Name) == "" || strings.TrimSpace(network.ID) == "" {
+			return nil, fmt.Errorf("managed network has an empty name or ID")
+		}
+		for containerID, rawAddress := range network.Allocations {
+			if _, exists := knownContainers[containerID]; !exists {
+				continue
+			}
+			address, err := netip.ParseAddr(rawAddress)
+			if err != nil || !address.Is4() || !prefix.Contains(address) || address == gateway {
+				return nil, fmt.Errorf("managed network %q has an invalid IPv4 lease for container %s", network.Name, containerID)
+			}
+			attachments := result[containerID]
+			if attachments == nil {
+				attachments = make(map[string]any)
+				result[containerID] = attachments
+			}
+			attachments[network.Name] = map[string]any{
+				"IPAMConfig": nil, "Links": nil, "Aliases": []string{},
+				"NetworkID": network.ID, "EndpointID": "",
+				"Gateway": gateway.String(), "IPAddress": address.String(),
+				"IPPrefixLen": prefix.Bits(), "IPv6Gateway": "",
+				"GlobalIPv6Address": "", "GlobalIPv6PrefixLen": 0,
+				"MacAddress": "", "DriverOpts": nil,
+			}
+		}
+	}
+	return result, nil
+}
+
+func dockerContainerNetworkSettings(record state.Record, ports map[string][]map[string]string, attachments map[string]map[string]any) map[string]any {
+	networks := attachments[record.ID]
+	if networks == nil {
+		networks = make(map[string]any)
+	}
+	settings := map[string]any{
+		"Ports": ports, "Networks": networks,
+		"Bridge": "", "EndpointID": "", "Gateway": "",
+		"GlobalIPv6Address": "", "GlobalIPv6PrefixLen": 0,
+		"IPAddress": "", "IPPrefixLen": 0, "IPv6Gateway": "",
+		"MacAddress": "",
+	}
+	names := make([]string, 0, len(networks))
+	for name := range networks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	primary := record.Options.NetworkName
+	if _, exists := networks[primary]; !exists && len(names) > 0 {
+		primary = names[0]
+	}
+	if value, exists := networks[primary]; exists {
+		if endpoint, ok := value.(map[string]any); ok {
+			settings["Gateway"] = endpoint["Gateway"]
+			settings["IPAddress"] = endpoint["IPAddress"]
+			settings["IPPrefixLen"] = endpoint["IPPrefixLen"]
+			settings["IPv6Gateway"] = endpoint["IPv6Gateway"]
+			settings["GlobalIPv6Address"] = endpoint["GlobalIPv6Address"]
+			settings["GlobalIPv6PrefixLen"] = endpoint["GlobalIPv6PrefixLen"]
+		}
+	}
+	return settings
+}
+
 func (s *Server) handleContainers(writer http.ResponseWriter, request *http.Request) {
 	all, err := boolQuery(request, "all")
 	if err != nil {
@@ -656,6 +758,11 @@ func (s *Server) handleContainers(writer http.ResponseWriter, request *http.Requ
 	filters, err := parseFilters(request.URL.Query().Get("filters"))
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	networkAttachments, err := dockerNetworkAttachments(records)
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err)
 		return
 	}
 	result := make([]map[string]any, 0, len(records))
@@ -680,7 +787,7 @@ func (s *Server) handleContainers(writer http.ResponseWriter, request *http.Requ
 			"Ports": portsForOptions(record.Options), "Labels": record.Labels,
 			"State": containerState(record), "Status": dockerStatusWithHealth(containerStatus(record), record.Health),
 			"HostConfig":      map[string]any{"NetworkMode": dockerNetworkMode(record.Options)},
-			"NetworkSettings": map[string]any{"Networks": map[string]any{}},
+			"NetworkSettings": map[string]any{"Networks": networkAttachments[record.ID]},
 		}
 		result = append(result, item)
 	}
@@ -1215,9 +1322,12 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 		"Tmpfs":      tmpfsHostConfig,
 		"Privileged": false, "ReadonlyRootfs": record.Options.ReadOnlyRootFS,
 	}
-	networkSettings := map[string]any{
-		"Ports": ports, "Networks": map[string]any{},
+	networkAttachments, err := dockerNetworkAttachments([]state.Record{record})
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, err)
+		return
 	}
+	networkSettings := dockerContainerNetworkSettings(record, ports, networkAttachments)
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"Id": record.ID, "Created": created, "Path": path, "Args": commandArgs,
 		"State": stateObject, "Image": image, "Name": displayName(record),
