@@ -21,9 +21,18 @@ type dockerfileStep struct {
 	value       string
 	copyMode    os.FileMode
 	hasCopyMode bool
+	copyFrom    string
 	command     []string
 	env         []string
 	user        string
+}
+
+type dockerfileStage struct {
+	name       string
+	base       string
+	config     ImageRuntimeConfig
+	steps      []dockerfileStep
+	hasWorkdir bool
 }
 
 const (
@@ -56,7 +65,7 @@ func LoadDockerfileWithArgs(filename string, buildArgs map[string]string) (Build
 
 // ParseDockerfile converts the supported Dockerfile subset into a Boxr build
 // plan. RUN instructions are executed later inside Boxr's isolated runtime;
-// ADD and multi-stage builds are rejected rather than silently skipped.
+// local multi-stage FROM and COPY --from relationships are validated before building.
 func ParseDockerfile(data []byte) (BuildSpec, error) {
 	return ParseDockerfileWithArgs(data, nil)
 }
@@ -84,6 +93,8 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 	workingDir := "/"
 	currentUser := ""
 	fromSeen := false
+	currentStageName := ""
+	var stages []dockerfileStage
 	instructionCount := 0
 	var logical strings.Builder
 	logicalStart := 0
@@ -136,16 +147,35 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 			return nil
 		}
 		expanded := expandDockerVariables(rest, args, environment)
+		if instruction == "FROM" {
+			expanded = expandDockerVariables(rest, globalArgs, nil)
+		}
 		switch instruction {
 		case "FROM":
 			if fromSeen {
-				return fmt.Errorf("line %d: multi-stage FROM is not supported yet", lineNumber)
+				stages = append(stages, dockerfileStage{
+					name: currentStageName, base: spec.Base, config: spec.Config,
+					steps: append([]dockerfileStep(nil), spec.dockerfileSteps...),
+					hasWorkdir: spec.dockerfileHasWorkdir,
+				})
+				spec.Config = ImageRuntimeConfig{}
+				spec.Copy = nil
+				spec.dockerfileSteps = nil
+				spec.dockerfileHasWorkdir = false
+				environment = make(map[string]string)
+				workingDir = "/"
+				currentUser = ""
 			}
 			words, err := dockerfileWords(expanded)
 			if err != nil {
 				return fmt.Errorf("line %d: parse FROM: %w", lineNumber, err)
 			}
+			stageName := ""
 			if len(words) == 3 && strings.EqualFold(words[1], "AS") {
+				stageName = words[2]
+				if !dockerfileStageIdentifier(stageName) {
+					return fmt.Errorf("line %d: invalid Dockerfile stage name %q", lineNumber, stageName)
+				}
 				words = words[:1]
 			}
 			if len(words) != 1 {
@@ -155,6 +185,7 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 				return fmt.Errorf("line %d: FROM platform flags are not supported; use --platform on boxr image build", lineNumber)
 			}
 			spec.Base = words[0]
+			currentStageName = stageName
 			fromSeen = true
 			// Global ARG declarations are used for FROM expansion only.
 			args = make(map[string]string)
@@ -164,6 +195,7 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 			remaining := strings.TrimSpace(expanded)
 			copyMode := os.FileMode(0)
 			hasCopyMode := false
+			copyFrom := ""
 			for strings.HasPrefix(remaining, "--") {
 				split := strings.IndexFunc(remaining, unicode.IsSpace)
 				option := remaining
@@ -174,17 +206,27 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 					remaining = ""
 				}
 				name, value, hasValue := strings.Cut(option, "=")
-				if instructionName != "COPY" || name != "--chmod" || !hasValue || hasCopyMode {
-					return fmt.Errorf("line %d: unsupported %s option %q; COPY supports one octal --chmod=MODE option", lineNumber, instructionName, option)
+				switch name {
+				case "--chmod":
+					if instructionName != "COPY" || !hasValue || hasCopyMode {
+						return fmt.Errorf("line %d: unsupported %s option %q; COPY supports one octal --chmod=MODE option", lineNumber, instructionName, option)
+					}
+					if len(value) < 3 || len(value) > 4 {
+						return fmt.Errorf("line %d: COPY --chmod must be a three- or four-digit octal mode from 000 to 0777", lineNumber)
+					}
+					mode, modeErr := strconv.ParseUint(value, 8, 12)
+					if modeErr != nil || mode > 0777 {
+						return fmt.Errorf("line %d: COPY --chmod mode %q is invalid; setuid, setgid and sticky bits are not supported", lineNumber, value)
+					}
+					copyMode, hasCopyMode = os.FileMode(mode), true
+				case "--from":
+					if instructionName != "COPY" || !hasValue || value == "" || copyFrom != "" {
+						return fmt.Errorf("line %d: COPY --from requires one previously declared stage name or index", lineNumber)
+					}
+					copyFrom = value
+				default:
+					return fmt.Errorf("line %d: unsupported %s option %q", lineNumber, instructionName, option)
 				}
-				if len(value) < 3 || len(value) > 4 {
-					return fmt.Errorf("line %d: COPY --chmod must be a three- or four-digit octal mode from 000 to 0777", lineNumber)
-				}
-				mode, modeErr := strconv.ParseUint(value, 8, 12)
-				if modeErr != nil || mode > 0777 {
-					return fmt.Errorf("line %d: COPY --chmod mode %q is invalid; setuid, setgid and sticky bits are not supported", lineNumber, value)
-				}
-				copyMode, hasCopyMode = os.FileMode(mode), true
 			}
 			var words []string
 			if strings.HasPrefix(remaining, "[") {
@@ -217,9 +259,22 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 				if instructionName == "ADD" && isRemoteDockerfileSource(source) {
 					return fmt.Errorf("line %d: remote ADD sources are not supported; download the file explicitly into the build context", lineNumber)
 				}
+					if strings.TrimSpace(source) == "" {
+						return fmt.Errorf("line %d: %s source must not be empty", lineNumber, instructionName)
+					}
 				cleanSource := path.Clean(source)
-				if strings.HasPrefix(cleanSource, "/") || cleanSource == ".." || strings.HasPrefix(cleanSource, "../") {
-					return fmt.Errorf("line %d: %s source %q must stay inside the build context", lineNumber, instructionName, source)
+				if copyFrom == "" {
+					if strings.HasPrefix(cleanSource, "/") || cleanSource == ".." || strings.HasPrefix(cleanSource, "../") {
+						return fmt.Errorf("line %d: %s source %q must stay inside the build context", lineNumber, instructionName, source)
+					}
+				} else {
+					if cleanSource == ".." || strings.HasPrefix(cleanSource, "../") {
+						return fmt.Errorf("line %d: COPY --from source %q must stay inside the source stage", lineNumber, source)
+					}
+					cleanSource = strings.TrimPrefix(cleanSource, "/")
+					if cleanSource == "" {
+						cleanSource = "."
+					}
 				}
 				if strings.ContainsAny(cleanSource, "*?[]") {
 					return fmt.Errorf("line %d: %s wildcard sources are not supported yet", lineNumber, instructionName)
@@ -237,7 +292,7 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 				}
 				spec.dockerfileSteps = append(spec.dockerfileSteps, dockerfileStep{
 					kind: stepKind, source: cleanSource, destination: stepDestination,
-					copyMode: copyMode, hasCopyMode: hasCopyMode,
+					copyMode: copyMode, hasCopyMode: hasCopyMode, copyFrom: copyFrom,
 				})
 			}
 
@@ -393,6 +448,33 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 	if !fromSeen {
 		return spec, fmt.Errorf("Dockerfile must contain exactly one FROM instruction")
 	}
+	if len(stages) > 0 {
+		stages = append(stages, dockerfileStage{
+			name: currentStageName, base: spec.Base, config: spec.Config,
+			steps: append([]dockerfileStep(nil), spec.dockerfileSteps...),
+			hasWorkdir: spec.dockerfileHasWorkdir,
+		})
+	}
+	if len(stages) > 0 {
+		if err := validateDockerfileStages(stages); err != nil {
+			return spec, err
+		}
+		if len(stages) > 1 {
+			spec.dockerfileStages = stages
+			spec.Base = "scratch"
+			spec.Copy = nil
+			spec.dockerfileSteps = nil
+			spec.Config = stages[len(stages)-1].config
+			spec.dockerfileHasWorkdir = stages[len(stages)-1].hasWorkdir
+		}
+	}
+	if len(stages) == 0 {
+		if err := validateDockerfileStages([]dockerfileStage{{
+			base: spec.Base, config: spec.Config, steps: spec.dockerfileSteps,
+		}}); err != nil {
+			return spec, err
+		}
+	}
 	unusedArgs := make([]string, 0)
 	for key := range providedArgs {
 		if !usedBuildArgs[key] {
@@ -407,6 +489,60 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 		return spec, fmt.Errorf("invalid Dockerfile build configuration: %w", err)
 	}
 	return spec, nil
+}
+
+func dockerfileStageIdentifier(value string) bool {
+	if value == "" || strings.EqualFold(value, "scratch") {
+		return false
+	}
+	for index, character := range value {
+		if character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' ||
+			character == '_' || index > 0 && (character >= '0' && character <= '9' || character == '-' || character == '.') {
+			continue
+		}
+		return false
+	}
+	_, numericErr := strconv.Atoi(value)
+	return numericErr != nil
+}
+
+func dockerfileStageIndex(reference string, names map[string]int, current int) (int, bool) {
+	if index, err := strconv.Atoi(reference); err == nil {
+		return index, index >= 0 && index < current
+	}
+	index, ok := names[strings.ToLower(reference)]
+	return index, ok && index < current
+}
+
+func validateDockerfileStages(stages []dockerfileStage) error {
+	names := make(map[string]int, len(stages))
+	for index, stage := range stages {
+		if stage.name != "" {
+			key := strings.ToLower(stage.name)
+			if _, exists := names[key]; exists {
+				return fmt.Errorf("Dockerfile stage name %q is declared more than once", stage.name)
+			}
+		}
+		if _, fromStage := dockerfileStageIndex(stage.base, names, index); !fromStage && stage.base != "scratch" {
+			if err := ValidateReference(stage.base); err != nil {
+				return fmt.Errorf("Dockerfile stage %d has an invalid base image: %w", index+1, err)
+			}
+		}
+		if err := ValidateBuildSpec(BuildSpec{Version: 1, Base: "scratch", Config: stage.config}); err != nil {
+			return fmt.Errorf("Dockerfile stage %d has invalid configuration: %w", index+1, err)
+		}
+		for _, step := range stage.steps {
+			if step.copyFrom != "" {
+				if _, ok := dockerfileStageIndex(step.copyFrom, names, index); !ok {
+					return fmt.Errorf("Dockerfile stage %d COPY --from=%s must reference a previously declared stage", index+1, step.copyFrom)
+				}
+			}
+		}
+		if stage.name != "" {
+			names[strings.ToLower(stage.name)] = index
+		}
+	}
+	return nil
 }
 
 func dockerfileWords(value string) ([]string, error) {

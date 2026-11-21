@@ -41,17 +41,18 @@ func TestParseDockerfileSupportedInstructions(t *testing.T) {
 	}
 }
 
-func TestParseDockerfileRejectsRunAndMultiStage(t *testing.T) {
+func TestParseDockerfileRejectsUnsupportedInstructionsAndUnresolvedStageCopies(t *testing.T) {
 	for _, input := range []string{
-		"FROM scratch AS build\nFROM scratch AS final\n",
 		"FROM scratch\nADD https://example.invalid/app.tar /app\n",
 		"FROM scratch\nCOPY --from=build /app /app\n",
+		"FROM scratch AS scratch\nFROM scratch AS runtime\n",
 	} {
 		if _, err := ParseDockerfile([]byte(input)); err == nil {
 			t.Errorf("unsupported Dockerfile was accepted: %q", input)
 		}
 	}
 }
+
 
 func TestBuildDockerfileUsesDockerignoreAndPersistsConfig(t *testing.T) {
 	useStore(t)
@@ -317,6 +318,44 @@ func TestParseDockerfileCopyChmodSupportsBoundedOctalModes(t *testing.T) {
 	} {
 		if _, err := ParseDockerfile([]byte("FROM scratch\n" + instruction + "\n")); err == nil {
 			t.Errorf("unsupported COPY/ADD options were accepted: %s", instruction)
+		}
+	}
+}
+
+func TestParseDockerfileUsesGlobalBuildArgsAcrossStages(t *testing.T) {
+	spec, err := ParseDockerfile([]byte("ARG BASE=scratch\nFROM ${BASE} AS builder\nFROM ${BASE} AS runtime\nCOPY --from=0 /app /app\n"))
+	if err != nil {
+		t.Fatalf("ParseDockerfile with global FROM ARG: %v", err)
+	}
+	if len(spec.dockerfileStages) != 2 || spec.dockerfileStages[0].base != "scratch" || spec.dockerfileStages[1].base != "scratch" {
+		t.Fatalf("global FROM ARG was not expanded in each stage: %#v", spec.dockerfileStages)
+	}
+}
+
+func TestParseDockerfileSupportsNamedAndIndexedStages(t *testing.T) {
+	spec, err := ParseDockerfile([]byte("FROM scratch AS builder\nCOPY artifact /out/artifact\nFROM scratch AS runtime\nCOPY --from=builder /out/artifact /app/artifact\n"))
+	if err != nil {
+		t.Fatalf("ParseDockerfile multi-stage: %v", err)
+	}
+	if len(spec.dockerfileStages) != 2 || spec.dockerfileStages[0].name != "builder" || spec.dockerfileStages[1].name != "runtime" {
+		t.Fatalf("parsed stages = %#v", spec.dockerfileStages)
+	}
+	last := spec.dockerfileStages[1].steps
+	if len(last) != 1 || last[0].copyFrom != "builder" || last[0].source != "out/artifact" {
+		t.Fatalf("COPY --from stage step = %#v", last)
+	}
+	indexed, err := ParseDockerfile([]byte("FROM scratch\nCOPY artifact /out/artifact\nFROM scratch\nCOPY --from=0 /out/artifact /app/artifact\n"))
+	if err != nil || len(indexed.dockerfileStages) != 2 || indexed.dockerfileStages[1].steps[0].copyFrom != "0" {
+		t.Fatalf("indexed COPY --from parsed %#v, error=%v", indexed.dockerfileStages, err)
+	}
+	for _, invalid := range []string{
+		"FROM scratch AS bad\nCOPY --from=missing /file /file\n",
+		"FROM scratch AS first\nCOPY --from=second /file /file\nFROM scratch AS second\n",
+		"FROM scratch AS first\nFROM scratch AS first\n",
+		"FROM scratch AS 0\n",
+	} {
+		if _, err := ParseDockerfile([]byte(invalid)); err == nil {
+			t.Errorf("invalid multi-stage Dockerfile was accepted: %q", invalid)
 		}
 	}
 }

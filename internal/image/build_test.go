@@ -67,6 +67,89 @@ func TestBuildDockerfileCopyChmodAppliesModesInsideImageRootfs(t *testing.T) {
 	}
 }
 
+func TestBuildDockerfileMultiStageCopiesArtifactsFromNamedAndIndexedStages(t *testing.T) {
+	useStore(t)
+	baseRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(baseRoot, "etc"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(baseRoot, "etc", "base-release"), []byte("local base image\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ImportRootFS(baseRoot, "demo:base"); err != nil {
+		t.Fatalf("import local base image: %v", err)
+	}
+
+	contextDir := t.TempDir()
+	artifactPath := filepath.Join(contextDir, "artifact")
+	if err := os.WriteFile(artifactPath, []byte("compiled application payload\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dockerfile := filepath.Join(contextDir, "Dockerfile")
+	content := strings.Join([]string{
+		"FROM demo:base AS builder",
+		"WORKDIR /build",
+		"COPY artifact ./app",
+		"FROM builder AS intermediate",
+		"COPY --from=builder /build/app /opt/app",
+		"FROM intermediate AS runtime",
+		"COPY --from=1 --chmod=0755 /opt/app /usr/local/bin/app",
+		"CMD [\"/usr/local/bin/app\"]",
+		"",
+	}, "\n")
+	if err := os.WriteFile(dockerfile, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	created, err := BuildDockerfileForPlatform(contextDir, dockerfile, "demo:multi-stage", "")
+	if err != nil {
+		t.Fatalf("BuildDockerfileForPlatform: %v", err)
+	}
+	if created.Reference != "demo:multi-stage" {
+		t.Fatalf("built reference = %q", created.Reference)
+	}
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if _, err := Unpack(created.Reference, root); err != nil {
+		t.Fatalf("unpack final image: %v", err)
+	}
+	baseMarker, err := os.ReadFile(filepath.Join(root, "etc", "base-release"))
+	if err != nil || string(baseMarker) != "local base image\n" {
+		t.Fatalf("FROM builder did not preserve inherited base files: contents=%q error=%v", baseMarker, err)
+	}
+	output := filepath.Join(root, "usr", "local", "bin", "app")
+	data, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatalf("read final-stage artifact: %v", err)
+	}
+	if string(data) != "compiled application payload\n" {
+		t.Fatalf("final-stage file contents = %q", data)
+	}
+	info, err := os.Stat(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0755 {
+		t.Fatalf("final-stage COPY --chmod mode = %04o, want 0755", got)
+	}
+	if len(created.RuntimeConfig.Cmd) != 1 || created.RuntimeConfig.Cmd[0] != "/usr/local/bin/app" {
+		t.Fatalf("final stage runtime CMD was not preserved: %#v", created.RuntimeConfig.Cmd)
+	}
+	images, err := List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(images) != 2 {
+		t.Fatalf("intermediate stages were published as images: %#v", images)
+	}
+	seen := map[string]bool{}
+	for _, item := range images {
+		seen[item.Reference] = true
+	}
+	if !seen["demo:base"] || !seen["demo:multi-stage"] {
+		t.Fatalf("expected only the explicit base and final image to be published: %#v", images)
+	}
+}
+
+
 func TestBuildCopiesFilesAndPersistsRuntimeConfig(t *testing.T) {
 	useStore(t)
 	contextDir := t.TempDir()
@@ -242,6 +325,33 @@ func TestBuildFromLocalImageBaseInheritsAndOverridesRuntimeConfig(t *testing.T) 
 	}
 	if config.Labels["org.example.base"] != "kept" || config.Labels["org.example.shared"] != "child" || config.Labels["org.example.child"] != "added" {
 		t.Fatalf("base/child labels were not merged: %v", config.Labels)
+	}
+}
+
+func TestBuildRejectsCopyThroughSymlinkSourcePath(t *testing.T) {
+	useStore(t)
+	contextDir := t.TempDir()
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "secret")
+	if err := os.WriteFile(outsideFile, []byte("must not be copied"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideDir, filepath.Join(contextDir, "redirect")); err != nil {
+		t.Fatal(err)
+	}
+	specPath := writeBuildSpec(t, contextDir, BuildSpec{
+		Version: 1,
+		Base:    "scratch",
+		Copy:    []CopyInstruction{{Source: "redirect/secret", Destination: "/leaked"}},
+	})
+	if _, err := Build(contextDir, specPath, "demo:copy-symlink-source"); err == nil || !strings.Contains(err.Error(), "traverses symlink") {
+		t.Fatalf("COPY through an intermediate source symlink returned %v, want explicit rejection", err)
+	}
+	if data, err := os.ReadFile(outsideFile); err != nil || string(data) != "must not be copied" {
+		t.Fatalf("outside source was unexpectedly modified: data=%q error=%v", data, err)
+	}
+	if _, err := Inspect("demo:copy-symlink-source"); err == nil {
+		t.Fatal("failed symlink traversal unexpectedly published an image")
 	}
 }
 

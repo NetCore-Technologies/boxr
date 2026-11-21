@@ -36,6 +36,7 @@ type BuildSpec struct {
 	Config  ImageRuntimeConfig `json:"config,omitempty"`
 
 	dockerfileSteps      []dockerfileStep
+	dockerfileStages     []dockerfileStage
 	dockerfileNetwork    string
 	dockerfileHasWorkdir bool
 }
@@ -173,6 +174,180 @@ func BuildForPlatform(contextDir, specPath, reference, platform string) (Image, 
 	return buildWithSpec(contextDir, spec, reference, platform, ".boxrignore")
 }
 
+
+// buildDockerfileStages evaluates a multi-stage Dockerfile in declaration
+// order. Intermediate filesystems remain private temporary directories; only
+// the final stage is committed to the local image store.
+func buildDockerfileStages(
+	contextRoot string,
+	stages []dockerfileStage,
+	reference, osName, architecture, variant, networkMode, ignoreFile string,
+	additionalIgnorePaths []string,
+) (Image, error) {
+	var empty Image
+	if len(stages) < 2 {
+		return empty, fmt.Errorf("multi-stage build requires at least two stages")
+	}
+	ignorePatterns, err := loadIgnorePatternsNamed(contextRoot, ignoreFile)
+	if err != nil {
+		return empty, err
+	}
+	for _, ignored := range additionalIgnorePaths {
+		if ignored != "" && ignored != "." {
+			ignorePatterns = append(ignorePatterns, ignorePattern{value: filepath.ToSlash(ignored)})
+		}
+	}
+	workspace, err := os.MkdirTemp("", "boxr-multistage-build-*")
+	if err != nil {
+		return empty, fmt.Errorf("create multi-stage build workspace: %w", err)
+	}
+	defer os.RemoveAll(workspace)
+
+	stageRoots := make([]string, len(stages))
+	stageConfigs := make([]ImageRuntimeConfig, len(stages))
+	stageNames := make(map[string]int, len(stages))
+
+	for stageIndex, stage := range stages {
+		root := filepath.Join(workspace, fmt.Sprintf("stage-%03d-rootfs", stageIndex))
+		var baseConfig ImageRuntimeConfig
+		if baseIndex, isStage := dockerfileStageIndex(stage.base, stageNames, stageIndex); isStage {
+			if err := os.Mkdir(root, 0755); err != nil {
+				return empty, fmt.Errorf("create Dockerfile stage %d rootfs: %w", stageIndex+1, err)
+			}
+			if err := applyCopy(stageRoots[baseIndex], root, CopyInstruction{Source: ".", Destination: "/"}, nil); err != nil {
+				return empty, fmt.Errorf("inherit Dockerfile stage %d from stage %q: %w", stageIndex+1, stage.base, err)
+			}
+			baseConfig = stageConfigs[baseIndex]
+		} else if stage.base != "scratch" {
+			verified, err := Verify(stage.base)
+			if err != nil {
+				return empty, fmt.Errorf("verify base image %q for Dockerfile stage %d (base images must already exist locally; pull first with boxr image pull): %w", stage.base, stageIndex+1, err)
+			}
+			if verified.OS != osName || verified.Arch != architecture {
+				return empty, fmt.Errorf("base image %q platform %s/%s does not match build target %s/%s", stage.base, verified.OS, verified.Arch, osName, architecture)
+			}
+			if variant != "" && verified.Variant != variant {
+				return empty, fmt.Errorf("base image %q variant %q does not match build target variant %q", stage.base, verified.Variant, variant)
+			}
+			if variant == "" && verified.Variant != "" {
+				if _, _, _, err := parseBuildPlatform(osName + "/" + architecture + "/" + verified.Variant); err != nil {
+					return empty, fmt.Errorf("base image %q has an unsupported platform variant: %w", stage.base, err)
+				}
+				variant = verified.Variant
+			}
+			if err := ValidateBuildSpec(BuildSpec{Version: 1, Base: "scratch", Config: verified.RuntimeConfig}); err != nil {
+				return empty, fmt.Errorf("base image %q has invalid runtime configuration: %w", stage.base, err)
+			}
+			baseConfig = verified.RuntimeConfig
+			if _, err := Unpack(stage.base, root); err != nil {
+				return empty, fmt.Errorf("extract verified base image %q: %w", stage.base, err)
+			}
+		} else {
+			if err := os.Mkdir(root, 0755); err != nil {
+				return empty, fmt.Errorf("create Dockerfile stage %d rootfs: %w", stageIndex+1, err)
+			}
+		}
+
+		runtimeConfig := inheritBuildRuntimeConfig(baseConfig, stage.config)
+		workingDir := "/"
+		if baseConfig.WorkingDir != "" {
+			workingDir = baseConfig.WorkingDir
+		}
+		copyNumber, runNumber := 0, 0
+		for _, step := range stage.steps {
+			switch step.kind {
+			case "copy", "add":
+				destination := step.destination
+				if !path.IsAbs(destination) {
+					destination = path.Join(workingDir, destination)
+				}
+				copyNumber++
+				copyRoot := contextRoot
+				copyIgnore := ignorePatterns
+				if step.copyFrom != "" {
+					fromIndex, ok := dockerfileStageIndex(step.copyFrom, stageNames, stageIndex)
+					if !ok {
+						return empty, fmt.Errorf("Dockerfile stage %d COPY --from=%s does not reference a prior stage", stageIndex+1, step.copyFrom)
+					}
+					copyRoot = stageRoots[fromIndex]
+					copyIgnore = nil
+				}
+				instruction := CopyInstruction{Source: step.source, Destination: path.Clean(destination)}
+				var copyErr error
+				if step.kind == "add" {
+					copyErr = applyAdd(copyRoot, root, instruction, copyIgnore)
+				} else {
+					copyErr = applyCopy(copyRoot, root, instruction, copyIgnore)
+				}
+				if copyErr == nil && step.kind == "copy" && step.hasCopyMode {
+					copyErr = applyDockerfileCopyMode(copyRoot, root, instruction, copyIgnore, step.copyMode)
+				}
+				if copyErr != nil {
+					return empty, fmt.Errorf("Dockerfile stage %d %s %d: %w", stageIndex+1, strings.ToUpper(step.kind), copyNumber, copyErr)
+				}
+			case "workdir":
+				if path.IsAbs(step.value) {
+					workingDir = path.Clean(step.value)
+				} else {
+					workingDir = path.Clean(path.Join(workingDir, step.value))
+				}
+				destination, err := rootfsDestination(root, workingDir)
+				if err != nil {
+					return empty, err
+				}
+				if _, err := ensureRootfsDirectory(root, destination); err != nil {
+					return empty, fmt.Errorf("create Dockerfile stage %d WORKDIR %q: %w", stageIndex+1, workingDir, err)
+				}
+			case "run":
+				runNumber++
+				buildUser := step.user
+				if buildUser == "" {
+					buildUser = baseConfig.User
+				}
+				if buildUser != "" && buildUser != "root" && buildUser != "0" && buildUser != "0:0" {
+					return empty, fmt.Errorf("Dockerfile stage %d RUN %d after USER %q is not supported yet; build commands currently execute as root inside a user namespace", stageIndex+1, runNumber, buildUser)
+				}
+				if len(step.command) == 0 {
+					return empty, fmt.Errorf("Dockerfile stage %d RUN %d: command is empty", stageIndex+1, runNumber)
+				}
+				mode := networkMode
+				if mode == "" {
+					mode = "none"
+				}
+				runOptions := container.Options{
+					RootFS: root, Workdir: workingDir,
+					Env: mergeBuildEnvironment(baseConfig.Env, step.env), ClearEnv: true,
+					NetworkMode: mode, UserNamespace: true, MountProc: true,
+					NoNewPrivileges: true, SeccompProfile: "baseline",
+					DropCapabilities: []string{"ALL"},
+				}
+				if err := runDockerfileCommand(step.command[0], step.command[1:], runOptions); err != nil {
+					return empty, fmt.Errorf("Dockerfile stage %d RUN %d: %w", stageIndex+1, runNumber, err)
+				}
+			}
+		}
+		if stage.hasWorkdir {
+			runtimeConfig.WorkingDir = workingDir
+		}
+		if runtimeConfig.WorkingDir != "" {
+			destination, err := rootfsDestination(root, runtimeConfig.WorkingDir)
+			if err != nil {
+				return empty, err
+			}
+			if _, err := ensureRootfsDirectory(root, destination); err != nil {
+				return empty, fmt.Errorf("create image WorkingDir for Dockerfile stage %d: %w", stageIndex+1, err)
+			}
+		}
+		stageRoots[stageIndex] = root
+		stageConfigs[stageIndex] = runtimeConfig
+		if stage.name != "" {
+			stageNames[strings.ToLower(stage.name)] = stageIndex
+		}
+	}
+	last := len(stages) - 1
+	return ImportRootFSWithConfig(stageRoots[last], reference, osName, architecture, variant, stageConfigs[last])
+}
+
 func buildWithSpec(contextDir string, spec BuildSpec, reference, platform, ignoreFile string, additionalIgnorePaths ...string) (Image, error) {
 	if err := ValidateReference(reference); err != nil {
 		return Image{}, err
@@ -191,6 +366,13 @@ func buildWithSpec(contextDir string, spec BuildSpec, reference, platform, ignor
 	}
 	if contextInfo.Mode()&os.ModeSymlink != 0 || !contextInfo.IsDir() {
 		return Image{}, fmt.Errorf("build context must be a real directory, not a symlink")
+	}
+
+	if len(spec.dockerfileStages) > 0 {
+		return buildDockerfileStages(
+			contextAbs, spec.dockerfileStages, reference, osName, architecture, variant,
+			spec.dockerfileNetwork, ignoreFile, additionalIgnorePaths,
+		)
 	}
 
 	// Base images are resolved only from the verified local OCI store. Builds
@@ -557,16 +739,53 @@ func resolveRootfsTarget(root, target string) (string, error) {
 	return resolved, nil
 }
 
-func applyCopy(contextRoot, root string, instruction CopyInstruction, ignorePatterns []ignorePattern) error {
-	if err := validateContextPath(instruction.Source); err != nil {
-		return err
+
+// validateBuildCopySource rejects symlinks in every path component before
+// opening a build-context or stage-root source. Symlinks inside a copied
+// directory are handled separately and never traversed by WalkDir.
+func validateBuildCopySource(contextRoot, relative string) (string, os.FileInfo, error) {
+	if err := validateContextPath(relative); err != nil {
+		return "", nil, err
 	}
-	source := filepath.Join(contextRoot, filepath.Clean(instruction.Source))
-	relative, err := filepath.Rel(contextRoot, source)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("source escapes the build context")
+	rootInfo, err := os.Lstat(contextRoot)
+	if err != nil {
+		return "", nil, fmt.Errorf("inspect COPY source root: %w", err)
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
+		return "", nil, fmt.Errorf("COPY source root must be a real directory")
+	}
+	clean := filepath.Clean(relative)
+	source := filepath.Join(contextRoot, clean)
+	rootRelative, err := filepath.Rel(contextRoot, source)
+	if err != nil || rootRelative == ".." || strings.HasPrefix(rootRelative, ".."+string(filepath.Separator)) {
+		return "", nil, fmt.Errorf("COPY source escapes its root")
+	}
+	current := contextRoot
+	if rootRelative != "." {
+		components := strings.Split(rootRelative, string(filepath.Separator))
+		for index, component := range components {
+			current = filepath.Join(current, component)
+			info, err := os.Lstat(current)
+			if err != nil {
+				return "", nil, err
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				return "", nil, fmt.Errorf("COPY source path traverses symlink %q", component)
+			}
+			if index < len(components)-1 && !info.IsDir() {
+				return "", nil, fmt.Errorf("COPY source parent %q is not a directory", component)
+			}
+		}
 	}
 	info, err := os.Lstat(source)
+	if err != nil {
+		return "", nil, err
+	}
+	return source, info, nil
+}
+
+func applyCopy(contextRoot, root string, instruction CopyInstruction, ignorePatterns []ignorePattern) error {
+	source, info, err := validateBuildCopySource(contextRoot, instruction.Source)
 	if err != nil {
 		return err
 	}
@@ -620,11 +839,7 @@ func applyCopy(contextRoot, root string, instruction CopyInstruction, ignorePatt
 // instruction. It does not follow source/destination symlinks and leaves the
 // build context unchanged.
 func applyDockerfileCopyMode(contextRoot, root string, instruction CopyInstruction, ignorePatterns []ignorePattern, mode os.FileMode) error {
-	if err := validateContextPath(instruction.Source); err != nil {
-		return err
-	}
-	source := filepath.Join(contextRoot, filepath.Clean(instruction.Source))
-	info, err := os.Lstat(source)
+	source, info, err := validateBuildCopySource(contextRoot, instruction.Source)
 	if err != nil {
 		return err
 	}
@@ -713,11 +928,7 @@ func applyDockerfileCopyMode(contextRoot, root string, instruction CopyInstructi
 }
 
 func applyAdd(contextRoot, root string, instruction CopyInstruction, ignorePatterns []ignorePattern) error {
-	if err := validateContextPath(instruction.Source); err != nil {
-		return err
-	}
-	source := filepath.Join(contextRoot, filepath.Clean(instruction.Source))
-	info, err := os.Lstat(source)
+	source, info, err := validateBuildCopySource(contextRoot, instruction.Source)
 	if err != nil {
 		return err
 	}
