@@ -3018,7 +3018,6 @@ func TestDockerStatusWithHealthMatchesDockerPSHealthSuffix(t *testing.T) {
 	}
 }
 
-
 func TestDockerNetworkAttachmentsExposeVerifiedIPv4Leases(t *testing.T) {
 	record := state.Record{
 		ID: "container-123", Name: "api",
@@ -3066,7 +3065,7 @@ func TestDockerNetworkAttachmentsRejectCorruptPersistedLeases(t *testing.T) {
 	record := state.Record{ID: "container-corrupt"}
 	network := boxrnetwork.Network{
 		ID: "network-id", Name: "frontend", Subnet: "10.24.0.0/24",
-		Gateway: "10.24.0.1",
+		Gateway:     "10.24.0.1",
 		Allocations: map[string]string{record.ID: "192.0.2.8"},
 	}
 	if _, err := dockerNetworkAttachmentsFromNetworks([]boxrnetwork.Network{network}, []state.Record{record}); err == nil {
