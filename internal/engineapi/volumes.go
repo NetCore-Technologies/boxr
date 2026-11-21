@@ -143,6 +143,8 @@ func dockerVolumeReferenced(path string, records []state.Record) bool {
 }
 
 func (s *Server) handleVolumeCreate(writer http.ResponseWriter, request *http.Request) {
+	s.volumeMu.Lock()
+	defer s.volumeMu.Unlock()
 	data, err := io.ReadAll(io.LimitReader(request.Body, maxCreateBodyBytes+1))
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, fmt.Errorf("read volume create request: %w", err))
@@ -162,10 +164,6 @@ func (s *Server) handleVolumeCreate(writer http.ResponseWriter, request *http.Re
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		writeError(writer, http.StatusBadRequest, fmt.Errorf("volume create request must contain one JSON object"))
-		return
-	}
-	if input.Name == "" {
-		writeError(writer, http.StatusBadRequest, fmt.Errorf("volume Name is required"))
 		return
 	}
 	if input.Driver == "" {
@@ -266,6 +264,10 @@ func (s *Server) handleVolumePrune(writer http.ResponseWriter, request *http.Req
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
+	if err := validateDockerVolumePruneFilters(filters); err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
 	items, err := volume.List()
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, fmt.Errorf("list volumes for prune: %w", err))
@@ -340,6 +342,27 @@ func volumePruneIncludesNamed(filters map[string][]string) (bool, error) {
 		includeNamed = includeNamed || parsed
 	}
 	return includeNamed, nil
+}
+
+func validateDockerVolumePruneFilters(filters map[string][]string) error {
+	for key, values := range filters {
+		if key == "all" {
+			continue
+		}
+		if key != "label" && key != "label!" {
+			return fmt.Errorf("unsupported volume prune filter %q", key)
+		}
+		if len(values) == 0 {
+			return fmt.Errorf("volume prune filter %q must contain at least one value", key)
+		}
+		for _, value := range values {
+			labelKey, _, _ := strings.Cut(value, "=")
+			if strings.TrimSpace(labelKey) == "" || len(labelKey) > 128 {
+				return fmt.Errorf("invalid volume label filter %q", value)
+			}
+		}
+	}
+	return nil
 }
 
 func matchesDockerVolumePruneFilters(item volume.Volume, filters map[string][]string) (bool, error) {
