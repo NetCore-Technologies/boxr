@@ -145,10 +145,8 @@ func (s *Server) handleContainerArchive(writer http.ResponseWriter, request *htt
 			writeError(writer, http.StatusBadRequest, fmt.Errorf("copyUIDGID is not supported; archive ownership is intentionally not applied"))
 			return
 		}
-		if noOverwrite {
-			writeError(writer, http.StatusBadRequest, fmt.Errorf("noOverwriteDirNonDir=true is not supported"))
-			return
-		}
+		// noOverwriteDirNonDir is enforced against the merged container view
+		// once the uploaded archive has been fully validated.
 	} else if _, exists := query["noOverwriteDirNonDir"]; exists {
 		writeError(writer, http.StatusBadRequest, fmt.Errorf("noOverwriteDirNonDir is only valid for PUT"))
 		return
@@ -267,7 +265,7 @@ func (s *Server) handleContainerArchive(writer http.ResponseWriter, request *htt
 			// upperdir behind a live mount.
 			writeRoot = filepath.Join("/proc", strconv.Itoa(record.PID), "root", ".")
 		}
-		s.handleDockerArchivePut(writer, request, writeRoot, writeRoot, containerPath)
+		s.handleDockerArchivePut(writer, request, writeRoot, writeRoot, containerPath, noOverwrite)
 	default:
 		writeMethodErrorFor(writer, http.MethodGet+", "+http.MethodHead+", "+http.MethodPut)
 	}
@@ -697,8 +695,8 @@ func dockerOverlayWhiteouts(upperDir, name string) (bool, error) {
 	return false, nil
 }
 
-func (s *Server) handleDockerArchivePut(writer http.ResponseWriter, request *http.Request, lowerRoot, upperRoot, containerPath string) {
-	_, _, destinationInfo, err := resolveDockerOverlayPath(lowerRoot, upperRoot, containerPath)
+func (s *Server) handleDockerArchivePut(writer http.ResponseWriter, request *http.Request, lowerRoot, upperRoot, containerPath string, noOverwrite bool) {
+	lowerDestination, upperDestination, destinationInfo, err := resolveDockerOverlayPath(lowerRoot, upperRoot, containerPath)
 	if err != nil {
 		writeError(writer, http.StatusNotFound, fmt.Errorf("container destination does not exist"))
 		return
@@ -706,6 +704,22 @@ func (s *Server) handleDockerArchivePut(writer http.ResponseWriter, request *htt
 	if !destinationInfo.IsDir() || destinationInfo.Mode()&os.ModeSymlink != 0 {
 		writeError(writer, http.StatusBadRequest, fmt.Errorf("PUT archive path must identify an existing directory"))
 		return
+	}
+	resolvedDestination := containerPath
+	resolvedPath, resolvedRoot := upperDestination, upperRoot
+	if resolvedPath == "" {
+		resolvedPath, resolvedRoot = lowerDestination, lowerRoot
+	}
+	if resolvedPath != "" {
+		relative, relErr := filepath.Rel(resolvedRoot, resolvedPath)
+		if relErr != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			writeError(writer, http.StatusConflict, fmt.Errorf("resolved container destination is outside its managed root"))
+			return
+		}
+		resolvedDestination = filepath.ToSlash(relative)
+		if resolvedDestination == "." {
+			resolvedDestination = ""
+		}
 	}
 	if request.ContentLength > maxDockerArchiveUploadBytes {
 		writeError(writer, http.StatusRequestEntityTooLarge, fmt.Errorf("archive upload exceeds %d bytes", maxDockerArchiveUploadBytes))
@@ -749,11 +763,48 @@ func (s *Server) handleDockerArchivePut(writer http.ResponseWriter, request *htt
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
-	if err := mergeDockerArchiveTree(extractedPath, upperRoot, containerPath); err != nil {
+	if noOverwrite {
+		if err := validateDockerArchiveNoOverwrite(extractedPath, lowerRoot, upperRoot, resolvedDestination); err != nil {
+			writeError(writer, http.StatusConflict, err)
+			return
+		}
+	}
+	if err := mergeDockerArchiveTree(extractedPath, upperRoot, resolvedDestination); err != nil {
 		writeError(writer, http.StatusConflict, fmt.Errorf("apply container archive: %w", err))
 		return
 	}
 	writer.WriteHeader(http.StatusOK)
+}
+
+func validateDockerArchiveNoOverwrite(sourceRoot, lowerRoot, upperRoot, destination string) error {
+	return filepath.WalkDir(sourceRoot, func(current string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if current == sourceRoot {
+			return nil
+		}
+		relative, err := filepath.Rel(sourceRoot, current)
+		if err != nil {
+			return err
+		}
+		target := path.Join(destination, filepath.ToSlash(relative))
+		_, _, existingInfo, err := resolveDockerOverlayPath(lowerRoot, upperRoot, target)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("inspect existing path %q: %w", target, err)
+		}
+		incomingInfo, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if incomingInfo.IsDir() != existingInfo.IsDir() {
+			return fmt.Errorf("refusing to replace a directory with a non-directory or vice versa at %q", target)
+		}
+		return nil
+	})
 }
 
 func firstArchiveError(values ...error) error {
