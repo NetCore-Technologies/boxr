@@ -111,7 +111,7 @@ func (s *Server) handleContainerUpdate(writer http.ResponseWriter, request *http
 		}
 		options.MemoryLowBytes = *input.MemoryReservation
 	}
-		if input.MemorySwap != nil {
+	if input.MemorySwap != nil {
 		switch {
 		case *input.MemorySwap < -1:
 			writeError(writer, http.StatusBadRequest, fmt.Errorf("MemorySwap must be -1 (unlimited), 0 (Docker default), or a positive total memory-plus-swap limit"))
@@ -153,7 +153,7 @@ func (s *Server) handleContainerUpdate(writer http.ResponseWriter, request *http
 			options.MemorySwapMaxBytes = previousTotal - options.MemoryLimitBytes
 		}
 	}
-		if options.MemoryLimitBytes > 0 && options.MemoryLowBytes >= options.MemoryLimitBytes && options.MemoryLowBytes > 0 {
+	if options.MemoryLimitBytes > 0 && options.MemoryLowBytes >= options.MemoryLimitBytes && options.MemoryLowBytes > 0 {
 		writeError(writer, http.StatusBadRequest, fmt.Errorf("MemoryReservation cannot exceed the effective Memory limit"))
 		return
 	}
