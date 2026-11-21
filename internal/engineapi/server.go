@@ -915,7 +915,7 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 		"NanoCpus": int64(record.Options.CPUs * 1e9), "PidsLimit": record.Options.PidsLimit,
 		"RestartPolicy": map[string]any{"Name": dockerRestartPolicy(record.Options.RestartPolicy), "MaximumRetryCount": record.Options.RestartMaxRetries},
 		"PortBindings":  dockerPortBindings(record.Options), "Binds": dockerBinds(record.Options),
-		"Tmpfs": tmpfsHostConfig,
+		"Tmpfs":      tmpfsHostConfig,
 		"Privileged": false, "ReadonlyRootfs": record.Options.ReadOnlyRootFS,
 	}
 	networkSettings := map[string]any{

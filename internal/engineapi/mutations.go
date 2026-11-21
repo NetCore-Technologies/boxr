@@ -128,9 +128,9 @@ type dockerRestartPolicyConfig struct {
 }
 
 const (
-	maxDockerRegistryAuthBytes          = 16 << 10
-	maxDockerEngineMountCount           = 64
-	maxDockerEngineTmpfsBytes     int64 = 1 << 30
+	maxDockerRegistryAuthBytes           = 16 << 10
+	maxDockerEngineMountCount            = 64
+	maxDockerEngineTmpfsBytes      int64 = 1 << 30
 	maxDockerEngineTmpfsTotalBytes int64 = 2 << 30
 )
 
@@ -920,11 +920,7 @@ func parseDockerMounts(rawMounts []json.RawMessage) ([]container.BindMount, []co
 					return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].BindOptions.Propagation supports only rprivate", index)
 				}
 			}
-			mode := "rw"
-			if mount.ReadOnly {
-				mode = "ro"
-			}
-			parsed, err := parseDockerBindPaths(mount.Source, target, mount.ReadOnly)
+						parsed, err := parseDockerBindPaths(mount.Source, target, mount.ReadOnly)
 			if err != nil {
 				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d]: %w", index, err)
 			}
