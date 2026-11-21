@@ -237,8 +237,15 @@ func LoadDockerArchive(archivePath string) ([]Image, error) {
 			if err != nil {
 				return nil, fmt.Errorf("Docker image %d layer %d path: %w", imageIndex+1, layerIndex+1, err)
 			}
-			layerPath := filepath.FromSlash(cleanLayer)
-			info, err := stageRoot.Lstat(layerPath)
+			layerRelative := filepath.FromSlash(cleanLayer)
+			if !filepath.IsLocal(layerRelative) {
+				return nil, fmt.Errorf("Docker image %d layer %d path is not local to the archive root", imageIndex+1, layerIndex+1)
+			}
+			// Docker save archives cannot contain symlinks in their outer layer
+			// store. Validate through the private staging root, then pass the
+			// corresponding path to the shared layer decoder.
+			layerPath := filepath.Join(stage, layerRelative)
+			info, err := stageRoot.Lstat(layerRelative)
 			if err != nil {
 				return nil, fmt.Errorf("Docker image %d layer %d: %w", imageIndex+1, layerIndex+1, err)
 			}
@@ -249,7 +256,7 @@ func LoadDockerArchive(archivePath string) ([]Image, error) {
 			if !validDockerDiffID(expected) {
 				return nil, fmt.Errorf("Docker image %d layer %d has an invalid diff_id", imageIndex+1, layerIndex+1)
 			}
-			layerFile, err := stageRoot.Open(layerPath)
+			layerFile, err := stageRoot.Open(layerRelative)
 			if err != nil {
 				return nil, fmt.Errorf("Docker image %d layer %d open: %w", imageIndex+1, layerIndex+1, err)
 			}
@@ -449,7 +456,7 @@ func cleanDockerArchivePath(name string) (string, error) {
 
 func checkDockerEntryCollision(seen map[string]byte, name string, directory bool) error {
 	for parent := path.Dir(name); parent != "." && parent != "/"; parent = path.Dir(parent) {
-		if kind, ok := seen[parent]; ok && kind != tar.TypeDir {
+		if kind, ok := seen[parent]; ok && kind != tar.TypeDir && kind != tar.TypeSymlink {
 			return fmt.Errorf("archive path %q has a non-directory parent %q", name, parent)
 		}
 	}
