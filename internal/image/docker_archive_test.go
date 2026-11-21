@@ -356,3 +356,89 @@ func TestExtractDockerArchiveRejectsSymlinksAndTraversal(t *testing.T) {
 		}
 	}
 }
+
+func TestDockerArchiveTagsPreflightsManifestWithoutImport(t *testing.T) {
+	for _, compressOuter := range []bool{false, true} {
+		name := "tar"
+		if compressOuter {
+			name = "gzip"
+		}
+		t.Run(name, func(t *testing.T) {
+			archivePath := filepath.Join(t.TempDir(), "docker-save.tar")
+			writeDockerFixture(t, archivePath, compressOuter, false, "")
+			tags, err := DockerArchiveTags(archivePath)
+			if err != nil {
+				t.Fatalf("preflight Docker archive tags: %v", err)
+			}
+			if len(tags) != 2 || tags[0] != "demo:latest" || tags[1] != "demo:stable" {
+				t.Fatalf("Docker archive tags = %v", tags)
+			}
+		})
+	}
+}
+
+func TestDockerArchiveTagsRejectsUnsafeAndDuplicateManifests(t *testing.T) {
+	writeArchive := func(t *testing.T, pathname, memberName string, kind byte, manifest []byte) {
+		t.Helper()
+		file, err := os.Create(pathname)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writer := tar.NewWriter(file)
+		header := &tar.Header{
+			Name: memberName, Mode: 0600, Size: int64(len(manifest)),
+			Typeflag: kind,
+		}
+		if kind == tar.TypeSymlink {
+			header.Size = 0
+			header.Linkname = "elsewhere"
+		}
+		if err := writer.WriteHeader(header); err != nil {
+			t.Fatal(err)
+		}
+		if kind != tar.TypeSymlink {
+			if _, err := writer.Write(manifest); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	duplicateManifest, err := json.Marshal([]dockerManifestEntry{
+		{Config: "one.json", RepoTags: []string{"demo:latest"}},
+		{Config: "two.json", RepoTags: []string{"demo:latest"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidTagManifest, err := json.Marshal([]dockerManifestEntry{
+		{Config: "one.json", RepoTags: []string{"bad reference"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name       string
+		memberName string
+		kind       byte
+		manifest   []byte
+	}{
+		{name: "duplicate tags", memberName: "manifest.json", kind: tar.TypeReg, manifest: duplicateManifest},
+		{name: "invalid tag", memberName: "manifest.json", kind: tar.TypeReg, manifest: invalidTagManifest},
+		{name: "manifest symlink", memberName: "manifest.json", kind: tar.TypeSymlink},
+		{name: "traversal manifest", memberName: "../manifest.json", kind: tar.TypeReg, manifest: invalidTagManifest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			archivePath := filepath.Join(t.TempDir(), "unsafe.tar")
+			writeArchive(t, archivePath, test.memberName, test.kind, test.manifest)
+			if _, err := DockerArchiveTags(archivePath); err == nil {
+				t.Fatal("unsafe or invalid Docker archive manifest was accepted")
+			}
+		})
+	}
+}
