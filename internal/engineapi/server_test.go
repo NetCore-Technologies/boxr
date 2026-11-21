@@ -27,6 +27,7 @@ import (
 	"github.com/manit6752025/boxr/internal/container"
 	imageStore "github.com/manit6752025/boxr/internal/image"
 	"github.com/manit6752025/boxr/internal/state"
+	"github.com/manit6752025/boxr/internal/volume"
 )
 
 func setupEngineAPITest(t *testing.T) *Server {
@@ -1359,5 +1360,133 @@ func TestDockerContainerWaitBlocksUntilRunningContainerExits(t *testing.T) {
 	}
 	if result.StatusCode != 0 {
 		t.Fatalf("wait exit code = %d, want 0", result.StatusCode)
+	}
+}
+
+
+func TestDockerVolumeCreateListInspectAndDelete(t *testing.T) {
+	server := setupEngineAPITest(t)
+	t.Setenv("BOXR_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+
+	create := func(body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/v1.45/volumes/create", strings.NewReader(body))
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		return response
+	}
+
+	response := create(`{"Name":"api-data","Driver":"local","Labels":{"team":"platform","tier":"test"}}`)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created["Name"] != "api-data" || created["Driver"] != "local" || created["Scope"] != "local" {
+		t.Fatalf("created volume response = %#v", created)
+	}
+	mountpoint, ok := created["Mountpoint"].(string)
+	if !ok || mountpoint == "" {
+		t.Fatalf("created volume has no mountpoint: %#v", created)
+	}
+	if info, err := os.Stat(mountpoint); err != nil || !info.IsDir() {
+		t.Fatalf("volume mountpoint is not a directory: info=%v err=%v", info, err)
+	}
+
+	response = engineAPIRequest(server, http.MethodGet, "/v1.45/volumes")
+	if response.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
+	}
+	var listed dockerVolumeListResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Volumes) != 1 || listed.Volumes[0].Name != "api-data" || len(listed.Warnings) != 0 {
+		t.Fatalf("volume list = %#v", listed)
+	}
+
+	filters, err := json.Marshal(map[string][]string{"label": {"team=platform"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(filters)
+	response = engineAPIRequest(server, http.MethodGet, "/v1.45/volumes?filters="+url.QueryEscape(encoded))
+	if response.Code != http.StatusOK {
+		t.Fatalf("filtered list status=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Volumes) != 1 || listed.Volumes[0].Name != "api-data" {
+		t.Fatalf("label-filtered volumes = %#v", listed.Volumes)
+	}
+
+	response = engineAPIRequest(server, http.MethodGet, "/v1.45/volumes/api-data")
+	if response.Code != http.StatusOK {
+		t.Fatalf("inspect status=%d body=%s", response.Code, response.Body.String())
+	}
+	var inspected dockerVolumeResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &inspected); err != nil {
+		t.Fatal(err)
+	}
+	if inspected.Name != "api-data" || inspected.Mountpoint != mountpoint {
+		t.Fatalf("volume inspect = %+v", inspected)
+	}
+
+	if response = create(`{"Name":"api-data"}`); response.Code != http.StatusConflict {
+		t.Fatalf("duplicate create status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response = create(`{"Name":"bad-driver","Driver":"nfs"}`); response.Code != http.StatusBadRequest {
+		t.Fatalf("unsupported driver status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response = create(`{"Name":"unknown-field","Unknown":true}`); response.Code != http.StatusBadRequest {
+		t.Fatalf("unknown field status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	response = engineAPIRequest(server, http.MethodDelete, "/v1.45/volumes/api-data")
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("delete status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = engineAPIRequest(server, http.MethodGet, "/v1.45/volumes/api-data")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("inspect deleted volume status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestDockerVolumeDeleteRejectsActiveContainerUse(t *testing.T) {
+	server := setupEngineAPITest(t)
+	t.Setenv("BOXR_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+	item, err := volume.Create("busy-data", map[string]string{"team": "platform"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := state.Create("volume-user", []string{"/bin/true"}, container.Options{
+		BindMounts: []container.BindMount{{Source: item.Path, Target: "/data"}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = state.Finish(record.ID, nil)
+		_ = state.Remove(record.ID)
+	}()
+
+	response := engineAPIRequest(server, http.MethodDelete, "/v1.45/volumes/busy-data")
+	if response.Code != http.StatusConflict {
+		t.Fatalf("delete in-use volume status=%d body=%s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(item.Path); err != nil {
+		t.Fatalf("in-use volume data was removed: %v", err)
+	}
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	response = engineAPIRequest(server, http.MethodDelete, "/v1.45/volumes/busy-data")
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("delete released volume status=%d body=%s", response.Code, response.Body.String())
 	}
 }
