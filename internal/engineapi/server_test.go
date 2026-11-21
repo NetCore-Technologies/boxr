@@ -3301,3 +3301,91 @@ func TestDockerContainerFiltersRejectUnknownAndMissingReferences(t *testing.T) {
 		})
 	}
 }
+
+
+func TestDockerContainerListSizeReportsBaseAndWritableLayerBytes(t *testing.T) {
+	server := setupEngineAPITest(t)
+	root := t.TempDir()
+	base := filepath.Join(root, "rootfs")
+	overlay := filepath.Join(root, "overlay")
+	upper := filepath.Join(overlay, "upper")
+	outside := filepath.Join(root, "outside")
+	for _, directory := range []string{base, upper, outside} {
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(base, "base.bin"), []byte("base"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(upper, "changed.bin"), []byte("upper!"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret.bin"), make([]byte, 2048), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(base, "linked-outside")); err != nil {
+		t.Fatal(err)
+	}
+	record := createEngineAPITestContainer(t, "sized-container", container.Options{
+		RootFS: base, OverlayDir: overlay,
+	})
+	response := engineAPIRequest(server, http.MethodGet, "/v1.45/containers/json?all=1&size=1")
+	if response.Code != http.StatusOK {
+		t.Fatalf("sized list status=%d body=%s", response.Code, response.Body.String())
+	}
+	var items []map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &items); err != nil {
+		t.Fatal(err)
+	}
+	var item map[string]any
+	for _, candidate := range items {
+		if candidate["Id"] == record.ID {
+			item = candidate
+			break
+		}
+	}
+	if item == nil {
+		t.Fatalf("sized container missing from list: %#v", items)
+	}
+	if item["SizeRw"] != float64(6) || item["SizeRootFs"] != float64(10) {
+		t.Fatalf("Docker container size = SizeRw:%v SizeRootFs:%v, want 6/10", item["SizeRw"], item["SizeRootFs"])
+	}
+	response = engineAPIRequest(server, http.MethodGet, "/v1.45/containers/json?all=1")
+	if response.Code != http.StatusOK {
+		t.Fatalf("ordinary list status=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &items); err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range items {
+		if candidate["Id"] == record.ID {
+			if _, exists := candidate["SizeRw"]; exists {
+				t.Fatal("container sizes were returned when size=1 was not requested")
+			}
+			return
+		}
+	}
+	t.Fatal("container missing from ordinary list")
+}
+
+func TestDockerContainerSizeRejectsSymlinkedRootAndBoundsWalk(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(outside, 0700); err != nil {
+		t.Fatal(err)
+	}
+	record := state.Record{ID: "container-size-symlink", Options: container.Options{RootFS: outside}}
+	sizeRW, sizeRootFS, err := dockerContainerSize(record)
+	if err != nil || sizeRW != 0 || sizeRootFS != 0 {
+		t.Fatalf("empty base size=(%d,%d,%v)", sizeRW, sizeRootFS, err)
+	}
+	link := filepath.Join(root, "root-link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	record.Options.RootFS = link
+	if _, _, err := dockerContainerSize(record); err == nil {
+		t.Fatal("symlinked rootfs was followed during Docker size calculation")
+	}
+}
