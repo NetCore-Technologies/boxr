@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/manit6752025/boxr/internal/config"
 	imageStore "github.com/manit6752025/boxr/internal/image"
 	"github.com/manit6752025/boxr/internal/rootfs"
 	"github.com/manit6752025/boxr/internal/state"
@@ -175,6 +176,19 @@ func (s *Server) handleContainerCommit(writer http.ResponseWriter, request *http
 		return
 	}
 	runtimeConfig := dockerCommitRuntimeConfig(record, baseImage.RuntimeConfig)
+	privateConfig, err := state.ReadEngineConfig(record.ID)
+	if err != nil {
+		writeError(writer, http.StatusConflict, fmt.Errorf("read private container runtime configuration: %w", err))
+		return
+	}
+	var runConfig config.RunFile
+	if err := json.Unmarshal(privateConfig, &runConfig); err != nil {
+		writeError(writer, http.StatusConflict, fmt.Errorf("decode private container runtime configuration: %w", err))
+		return
+	}
+	if runConfig.Options.Env != nil {
+		runtimeConfig.Env = append([]string(nil), runConfig.Options.Env...)
+	}
 	applyDockerCommitOverrides(&runtimeConfig, override)
 	if author != "" {
 		if runtimeConfig.Labels == nil {
