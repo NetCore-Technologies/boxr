@@ -3,6 +3,7 @@ package engineapi
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	imageStore "github.com/manit6752025/boxr/internal/image"
 )
