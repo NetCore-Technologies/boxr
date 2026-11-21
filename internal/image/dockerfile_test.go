@@ -41,15 +41,30 @@ func TestParseDockerfileSupportedInstructions(t *testing.T) {
 	}
 }
 
-func TestParseDockerfileRejectsUnsupportedInstructionsAndUnresolvedStageCopies(t *testing.T) {
+func TestParseDockerfileRejectsUnsupportedInstructionsAndInvalidStageCopies(t *testing.T) {
 	for _, input := range []string{
 		"FROM scratch\nADD https://example.invalid/app.tar /app\n",
-		"FROM scratch\nCOPY --from=build /app /app\n",
+		"FROM scratch AS runtime\nCOPY --from=build /app /app\nFROM scratch AS build\n",
+		"FROM scratch\nCOPY --from=bad!image /app /app\n",
+		"FROM scratch AS runtime\nCOPY --from=registry.example/tools:1.2 ../../etc/passwd /etc/passwd\n",
 		"FROM scratch AS scratch\nFROM scratch AS runtime\n",
 	} {
 		if _, err := ParseDockerfile([]byte(input)); err == nil {
 			t.Errorf("unsupported Dockerfile was accepted: %q", input)
 		}
+	}
+}
+
+func TestParseDockerfileCapturesExternalImageCopyFromInSingleStage(t *testing.T) {
+	spec, err := ParseDockerfile([]byte("FROM scratch AS runtime\nCOPY --from=registry.example/tools:1.2 /usr/bin/tool /usr/local/bin/tool\n"))
+	if err != nil {
+		t.Fatalf("ParseDockerfile external COPY --from: %v", err)
+	}
+	if len(spec.dockerfileStages) != 1 {
+		t.Fatalf("stage executor captured %d stages, want one", len(spec.dockerfileStages))
+	}
+	if len(spec.dockerfileStages[0].steps) != 1 || spec.dockerfileStages[0].steps[0].copyFrom != "registry.example/tools:1.2" {
+		t.Fatalf("external image COPY --from step = %#v", spec.dockerfileStages[0].steps)
 	}
 }
 

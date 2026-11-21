@@ -221,7 +221,7 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 					copyMode, hasCopyMode = os.FileMode(mode), true
 				case "--from":
 					if instructionName != "COPY" || !hasValue || value == "" || copyFrom != "" {
-						return fmt.Errorf("line %d: COPY --from requires one previously declared stage name or index", lineNumber)
+						return fmt.Errorf("line %d: COPY --from requires a previous stage name/index or a local image reference", lineNumber)
 					}
 					copyFrom = value
 				default:
@@ -448,27 +448,30 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 	if !fromSeen {
 		return spec, fmt.Errorf("Dockerfile must contain exactly one FROM instruction")
 	}
-	if len(stages) > 0 {
+	needsStageExecutor := len(stages) > 0
+	for _, step := range spec.dockerfileSteps {
+		if step.copyFrom != "" {
+			needsStageExecutor = true
+			break
+		}
+	}
+	if needsStageExecutor {
 		stages = append(stages, dockerfileStage{
 			name: currentStageName, base: spec.Base, config: spec.Config,
 			steps:      append([]dockerfileStep(nil), spec.dockerfileSteps...),
 			hasWorkdir: spec.dockerfileHasWorkdir,
 		})
-	}
-	if len(stages) > 0 {
 		if err := validateDockerfileStages(stages); err != nil {
 			return spec, err
 		}
-		if len(stages) > 1 {
-			spec.dockerfileStages = stages
-			spec.Base = "scratch"
-			spec.Copy = nil
-			spec.dockerfileSteps = nil
-			spec.Config = stages[len(stages)-1].config
-			spec.dockerfileHasWorkdir = stages[len(stages)-1].hasWorkdir
-		}
+		spec.dockerfileStages = stages
+		spec.Base = "scratch"
+		spec.Copy = nil
+		spec.dockerfileSteps = nil
+		spec.Config = stages[len(stages)-1].config
+		spec.dockerfileHasWorkdir = stages[len(stages)-1].hasWorkdir
 	}
-	if len(stages) == 0 {
+	if !needsStageExecutor {
 		if err := validateDockerfileStages([]dockerfileStage{{
 			base: spec.Base, config: spec.Config, steps: spec.dockerfileSteps,
 		}}); err != nil {
@@ -515,15 +518,24 @@ func dockerfileStageIndex(reference string, names map[string]int, current int) (
 }
 
 func validateDockerfileStages(stages []dockerfileStage) error {
+	allNames := make(map[string]int, len(stages))
+	for index, stage := range stages {
+		if stage.name == "" {
+			continue
+		}
+		key := strings.ToLower(stage.name)
+		if _, exists := allNames[key]; exists {
+			return fmt.Errorf("Dockerfile stage name %q is declared more than once", stage.name)
+		}
+		allNames[key] = index
+	}
+
 	names := make(map[string]int, len(stages))
 	for index, stage := range stages {
-		if stage.name != "" {
-			key := strings.ToLower(stage.name)
-			if _, exists := names[key]; exists {
-				return fmt.Errorf("Dockerfile stage name %q is declared more than once", stage.name)
+		if _, isStage := dockerfileStageIndex(stage.base, names, index); !isStage && stage.base != "scratch" {
+			if laterIndex, isLaterStage := allNames[strings.ToLower(stage.base)]; isLaterStage && laterIndex >= index {
+				return fmt.Errorf("Dockerfile stage %d FROM %q must reference a previously declared stage", index+1, stage.base)
 			}
-		}
-		if _, fromStage := dockerfileStageIndex(stage.base, names, index); !fromStage && stage.base != "scratch" {
 			if err := ValidateReference(stage.base); err != nil {
 				return fmt.Errorf("Dockerfile stage %d has an invalid base image: %w", index+1, err)
 			}
@@ -532,10 +544,20 @@ func validateDockerfileStages(stages []dockerfileStage) error {
 			return fmt.Errorf("Dockerfile stage %d has invalid configuration: %w", index+1, err)
 		}
 		for _, step := range stage.steps {
-			if step.copyFrom != "" {
-				if _, ok := dockerfileStageIndex(step.copyFrom, names, index); !ok {
-					return fmt.Errorf("Dockerfile stage %d COPY --from=%s must reference a previously declared stage", index+1, step.copyFrom)
-				}
+			if step.copyFrom == "" {
+				continue
+			}
+			if _, ok := dockerfileStageIndex(step.copyFrom, names, index); ok {
+				continue
+			}
+			if _, isStageName := allNames[strings.ToLower(step.copyFrom)]; isStageName {
+				return fmt.Errorf("Dockerfile stage %d COPY --from=%s must reference a previously declared stage", index+1, step.copyFrom)
+			}
+			if _, numeric := strconv.Atoi(step.copyFrom); numeric == nil {
+				return fmt.Errorf("Dockerfile stage %d COPY --from=%s does not reference a previous stage index", index+1, step.copyFrom)
+			}
+			if err := ValidateReference(step.copyFrom); err != nil {
+				return fmt.Errorf("Dockerfile stage %d COPY --from=%s is neither a previous stage nor a valid local image reference: %w", index+1, step.copyFrom, err)
 			}
 		}
 		if stage.name != "" {
