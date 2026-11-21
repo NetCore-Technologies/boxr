@@ -3144,3 +3144,33 @@ func TestDockerNetworkInspectIncludesEndpointIdentity(t *testing.T) {
 		t.Fatalf("Docker network inspect endpoint = %#v", endpoint)
 	}
 }
+
+func TestParseDockerEndpointConfigSupportsStaticIPv4AndMAC(t *testing.T) {
+	raw := json.RawMessage(\`{"IPAMConfig":{"IPv4Address":"172.30.48.5"},"MacAddress":"02:aa:bb:cc:dd:ee"}\`)
+	endpoint, err := parseDockerEndpointConfig(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint.IPv4Address != "172.30.48.5" || endpoint.MACAddress != "02:aa:bb:cc:dd:ee" {
+		t.Fatalf("parsed endpoint options = %+v", endpoint)
+	}
+}
+
+func TestParseDockerEndpointConfigRejectsUnsupportedAndMalformedFields(t *testing.T) {
+	for _, raw := range []string{
+		\`{"Aliases":["api"]}\`,
+		\`{"Links":["db:database"]}\`,
+		\`{"DriverOpts":{"mtu":"1400"}}\`,
+		\`{"IPAMConfig":{"IPv6Address":"2001:db8::4"}}\`,
+		\`{"IPAMConfig":{"LinkLocalIPs":["169.254.1.1"]}}\`,
+		\`{"MacAddress":"ff:ff:ff:ff:ff:ff"}\`,
+		\`{"Unexpected":true}\`,
+		\`{"MacAddress":"02:aa:bb:cc:dd:ee"} { }\`,
+	} {
+		t.Run(raw, func(t *testing.T) {
+			if _, err := parseDockerEndpointConfig(json.RawMessage(raw)); err == nil {
+				t.Fatalf("unsupported or malformed EndpointConfig %s was accepted", raw)
+			}
+		})
+	}
+}
