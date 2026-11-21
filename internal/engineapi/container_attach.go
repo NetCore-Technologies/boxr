@@ -32,10 +32,6 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
-	if stdin {
-		writeError(writer, http.StatusBadRequest, fmt.Errorf("container stdin attachment is unavailable; Boxr container processes do not currently expose a persistent stdin stream"))
-		return
-	}
 	stdout, err := boolQuery(request, "stdout")
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, err)
@@ -62,6 +58,32 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, err)
 		return
+	}
+	var stdinConnection io.WriteCloser
+	if stdin {
+		if !stream || !dockerExecUpgradeRequested(request) {
+			writeError(writer, http.StatusBadRequest, fmt.Errorf("stdin attachment requires stream=1 and a Docker TCP upgrade"))
+			return
+		}
+		record, getErr := state.Get(query)
+		if getErr != nil {
+			writeError(writer, http.StatusNotFound, getErr)
+			return
+		}
+		if !record.Options.OpenStdin {
+			writeError(writer, http.StatusBadRequest, fmt.Errorf("container was not created with OpenStdin"))
+			return
+		}
+		if record.Status != "running" {
+			writeError(writer, http.StatusConflict, fmt.Errorf("container stdin is only available while the container is running"))
+			return
+		}
+		stdinConnection, err = openDockerContainerStdin(record.ID)
+		if err != nil {
+			writeError(writer, http.StatusConflict, err)
+			return
+		}
+		defer stdinConnection.Close()
 	}
 
 	var data []byte
@@ -100,6 +122,21 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 		connection = conn
 		target = conn
 		defer connection.Close()
+		var inputDone <-chan struct{}
+		if stdinConnection != nil {
+			done := make(chan struct{})
+			inputDone = done
+			go func() {
+				defer close(done)
+				_, _ = io.Copy(stdinConnection, conn)
+				_ = stdinConnection.Close()
+			}()
+		}
+		if logs && outputEnabled && len(data) > 0 {
+			if err := writeLogFrame(target, data, outputStream); err != nil {
+				return
+			}
+		}
 	} else {
 		writer.Header().Set("Content-Type", "application/vnd.docker.raw-stream")
 		writer.Header().Set("Cache-Control", "no-cache")
@@ -109,7 +146,7 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 			flusher.Flush()
 		}
 	}
-	if logs && outputEnabled && len(data) > 0 {
+	if !dockerExecUpgradeRequested(request) && logs && outputEnabled && len(data) > 0 {
 		if err := writeLogFrame(target, data, outputStream); err != nil {
 			return
 		}
@@ -122,6 +159,8 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 	for {
 		select {
 		case <-request.Context().Done():
+			return
+		case <-inputDone:
 			return
 		case <-ticker.C:
 			var buffer strings.Builder
