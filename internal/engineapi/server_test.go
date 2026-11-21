@@ -1,6 +1,7 @@
 package engineapi
 
 import (
+	"context"
 	"archive/tar"
 	"bufio"
 	"bytes"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/manit6752025/boxr/internal/container"
+	boxrnetwork "github.com/manit6752025/boxr/internal/network"
 	imageStore "github.com/manit6752025/boxr/internal/image"
 	"github.com/manit6752025/boxr/internal/state"
 	"github.com/manit6752025/boxr/internal/volume"
@@ -1546,5 +1548,102 @@ func TestDockerContainerInspectReportsNamedVolumeMount(t *testing.T) {
 	binds := hostConfig["Binds"].([]any)
 	if len(binds) != 1 || binds[0] != "inspect-data:/data:ro" {
 		t.Fatalf("Docker HostConfig.Binds = %#v", binds)
+	}
+}
+
+
+func TestDockerNetworkCreateListInspectAndDelete(t *testing.T) {
+	server := setupEngineAPITest(t)
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	runner := boxrnetwork.RunnerFunc(func(_ context.Context, _ string, _ ...string) error {
+		return nil
+	})
+	server.createNetwork = func(name string, options boxrnetwork.CreateOptions) (boxrnetwork.Network, error) {
+		return boxrnetwork.CreateWithRunner(context.Background(), name, options, runner)
+	}
+	server.removeNetwork = func(name string) error {
+		return boxrnetwork.RemoveWithRunner(context.Background(), name, runner)
+	}
+
+	body := `{"Name":"api-bridge","Driver":"bridge","IPAM":{"Driver":"default","Config":[{"Subnet":"172.29.40.0/24","Gateway":"172.29.40.1"}]},"Labels":{"team":"platform","tier":"test"},"Options":{"com.docker.network.bridge.name":"brx-api-test","com.docker.network.bridge.enable_ip_masquerade":"false"}}`
+	request := httptest.NewRequest(http.MethodPost, "/v1.45/networks/create", strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created dockerNetworkCreateResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == "" || created.Warning != "" {
+		t.Fatalf("create response = %+v", created)
+	}
+
+	response = engineAPIRequest(server, http.MethodGet, "/v1.45/networks")
+	if response.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
+	}
+	var listed []dockerNetworkResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != created.ID || listed[0].Name != "api-bridge" ||
+		listed[0].IPAM.Config[0].Subnet != "172.29.40.0/24" || listed[0].Options["com.docker.network.bridge.name"] != "brx-api-test" {
+		t.Fatalf("network list = %+v", listed)
+	}
+
+	filters, err := json.Marshal(map[string][]string{"label": {"team=platform"}, "driver": {"bridge"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(filters)
+	response = engineAPIRequest(server, http.MethodGet, "/v1.45/networks?filters="+url.QueryEscape(encoded))
+	if response.Code != http.StatusOK {
+		t.Fatalf("filtered list status=%d body=%s", response.Code, response.Body.String())
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].Labels["tier"] != "test" {
+		t.Fatalf("filtered networks = %+v", listed)
+	}
+
+	response = engineAPIRequest(server, http.MethodGet, "/v1.45/networks/"+created.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("inspect status=%d body=%s", response.Code, response.Body.String())
+	}
+	var inspected dockerNetworkResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &inspected); err != nil {
+		t.Fatal(err)
+	}
+	if inspected.Name != "api-bridge" || inspected.IPAM.Config[0].Gateway != "172.29.40.1" {
+		t.Fatalf("network inspect = %+v", inspected)
+	}
+
+	response = engineAPIRequest(server, http.MethodDelete, "/v1.45/networks/"+created.ID)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("delete status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = engineAPIRequest(server, http.MethodGet, "/v1.45/networks/"+created.ID)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("inspect deleted network status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestDockerNetworkCreateRejectsUnsupportedModesAndOptions(t *testing.T) {
+	for name, body := range map[string]string{
+		"non bridge driver": `{"Name":"unsupported","Driver":"overlay","IPAM":{"Config":[{"Subnet":"172.28.40.0/24"}]}}`,
+		"internal":         `{"Name":"unsupported","Driver":"bridge","Internal":true,"IPAM":{"Config":[{"Subnet":"172.28.40.0/24"}]}}`,
+		"ipv6":             `{"Name":"unsupported","Driver":"bridge","EnableIPv6":true,"IPAM":{"Config":[{"Subnet":"172.28.40.0/24"}]}}`,
+		"empty ipam":       `{"Name":"unsupported","Driver":"bridge","IPAM":{"Config":[]}}`,
+		"ip range":         `{"Name":"unsupported","Driver":"bridge","IPAM":{"Config":[{"Subnet":"172.28.40.0/24","IPRange":"172.28.40.128/25"}]}}`,
+		"unknown option":   `{"Name":"unsupported","Driver":"bridge","IPAM":{"Config":[{"Subnet":"172.28.40.0/24"}]},"Options":{"unsafe":"true"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := parseDockerNetworkCreate([]byte(body)); err == nil {
+				t.Fatalf("unsupported network request was accepted: %s", body)
+			}
+		})
 	}
 }
