@@ -41,14 +41,14 @@ func TestDockerEngineExecCreateStartStreamAndInspect(t *testing.T) {
 	response := postDockerExecCreate(t, server, record.ID, dockerExecCreateConfig{
 		AttachStdout: true,
 		AttachStderr: true,
-		Cmd: []string{"/bin/example", "hello"},
-		Env: []string{"APP_MODE=test"},
+		Cmd:        []string{"/bin/example", "hello"},
+		Env:        []string{"APP_MODE=test"},
 		WorkingDir: "/srv/app",
 	})
 	if response.Code != http.StatusCreated {
 		t.Fatalf("exec create status=%d body=%s", response.Code, response.Body.String())
 	}
-	var created struct { Id string }
+	var created struct{ Id string }
 	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
@@ -91,11 +91,11 @@ func TestDockerEngineExecCreateStartStreamAndInspect(t *testing.T) {
 		t.Fatalf("exec inspect status=%d body=%s", inspect.Code, inspect.Body.String())
 	}
 	var result struct {
-		ID string
-		Running bool
-		ExitCode *int
+		ID          string
+		Running     bool
+		ExitCode    *int
 		ContainerID string
-		Pid int
+		Pid         int
 	}
 	if err := json.Unmarshal(inspect.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
@@ -141,7 +141,10 @@ func TestDockerEngineExecDetachedSessionCanBeInspectedWhileRunning(t *testing.T)
 		t.Fatal("detached exec runner did not start")
 	}
 	inspect := engineAPIRequest(server, http.MethodGet, "/exec/"+created.Id+"/json")
-	var running struct { Running bool; Pid int }
+	var running struct {
+		Running bool
+		Pid     int
+	}
 	if err := json.Unmarshal(inspect.Body.Bytes(), &running); err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +155,10 @@ func TestDockerEngineExecDetachedSessionCanBeInspectedWhileRunning(t *testing.T)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		inspect = engineAPIRequest(server, http.MethodGet, "/exec/"+created.Id+"/json")
-		var complete struct { Running bool; ExitCode *int }
+		var complete struct {
+			Running  bool
+			ExitCode *int
+		}
 		if err := json.Unmarshal(inspect.Body.Bytes(), &complete); err != nil {
 			t.Fatal(err)
 		}
@@ -168,7 +174,7 @@ func TestDockerEngineExecRejectsUnsupportedOrUnsafeCreateOptions(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record := execAPITestContainer(t, server)
 	cases := []struct {
-		name string
+		name   string
 		config dockerExecCreateConfig
 	}{
 		{name: "stdin", config: dockerExecCreateConfig{AttachStdin: true, Cmd: []string{"/bin/true"}}},

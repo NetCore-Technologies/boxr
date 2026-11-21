@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	maxDockerExecBodyBytes     = 64 << 10
-	maxDockerExecSessions      = 1024
+	maxDockerExecBodyBytes    = 64 << 10
+	maxDockerExecSessions     = 1024
 	dockerExecSessionLifetime = time.Hour
 )
 
@@ -421,24 +421,24 @@ func (s *Server) handleExecInspect(writer http.ResponseWriter, id string) {
 		arguments = append(arguments, session.Config.Cmd[1:]...)
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"ID": id,
-		"Running": session.Running,
+		"ID":       id,
+		"Running":  session.Running,
 		"ExitCode": session.ExitCode,
 		"ProcessConfig": map[string]any{
-			"privileged": false,
-			"user": "",
-			"tty": false,
-			"entrypoint": entrypoint,
-			"arguments": arguments,
+			"privileged":  false,
+			"user":        "",
+			"tty":         false,
+			"entrypoint":  entrypoint,
+			"arguments":   arguments,
 			"environment": append([]string(nil), session.Config.Env...),
-			"workingDir": session.Config.WorkingDir,
+			"workingDir":  session.Config.WorkingDir,
 		},
-		"OpenStdin": false,
-		"OpenStderr": session.Config.AttachStderr,
-		"OpenStdout": session.Config.AttachStdout,
-		"CanRemove": !session.Running,
+		"OpenStdin":   false,
+		"OpenStderr":  session.Config.AttachStderr,
+		"OpenStdout":  session.Config.AttachStdout,
+		"CanRemove":   !session.Running,
 		"ContainerID": session.ContainerID,
-		"Pid": session.PID,
+		"Pid":         session.PID,
 	})
 }
 
