@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"os"
 	"os"
 	"os/exec"
@@ -520,6 +521,50 @@ func (s *Server) runDockerExecSession(ctx context.Context, session *dockerExecSe
 	session.ExitCode = &exitCode
 	session.FinishedAt = &finished
 	session.mu.Unlock()
+}
+
+func (s *Server) handleExecResize(writer http.ResponseWriter, request *http.Request, id string) {
+	query := request.URL.Query()
+	for key := range query {
+		if key != "h" && key != "w" {
+			writeError(writer, http.StatusBadRequest, fmt.Errorf("unsupported exec resize query parameter %q", key))
+			return
+		}
+	}
+	heightValues, widthValues := query["h"], query["w"]
+	if len(heightValues) != 1 || len(widthValues) != 1 {
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("exec resize requires exactly one h and one w parameter"))
+		return
+	}
+	height, heightErr := strconv.ParseUint(heightValues[0], 10, 16)
+	width, widthErr := strconv.ParseUint(widthValues[0], 10, 16)
+	if heightErr != nil || widthErr != nil || height == 0 || width == 0 {
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("exec resize dimensions must be integers between 1 and 65535"))
+		return
+	}
+	session, ok := s.dockerExecSession(id)
+	if !ok {
+		writeError(writer, http.StatusNotFound, fmt.Errorf("exec session %q not found", id))
+		return
+	}
+	session.mu.Lock()
+	if !session.Config.Tty {
+		session.mu.Unlock()
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("exec session was not created with a TTY"))
+		return
+	}
+	if !session.Running || session.terminal == nil {
+		session.mu.Unlock()
+		writeError(writer, http.StatusConflict, fmt.Errorf("exec session does not have an active terminal"))
+		return
+	}
+	err := resizeDockerExecTTY(session.terminal, uint16(height), uint16(width))
+	session.mu.Unlock()
+	if err != nil {
+		writeError(writer, http.StatusConflict, fmt.Errorf("resize exec terminal: %w", err))
+		return
+	}
+	writer.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) handleExecInspect(writer http.ResponseWriter, id string) {
