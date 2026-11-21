@@ -924,10 +924,13 @@ func TestCreateRejectsInvalidOrOutOfSubnetIPRange(t *testing.T) {
 
 func TestStoredIPAMLeasesCannotOverlapAuxiliaryReservations(t *testing.T) {
 	network := Network{
-		ID: "0123456789abcdef", Name: "reserved-overlap",
-		Driver: "bridge", Bridge: "br-reserved0",
-		Subnet: "192.0.2.0/24", Gateway: "192.0.2.1",
-		Allocations: map[string]string{"container-lease": "192.0.2.10"},
+		ID:                 "0123456789abcdef",
+		Name:               "reserved-overlap",
+		Driver:             "bridge",
+		Bridge:             "br-reserved0",
+		Subnet:             "192.0.2.0/24",
+		Gateway:            "192.0.2.1",
+		Allocations:        map[string]string{"container-lease": "192.0.2.10"},
 		AuxiliaryAddresses: map[string]string{"database": "192.0.2.10"},
 	}
 	if err := validateStoredNetworks([]Network{network}); err == nil {
