@@ -2315,3 +2315,121 @@ func TestEngineAPIDockerBuildRejectsInvalidQueriesAndUnsafeContexts(t *testing.T
 		t.Fatalf("traversal build context status=%d body=%s", response.Code, response.Body.String())
 	}
 }
+
+func TestDockerImagePruneProtectsContainerDigestsAndRemovesUnusedTags(t *testing.T) {
+	server := setupEngineAPITest(t)
+	createImage := func(reference, contents, labelValue string) imageStore.Image {
+		t.Helper()
+		root := filepath.Join(t.TempDir(), "rootfs")
+		if err := os.MkdirAll(filepath.Join(root, "bin"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "bin", "app"), []byte(contents), 0755); err != nil {
+			t.Fatal(err)
+		}
+		created, err := imageStore.ImportRootFSWithConfig(root, reference, "linux", "amd64", "", imageStore.ImageRuntimeConfig{
+			Entrypoint: []string{"/bin/app"},
+			Labels:     map[string]string{"org.example.prune": labelValue},
+		})
+		if err != nil {
+			t.Fatalf("import image %s: %v", reference, err)
+		}
+		return created
+	}
+	used := createImage("registry.example/team/prune-used:latest", "container image\n", "shared")
+	alias := "registry.example/team/prune-used:stable"
+	if err := imageStore.Tag(used.Reference, alias); err != nil {
+		t.Fatal(err)
+	}
+	unused := createImage("registry.example/team/prune-unused:latest", "unused image\n", "prunable")
+	record, err := state.Create("prune-protected-container", []string{"/bin/app"}, container.Options{}, map[string]string{
+		"io.boxr.image": used.Reference,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.RemoveCreated(record.ID)
+
+	filters, err := json.Marshal(map[string][]string{
+		"dangling": {"false"},
+		"until":    {"9999999999"},
+		"label":    {"org.example.prune=prunable"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(filters)
+	response := engineAPIRequest(server, http.MethodPost, "/v1.45/images/prune?filters="+url.QueryEscape(encoded))
+	if response.Code != http.StatusOK {
+		t.Fatalf("image prune status=%d body=%s", response.Code, response.Body.String())
+	}
+	var pruned dockerImagePruneResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &pruned); err != nil {
+		t.Fatal(err)
+	}
+	foundUntagged := false
+	foundDeletedBlob := false
+	for _, item := range pruned.ImagesDeleted {
+		if item.Untagged == unused.Reference {
+			foundUntagged = true
+		}
+		if item.Deleted != "" {
+			foundDeletedBlob = true
+		}
+		if item.Untagged == used.Reference || item.Untagged == alias {
+			t.Fatalf("prune removed container-used image tag %q", item.Untagged)
+		}
+	}
+	if !foundUntagged || !foundDeletedBlob || pruned.SpaceReclaimed <= 0 {
+		t.Fatalf("image prune report = %+v", pruned)
+	}
+	for _, reference := range []string{used.Reference, alias} {
+		image, err := imageStore.Verify(reference)
+		if err != nil || image.Digest != used.Digest {
+			t.Fatalf("protected image %s changed: image=%+v err=%v", reference, image, err)
+		}
+	}
+	if _, err := imageStore.Inspect(unused.Reference); err == nil {
+		t.Fatal("unused image tag remains after prune")
+	}
+}
+
+func TestDockerImagePruneDefaultsToDanglingOnlyAndValidatesFilters(t *testing.T) {
+	server := setupEngineAPITest(t)
+	image := importEngineAPITestImage(t, "registry.example/team/prune-default:latest")
+	response := engineAPIRequest(server, http.MethodPost, "/v1.45/images/prune")
+	if response.Code != http.StatusOK {
+		t.Fatalf("default image prune status=%d body=%s", response.Code, response.Body.String())
+	}
+	var pruned dockerImagePruneResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &pruned); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range pruned.ImagesDeleted {
+		if item.Untagged == image.Reference {
+			t.Fatalf("default dangling-only prune removed tagged image %q", image.Reference)
+		}
+	}
+	if _, err := imageStore.Verify(image.Reference); err != nil {
+		t.Fatalf("default prune removed tagged image: %v", err)
+	}
+
+	for name, filters := range map[string]map[string][]string{
+		"unknown key":   {"unsupported": {"yes"}},
+		"invalid dangling": {"dangling": {"maybe"}},
+		"invalid until": {"until": {"not-a-time"}},
+		"empty label":   {"label": {""}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			data, err := json.Marshal(filters)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded := base64.RawURLEncoding.EncodeToString(data)
+			response := engineAPIRequest(server, http.MethodPost, "/v1.45/images/prune?filters="+url.QueryEscape(encoded))
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("invalid image prune filter status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
