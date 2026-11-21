@@ -445,6 +445,11 @@ func dockerCommitExcludedMounts(record state.Record, config imageStore.ImageRunt
 			return nil, err
 		}
 	}
+	if record.Options.MountProc {
+		if err := add("/proc"); err != nil {
+			return nil, err
+		}
+	}
 	for target := range config.Volumes {
 		if err := add(target); err != nil {
 			return nil, err
