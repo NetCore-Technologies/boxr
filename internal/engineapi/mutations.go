@@ -713,6 +713,13 @@ func createContainerRecord(name string, input dockerCreateRequest) (state.Record
 	if err != nil {
 		return empty, fmt.Errorf("create Boxr container record: %w", err)
 	}
+	record, err = state.ConfigureManagedOverlay(record.ID)
+	if err != nil {
+		if removeErr := state.RemoveCreated(record.ID); removeErr != nil {
+			return empty, fmt.Errorf("configure persistent container writable layer: %v; roll back container creation: %w", err, removeErr)
+		}
+		return empty, fmt.Errorf("configure persistent container writable layer: %w", err)
+	}
 	return record, nil
 }
 
@@ -1117,7 +1124,6 @@ func sanitizeEngineRunOptions(options container.Options) container.Options {
 	options.ReadOnlyRootFS = false
 	options.MountProc = false
 	options.TmpfsMounts = nil
-	options.OverlayDir = ""
 	return options
 }
 

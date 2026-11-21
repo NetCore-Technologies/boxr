@@ -1,6 +1,7 @@
 package engineapi
 
 import (
+	"errors"
 	"archive/tar"
 	"bufio"
 	"bytes"
@@ -1268,6 +1269,65 @@ func TestDockerContainerStartRequiresARealCreatedEngineRecord(t *testing.T) {
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusNotModified {
 		t.Fatalf("stop of created container status=%d", response.Code)
+	}
+}
+
+func TestDockerCreatePersistsManagedWritableLayerInStartConfiguration(t *testing.T) {
+	server := setupEngineAPITest(t)
+	const reference = "registry.example/team/persistent-writable-layer:v1"
+	importEngineAPITestImage(t, reference)
+	request := httptest.NewRequest(http.MethodPost, "/v1.45/containers/create?name=persistent-layer", strings.NewReader(`{"Image":"`+reference+`"}`))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created struct {
+		ID string `json:"Id"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	record, err := state.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := state.ManagedOverlayDir(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Options.OverlayDir != expected {
+		t.Fatalf("container OverlayDir=%q, want managed persistent path %q", record.Options.OverlayDir, expected)
+	}
+	configPath, err := state.EngineConfigPath(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved struct {
+		Options container.Options `json:"options"`
+	}
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Options.OverlayDir != expected {
+		t.Fatalf("saved start configuration OverlayDir=%q, want %q", saved.Options.OverlayDir, expected)
+	}
+	parent, err := os.Stat(filepath.Dir(expected))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parent.Mode().Perm() != 0700 {
+		t.Fatalf("writable-layer parent permissions=%o, want 0700", parent.Mode().Perm())
+	}
+	if err := state.RemoveCreated(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(expected); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("managed writable storage remains after create rollback: %v", err)
 	}
 }
 

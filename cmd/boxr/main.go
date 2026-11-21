@@ -3728,7 +3728,8 @@ var implementedFeatures = []string{
 	"Dockerfile COPY --from supports verified local image references without implicit network pulls",
 	"Docker Engine API creates starts inspects and streams non-TTY exec sessions through Boxr namespace-aware execution",
 	"Engine API prunes stopped and created containers using Docker until and label filters and emits Docker prune events",
-	"Engine API can expose remote TCP access only through mutually authenticated TLS with client certificates verified by a configured CA",
+	"Engine API can expose remote TCP access only through mutually authenticated TLS with client certificates verified by a configured CA"
+	"Engine API-created containers persist writable OverlayFS layers across stop and restart and remove owned storage with container deletion",
 }
 
 func printFeatures(stdout io.Writer) {

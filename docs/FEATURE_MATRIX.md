@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 897 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 898 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 
 ## Implemented capabilities
@@ -904,3 +904,4 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 895. Docker Engine API creates starts inspects and streams non-TTY exec sessions through Boxr namespace-aware execution
 896. Engine API prunes stopped and created containers using Docker until and label filters and emits Docker prune events
 897. Engine API can expose remote TCP access only through mutually authenticated TLS with client certificates verified by a configured CA
+898. Engine API-created containers persist writable OverlayFS layers across stop and restart and remove owned storage with container deletion

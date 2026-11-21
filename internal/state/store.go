@@ -88,6 +88,112 @@ func ensureDir() (string, error) {
 	return dir, nil
 }
 
+// ManagedOverlayDir returns the private writable-layer path owned by an Engine API
+// container. IDs are validated before they are used as filesystem components.
+func ManagedOverlayDir(id string) (string, error) {
+	if !validContainerID(id) {
+		return "", fmt.Errorf("invalid container ID for writable-layer storage")
+	}
+	dir, err := ensureDir()
+	if err != nil {
+		return "", err
+	}
+	parent := filepath.Join(dir, "writable")
+	if err := os.MkdirAll(parent, 0700); err != nil {
+		return "", fmt.Errorf("create container writable-layer directory: %w", err)
+	}
+	info, err := os.Lstat(parent)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", fmt.Errorf("container writable-layer directory must be a real directory")
+	}
+	if err := os.Chmod(parent, 0700); err != nil {
+		return "", fmt.Errorf("secure container writable-layer directory: %w", err)
+	}
+	return filepath.Join(parent, id), nil
+}
+
+// ConfigureManagedOverlay persists Boxr-owned OverlayFS storage for a newly
+// created Engine API container. The location is deterministic and cannot be
+// redirected to an arbitrary host path through the Engine API.
+func ConfigureManagedOverlay(id string) (Record, error) {
+	overlayDir, err := ManagedOverlayDir(id)
+	if err != nil {
+		return Record{}, err
+	}
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	record, err := findLocked(id)
+	if err != nil {
+		return Record{}, err
+	}
+	if record.Status != "created" {
+		return Record{}, fmt.Errorf("container %s must be created before configuring writable storage", record.ID)
+	}
+	if record.Options.OverlayDir != "" && filepath.Clean(record.Options.OverlayDir) != filepath.Clean(overlayDir) {
+		return Record{}, fmt.Errorf("container %s already references a different writable-layer directory", record.ID)
+	}
+	record.Options.OverlayDir = overlayDir
+	if err := saveRecord(record); err != nil {
+		return Record{}, fmt.Errorf("persist container writable-layer configuration: %w", err)
+	}
+	return record, nil
+}
+
+func validContainerID(id string) bool {
+	if len(id) != 12 {
+		return false
+	}
+	for _, char := range id {
+		if !(char >= '0' && char <= '9') && !(char >= 'a' && char <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func managedOverlayPath(id string) (string, error) {
+	if !validContainerID(id) {
+		return "", fmt.Errorf("invalid container ID for writable-layer storage")
+	}
+	dir, err := Dir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "writable", id), nil
+}
+
+func removeManagedOverlay(record Record) error {
+	if record.Options.OverlayDir == "" {
+		return nil
+	}
+	expected, err := managedOverlayPath(record.ID)
+	if err != nil {
+		return err
+	}
+	if filepath.Clean(record.Options.OverlayDir) != filepath.Clean(expected) {
+		// Native CLI containers may reference user-managed OverlayFS paths.
+		// Never recursively remove storage that Boxr does not own.
+		return nil
+	}
+	info, err := os.Lstat(expected)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("managed writable-layer path %s must be a real directory", expected)
+	}
+	if err := os.RemoveAll(expected); err != nil {
+		return fmt.Errorf("remove managed writable layer %s: %w", expected, err)
+	}
+	return nil
+}
+
 func Create(name string, command []string, options container.Options, labels map[string]string) (Record, error) {
 	storeMu.Lock()
 	defer storeMu.Unlock()
@@ -319,6 +425,9 @@ func remove(query string, allowCreated bool) error {
 	}
 	if err := removeEngineConfigLocked(record.ID); err != nil {
 		return fmt.Errorf("remove container Engine API configuration: %w", err)
+	}
+	if err := removeManagedOverlay(record); err != nil {
+		return err
 	}
 	if err := os.Remove(recordPath(record.ID)); err != nil {
 		return fmt.Errorf("remove container record: %w", err)
@@ -601,6 +710,9 @@ func Prune(before time.Time) (int, error) {
 		}
 		if err := removeEngineConfigLocked(record.ID); err != nil {
 			return removed, fmt.Errorf("remove Engine API configuration for %s: %w", record.ID, err)
+		}
+		if err := removeManagedOverlay(record); err != nil {
+			return removed, fmt.Errorf("remove writable layer for %s: %w", record.ID, err)
 		}
 		if err := os.Remove(recordPath(record.ID)); err != nil {
 			return removed, err

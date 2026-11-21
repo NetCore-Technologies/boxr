@@ -1,6 +1,7 @@
 package state
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,6 +59,61 @@ func TestCreateStartFinishInspectAndRemoveLifecycle(t *testing.T) {
 	}
 	if len(events) != 4 {
 		t.Fatalf("got %d lifecycle events, want create/start/die/remove", len(events))
+	}
+}
+
+func TestManagedOverlayIsPrivateAndRemovedWithContainer(t *testing.T) {
+	stateDir := useTempState(t)
+	record, err := Create("managed-overlay", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured, err := ConfigureManagedOverlay(record.ID)
+	if err != nil {
+		t.Fatalf("configure managed writable layer: %v", err)
+	}
+	expected := filepath.Join(stateDir, "writable", record.ID)
+	if configured.Options.OverlayDir != expected {
+		t.Fatalf("OverlayDir=%q, want %q", configured.Options.OverlayDir, expected)
+	}
+	parentInfo, err := os.Stat(filepath.Dir(expected))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parentInfo.Mode().Perm() != 0700 {
+		t.Fatalf("writable-layer parent permissions=%o, want 0700", parentInfo.Mode().Perm())
+	}
+	for _, directory := range []string{"upper", "work", "merged"} {
+		if err := os.MkdirAll(filepath.Join(expected, directory), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(expected, "upper", "persisted.txt"), []byte("persistent"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveCreated(record.ID); err != nil {
+		t.Fatalf("remove Engine API container: %v", err)
+	}
+	if _, err := os.Lstat(expected); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("managed writable layer remains after container removal: %v", err)
+	}
+}
+
+func TestContainerRemovalNeverDeletesUserManagedOverlay(t *testing.T) {
+	useTempState(t)
+	userOverlay := filepath.Join(t.TempDir(), "user-overlay")
+	if err := os.MkdirAll(filepath.Join(userOverlay, "upper"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	record, err := Create("user-overlay", []string{"/bin/true"}, container.Options{OverlayDir: userOverlay}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveCreated(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(userOverlay, "upper")); err != nil {
+		t.Fatalf("user-managed OverlayFS data was removed: %v", err)
 	}
 }
 
