@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"io"
 	"testing"
 
 	"github.com/manit6752025/boxr/internal/container"
@@ -68,6 +69,43 @@ func TestReadLogsRejectsNegativeTailAndHandlesMissingFile(t *testing.T) {
 	data, err := ReadLogs(record.ID, 100)
 	if err != nil || len(data) != 0 {
 		t.Fatalf("missing log = %q, %v", data, err)
+	}
+}
+
+func TestLogOffsetAndCopyFollowLargeLogsWithoutUnboundedReads(t *testing.T) {
+	dir := useTempState(t)
+	record, err := Create("large-log", []string{"sleep", "1"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := OpenLog(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	largeSize := maxLogBytes + 4
+	if err := logFile.Truncate(largeSize); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := logFile.Seek(maxLogBytes, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := logFile.Write([]byte("tail")); err != nil {
+		t.Fatal(err)
+	}
+	if err := logFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	offset, err := LogOffset(record.ID)
+	if err != nil || offset != largeSize {
+		t.Fatalf("LogOffset() = %d, %v; want %d", offset, err, largeSize)
+	}
+	var copied bytes.Buffer
+	next, err := CopyLogFrom(record.ID, maxLogBytes, &copied)
+	if err != nil || next != largeSize || copied.String() != "tail" {
+		t.Fatalf("CopyLogFrom large log = %d, %q, %v; want %d, tail", next, copied.String(), err, largeSize)
+	}
+	if _, err := os.Stat(filepath.Join(dir, record.ID+".log")); err != nil {
+		t.Fatal(err)
 	}
 }
 
