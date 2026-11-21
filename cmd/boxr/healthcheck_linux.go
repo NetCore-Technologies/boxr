@@ -17,7 +17,7 @@ import (
 )
 
 type healthOutputBuffer struct {
-	mu sync.Mutex
+	mu   sync.Mutex
 	data bytes.Buffer
 }
 

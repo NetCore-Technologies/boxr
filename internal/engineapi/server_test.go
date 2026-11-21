@@ -2756,7 +2756,6 @@ func TestDockerImagePruneDefaultsToDanglingOnlyAndValidatesFilters(t *testing.T)
 	}
 }
 
-
 func TestDockerStatusWithHealthMatchesDockerPSHealthSuffix(t *testing.T) {
 	for _, test := range []struct {
 		name   string

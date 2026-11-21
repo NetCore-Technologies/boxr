@@ -50,14 +50,14 @@ type CopyInstruction struct {
 // ImageRuntimeConfig stores the standard runtime defaults represented by the
 // image config. Environment entries are not printed by the default inspect UI.
 type ImageRuntimeConfig struct {
-	Env          []string            `json:"Env,omitempty"`
-	Entrypoint   []string            `json:"Entrypoint,omitempty"`
-	Cmd          []string            `json:"Cmd,omitempty"`
-	WorkingDir   string              `json:"WorkingDir,omitempty"`
-	User         string              `json:"User,omitempty"`
-	Labels       map[string]string   `json:"Labels,omitempty"`
-	Volumes      map[string]struct{} `json:"Volumes,omitempty"`
-	ExposedPorts map[string]struct{} `json:"ExposedPorts,omitempty"`
+	Env          []string                     `json:"Env,omitempty"`
+	Entrypoint   []string                     `json:"Entrypoint,omitempty"`
+	Cmd          []string                     `json:"Cmd,omitempty"`
+	WorkingDir   string                       `json:"WorkingDir,omitempty"`
+	User         string                       `json:"User,omitempty"`
+	Labels       map[string]string            `json:"Labels,omitempty"`
+	Volumes      map[string]struct{}          `json:"Volumes,omitempty"`
+	ExposedPorts map[string]struct{}          `json:"ExposedPorts,omitempty"`
 	StopSignal   string                       `json:"StopSignal,omitempty"`
 	Healthcheck  *container.HealthcheckConfig `json:"Healthcheck,omitempty"`
 }

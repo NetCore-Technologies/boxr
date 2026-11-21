@@ -14,9 +14,9 @@ import (
 
 func TestDockerConfigHealthcheckInheritsOverridesAndDisables(t *testing.T) {
 	imageDefault := &container.HealthcheckConfig{
-		Test: []string{"CMD", "/usr/bin/health"},
+		Test:     []string{"CMD", "/usr/bin/health"},
 		Interval: 15 * time.Second,
-		Retries: 4,
+		Retries:  4,
 	}
 	inherited, err := dockerConfigHealthcheck(nil, imageDefault)
 	if err != nil {
@@ -76,7 +76,7 @@ func TestDockerCreateHealthcheckOverridesImageAndAppearsInInspect(t *testing.T) 
 	image, err := imageStore.ImportRootFSWithConfig(root, "registry.example/team/healthcheck:v1", "linux", "amd64", "", imageStore.ImageRuntimeConfig{
 		Cmd: []string{"/bin/true"},
 		Healthcheck: &container.HealthcheckConfig{
-			Test: []string{"CMD", "/image/health"},
+			Test:     []string{"CMD", "/image/health"},
 			Interval: 12 * time.Second,
 		},
 	})
@@ -89,7 +89,7 @@ func TestDockerCreateHealthcheckOverridesImageAndAppearsInInspect(t *testing.T) 
 		t.Fatalf("image inspect Healthcheck = %#v", imageConfig["Healthcheck"])
 	}
 	record, err := createContainerRecord("healthcheck-api-create", dockerCreateRequest{
-		Image: image.Reference,
+		Image:       image.Reference,
 		Healthcheck: json.RawMessage(`{"Test":["CMD","/container/health"],"Retries":6}`),
 	})
 	if err != nil {
@@ -109,7 +109,7 @@ func TestDockerCreateHealthcheckOverridesImageAndAppearsInInspect(t *testing.T) 
 	}
 	if err := state.SetHealth(record.ID, state.HealthState{
 		Status: "healthy",
-		Log: []state.HealthLog{{Start: time.Now(), End: time.Now(), ExitCode: 0, Output: "ready"}},
+		Log:    []state.HealthLog{{Start: time.Now(), End: time.Now(), ExitCode: 0, Output: "ready"}},
 	}); err != nil {
 		t.Fatalf("persist container health status: %v", err)
 	}

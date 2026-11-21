@@ -32,17 +32,17 @@ const (
 )
 
 type Server struct {
-	version          string
-	imageMu          sync.Mutex
-	volumeMu         sync.Mutex
-	containerPruneMu sync.Mutex
-	networkMu        sync.Mutex
-	execMu           sync.Mutex
-	execSessions     map[string]*dockerExecSession
-	createNetwork    func(string, boxrnetwork.CreateOptions) (boxrnetwork.Network, error)
-	removeNetwork    func(string) error
-	joinNetwork      func(string, int, string, ...boxrnetwork.PortMapping) (string, error)
-	leaveNetwork     func(string, string) error
+	version               string
+	imageMu               sync.Mutex
+	volumeMu              sync.Mutex
+	containerPruneMu      sync.Mutex
+	networkMu             sync.Mutex
+	execMu                sync.Mutex
+	execSessions          map[string]*dockerExecSession
+	createNetwork         func(string, boxrnetwork.CreateOptions) (boxrnetwork.Network, error)
+	removeNetwork         func(string) error
+	joinNetwork           func(string, int, string, ...boxrnetwork.PortMapping) (string, error)
+	leaveNetwork          func(string, string) error
 	verifyNetworkPID      func(state.Record) error
 	verifyExecPID         func(state.Record) error
 	verifyUpdatePID       func(state.Record) error
@@ -54,16 +54,16 @@ func New(version string) *Server {
 		version = "dev"
 	}
 	return &Server{
-		version:          version,
-		createNetwork:    boxrnetwork.Create,
-		removeNetwork:    boxrnetwork.Remove,
-		joinNetwork:      boxrnetwork.Join,
-		leaveNetwork:     boxrnetwork.Leave,
+		version:               version,
+		createNetwork:         boxrnetwork.Create,
+		removeNetwork:         boxrnetwork.Remove,
+		joinNetwork:           boxrnetwork.Join,
+		leaveNetwork:          boxrnetwork.Leave,
 		verifyNetworkPID:      verifyDockerContainerPID,
 		verifyExecPID:         verifyDockerContainerPID,
 		verifyUpdatePID:       verifyDockerContainerPID,
 		updateCgroupResources: container.UpdateCgroupResources,
-		execSessions:     make(map[string]*dockerExecSession),
+		execSessions:          make(map[string]*dockerExecSession),
 	}
 }
 
