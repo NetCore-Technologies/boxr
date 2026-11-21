@@ -31,12 +31,12 @@ func TestDockerExecTTYResizeChangesPTYSize(t *testing.T) {
 	if err := resizeDockerExecTTY(master, 41, 121); err != nil {
 		t.Fatalf("resize pseudo-terminal: %v", err)
 	}
-	size, err := pty.Getsize(master)
+	rows, cols, err := pty.Getsize(master)
 	if err != nil {
 		t.Fatalf("read pseudo-terminal size: %v", err)
 	}
-	if size.Rows != 41 || size.Cols != 121 {
-		t.Fatalf("pseudo-terminal size = %dx%d, want 41x121", size.Rows, size.Cols)
+	if rows != 41 || cols != 121 {
+		t.Fatalf("pseudo-terminal size = %dx%d, want 41x121", rows, cols)
 	}
 }
 
@@ -111,14 +111,14 @@ func TestDockerExecResizeUpdatesRunningSessionPTY(t *testing.T) {
 		close(release)
 		t.Fatalf("active exec resize status=%d body=%s", resize.Code, resize.Body.String())
 	}
-	size, err := pty.Getsize(master)
+	rows, cols, err := pty.Getsize(master)
 	if err != nil {
 		close(release)
 		t.Fatalf("read resized PTY dimensions: %v", err)
 	}
-	if size.Rows != 41 || size.Cols != 121 {
+	if rows != 41 || cols != 121 {
 		close(release)
-		t.Fatalf("active PTY size = %dx%d, want 41x121", size.Rows, size.Cols)
+		t.Fatalf("active PTY size = %dx%d, want 41x121", rows, cols)
 	}
 	close(release)
 	select {
