@@ -313,7 +313,7 @@ func convertComposeService(name string, source composeService, networkNames map[
 		TmpfsMounts:      tmpfsMounts,
 		ReadOnlyRootFS:   source.ReadOnly,
 		DropCapabilities: capabilityDrops,
-		Healthcheck:       healthcheck,
+		Healthcheck:      healthcheck,
 	}
 	return Service{
 		Image:     source.Image,

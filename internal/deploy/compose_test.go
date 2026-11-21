@@ -652,7 +652,6 @@ func TestLoadComposeInterpolationRejectsSymlinkedDotEnv(t *testing.T) {
 	}
 }
 
-
 func TestLoadComposeTranslatesDockerHealthchecks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "compose.yaml")
@@ -709,16 +708,16 @@ func TestLoadComposeTranslatesDockerHealthchecks(t *testing.T) {
 
 func TestComposeHealthcheckRejectsInvalidOrUnsupportedOptions(t *testing.T) {
 	cases := map[string]string{
-		"unknown field": "    healthcheck:\n      test: [CMD, /bin/check]\n      retries: 3\n      shell: /bin/sh\n",
-		"missing test": "    healthcheck:\n      retries: 3\n",
-		"invalid retries": "    healthcheck:\n      test: [CMD, /bin/check]\n      retries: 0\n",
-		"invalid interval": "    healthcheck:\n      test: [CMD, /bin/check]\n      interval: 0s\n",
-		"invalid timeout": "    healthcheck:\n      test: [CMD, /bin/check]\n      timeout: invalid\n",
-		"empty command": "    healthcheck:\n      test: [CMD, '']\n",
+		"unknown field":         "    healthcheck:\n      test: [CMD, /bin/check]\n      retries: 3\n      shell: /bin/sh\n",
+		"missing test":          "    healthcheck:\n      retries: 3\n",
+		"invalid retries":       "    healthcheck:\n      test: [CMD, /bin/check]\n      retries: 0\n",
+		"invalid interval":      "    healthcheck:\n      test: [CMD, /bin/check]\n      interval: 0s\n",
+		"invalid timeout":       "    healthcheck:\n      test: [CMD, /bin/check]\n      timeout: invalid\n",
+		"empty command":         "    healthcheck:\n      test: [CMD, '']\n",
 		"too many command args": "    healthcheck:\n      test: [CMD, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]\n",
-		"disable with test": "    healthcheck:\n      disable: true\n      test: [CMD, /bin/check]\n",
-		"disable with timing": "    healthcheck:\n      disable: true\n      interval: 10s\n",
-		"malformed test": "    healthcheck:\n      test: [SHELL, /bin/check]\n",
+		"disable with test":     "    healthcheck:\n      disable: true\n      test: [CMD, /bin/check]\n",
+		"disable with timing":   "    healthcheck:\n      disable: true\n      interval: 10s\n",
+		"malformed test":        "    healthcheck:\n      test: [SHELL, /bin/check]\n",
 	}
 	for name, healthcheck := range cases {
 		t.Run(name, func(t *testing.T) {
