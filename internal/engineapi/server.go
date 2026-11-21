@@ -1100,7 +1100,7 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 		stateObject["Health"] = record.Health
 	}
 	configObject := map[string]any{
-		"Hostname": record.Options.Hostname, "Cmd": record.Command,
+		"Hostname": record.Options.Hostname, "User": record.Options.User, "Cmd": record.Command,
 		"Image": image, "WorkingDir": record.Options.Workdir, "Labels": record.Labels,
 		"ExposedPorts": dockerContainerExposedPorts(record.Options.ExposedPorts),
 		"StopSignal":   record.Options.StopSignal,

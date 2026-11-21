@@ -119,7 +119,7 @@ func TestContainerListInspectFiltersAndDockerFields(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record := createEngineAPITestContainer(t, "api-test", container.Options{
 		NetworkMode: "bridge", NetworkName: "boxr-test",
-		Hostname: "api", Workdir: "/srv/app", MemoryLimitBytes: 64 << 20,
+		Hostname: "api", User: "1001:100", Workdir: "/srv/app", MemoryLimitBytes: 64 << 20,
 		PublishedPorts: []container.PortMapping{{HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 80, Protocol: "tcp"}},
 		ExposedPorts:   []string{"80/tcp", "443/tcp"},
 		BindMounts:     []container.BindMount{{Source: "/srv/data", Target: "/data", ReadOnly: true}},
@@ -157,7 +157,7 @@ func TestContainerListInspectFiltersAndDockerFields(t *testing.T) {
 	hostConfig := inspect["HostConfig"].(map[string]any)
 	network := inspect["NetworkSettings"].(map[string]any)
 	mounts := inspect["Mounts"].([]any)
-	if inspect["Id"] != record.ID || inspect["Name"] != "/api-test" || config["Hostname"] != "api" {
+	if inspect["Id"] != record.ID || inspect["Name"] != "/api-test" || config["Hostname"] != "api" || config["User"] != "1001:100" {
 		t.Fatalf("container inspect = %#v", inspect)
 	}
 	if hostConfig["NetworkMode"] != "boxr-test" || hostConfig["Memory"] != float64(64<<20) {

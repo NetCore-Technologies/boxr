@@ -174,10 +174,27 @@ func TestDockerContainerPauseAndUnpauseSerializePerContainer(t *testing.T) {
 	}()
 	<-unpauseStarted
 
+	deadline := time.Now().Add(time.Second)
+	for {
+		server.containerTransitions.mu.Lock()
+		entry := server.containerTransitions.locks[record.ID]
+		refs := 0
+		if entry != nil {
+			refs = entry.refs
+		}
+		server.containerTransitions.mu.Unlock()
+		if refs >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("unpause did not register as a waiter for the container transition lock")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	select {
 	case transition := <-transitions:
 		t.Fatalf("second transition reached freezer before pause committed: %t", transition)
-	case <-time.After(25 * time.Millisecond):
+	default:
 	}
 
 	release()
