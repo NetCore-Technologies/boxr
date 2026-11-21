@@ -3244,47 +3244,27 @@ func TestDockerPortFilterMatchesRejectsInvalidAndUnboundedRanges(t *testing.T) {
 
 
 func TestDockerContainerFiltersResolveBeforeAndSinceReferences(t *testing.T) {
-	server := setupEngineAPITest(t)
-	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	before, err := state.Create("filter-before", []string{"/bin/true"}, container.Options{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	before.CreatedAt = base
-	if err := state.Update(before); err != nil {
-		t.Fatal(err)
-	}
+	setupEngineAPITest(t)
 	reference, err := state.Create("filter-reference", []string{"/bin/true"}, container.Options{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reference.CreatedAt = base.Add(time.Minute)
-	if err := state.Update(reference); err != nil {
-		t.Fatal(err)
-	}
-	after, err := state.Create("filter-after", []string{"/bin/true"}, container.Options{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	after.CreatedAt = base.Add(2 * time.Minute)
-	if err := state.Update(after); err != nil {
-		t.Fatal(err)
-	}
+	recordBefore := state.Record{ID: "filter-older", CreatedAt: reference.CreatedAt.Add(-time.Minute)}
+	recordAfter := state.Record{ID: "filter-newer", CreatedAt: reference.CreatedAt.Add(time.Minute)}
 
 	for _, test := range []struct {
-		name   string
-		record state.Record
+		name    string
+		record  state.Record
 		filters map[string][]string
-		want   bool
+		want    bool
 	}{
-		{name: "before by full id", record: before, filters: map[string][]string{"before": {reference.ID}}, want: true},
-		{name: "before by name", record: before, filters: map[string][]string{"before": {reference.Name}}, want: true},
+		{name: "before by full id", record: recordBefore, filters: map[string][]string{"before": {reference.ID}}, want: true},
+		{name: "before by name", record: recordBefore, filters: map[string][]string{"before": {reference.Name}}, want: true},
 		{name: "reference is not before itself", record: reference, filters: map[string][]string{"before": {reference.ID}}, want: false},
-		{name: "after is not before reference", record: after, filters: map[string][]string{"before": {reference.ID}}, want: false},
+		{name: "after is not before reference", record: recordAfter, filters: map[string][]string{"before": {reference.ID}}, want: false},
 		{name: "since includes reference", record: reference, filters: map[string][]string{"since": {reference.ID}}, want: true},
-		{name: "since includes newer", record: after, filters: map[string][]string{"since": {reference.Name}}, want: true},
-		{name: "since excludes older", record: before, filters: map[string][]string{"since": {reference.ID}}, want: false},
-		{name: "before and since are conjunctive", record: reference, filters: map[string][]string{"before": {after.ID}, "since": {before.ID}}, want: true},
+		{name: "since includes newer", record: recordAfter, filters: map[string][]string{"since": {reference.Name}}, want: true},
+		{name: "since excludes older", record: recordBefore, filters: map[string][]string{"since": {reference.ID}}, want: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			references, err := resolveDockerContainerFilterTimes(test.filters)
@@ -3293,6 +3273,31 @@ func TestDockerContainerFiltersResolveBeforeAndSinceReferences(t *testing.T) {
 			}
 			if got := matchesContainerFiltersWithTimes(test.record, test.filters, nil, references); got != test.want {
 				t.Fatalf("matches container filter=%t, want %t", got, test.want)
+			}
+		})
+	}
+	filters := map[string][]string{"before": {reference.ID}, "since": {reference.ID}}
+	references, err := resolveDockerContainerFilterTimes(filters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	references.before[0] = reference.CreatedAt.Add(time.Minute)
+	if !matchesContainerFiltersWithTimes(reference, filters, nil, references) {
+		t.Fatal("before and since filters were not combined conjunctively")
+	}
+}
+
+func TestDockerContainerFiltersRejectUnknownAndMissingReferences(t *testing.T) {
+	setupEngineAPITest(t)
+	for name, filters := range map[string]map[string][]string{
+		"unknown":        {"unsupported": {"value"}},
+		"missing before": {"before": {"missing-container"}},
+		"missing since": {"since": {"missing-container"}},
+		"empty value":    {"since": {""}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := resolveDockerContainerFilterTimes(filters); err == nil {
+				t.Fatalf("invalid container filters %#v were accepted", filters)
 			}
 		})
 	}
