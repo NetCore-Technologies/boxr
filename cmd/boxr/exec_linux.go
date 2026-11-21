@@ -648,8 +648,8 @@ func runExecChild(args []string, stdout, stderr io.Writer) int {
 			return 125
 		}
 	}
-	if err := container.ApplyExecSecurityWithUser(security, preserveSetUID); err != nil {
-		fmt.Fprintf(stderr, "boxr exec: apply container security policy: %v\n", err)
+	if err := container.DropExecCapabilities(security, preserveSetUID); err != nil {
+		fmt.Fprintf(stderr, "boxr exec: drop container capabilities: %v\n", err)
 		return 125
 	}
 	if finishUserSwitch != nil {
@@ -657,6 +657,10 @@ func runExecChild(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "boxr exec: switch to user %q: %v\n", helperConfig.User, err)
 			return 125
 		}
+	}
+	if err := container.ApplyExecRestrictions(security); err != nil {
+		fmt.Fprintf(stderr, "boxr exec: apply container security restrictions: %v\n", err)
+		return 125
 	}
 	resolved, err := findExecPath(helperConfig.Command[0], environment)
 	if err != nil {
