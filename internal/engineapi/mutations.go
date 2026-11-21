@@ -991,7 +991,7 @@ func dockerOptions(host dockerHostConfig) (container.Options, error) {
 		RestartMaxRetries: host.RestartPolicy.MaximumRetryCount,
 		DropCapabilities:  append([]string(nil), host.CapDrop...),
 	}
-	if host.Memory < 0 || host.MemoryReservation < 0 || host.MemorySwap < -1 || host.NanoCPUs < 0 || host.PidsLimit < -1 {
+	if host.Memory < 0 || host.MemoryReservation < 0 || host.MemorySwap < -1 || host.NanoCPUs < 0 || host.PidsLimit < -1 || host.ShmSize < 0 {
 		return options, fmt.Errorf("Docker memory, CPU and PID limits must not be negative (MemorySwap and PidsLimit also accept -1 for unlimited)")
 	}
 	if options.PidsLimit == -1 {
@@ -1021,8 +1021,8 @@ func dockerOptions(host dockerHostConfig) (container.Options, error) {
 		options.MemorySwapMaxBytes = host.Memory
 		options.MemorySwapMaxSet = host.Memory > 0
 	}
-	if host.Privileged || host.PublishAllPorts || len(host.CapAdd) > 0 || len(host.Devices) > 0 || len(host.SecurityOpt) > 0 || len(host.Tmpfs) > 0 || host.ShmSize > 0 {
-		return options, fmt.Errorf("Privileged, CapAdd, Devices, SecurityOpt, legacy Tmpfs, ShmSize and PublishAllPorts are not supported by Engine API create")
+	if host.Privileged || host.PublishAllPorts || len(host.CapAdd) > 0 || len(host.Devices) > 0 || len(host.SecurityOpt) > 0 || len(host.Tmpfs) > 0 {
+		return options, fmt.Errorf("Privileged, CapAdd, Devices, SecurityOpt, legacy Tmpfs and PublishAllPorts are not supported by Engine API create")
 	}
 	if host.RestartPolicy.Name == "" {
 		options.RestartPolicy = "no"
@@ -1073,6 +1073,15 @@ func dockerOptions(host dockerHostConfig) (container.Options, error) {
 	binds = append(binds, structuredBinds...)
 	options.BindMounts = binds
 	options.TmpfsMounts = structuredTmpfs
+	if host.ShmSize > 0 {
+		const maxDockerShmSize = int64(1 << 30)
+		if host.ShmSize > maxDockerShmSize {
+			return options, fmt.Errorf("HostConfig.ShmSize exceeds the 1 GiB Boxr tmpfs limit")
+		}
+		options.TmpfsMounts = append(options.TmpfsMounts, container.TmpfsMount{
+			Target: "/dev/shm", SizeBytes: host.ShmSize, Mode: 01777,
+		})
+	}
 	if err := validateUniqueDockerMountTargets(options.BindMounts, options.TmpfsMounts); err != nil {
 		return options, err
 	}
