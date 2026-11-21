@@ -956,6 +956,87 @@ func matchesContainerFilters(record state.Record, filters map[string][]string, n
 			if !matched {
 				return false
 			}
+		case "ancestor":
+			imageReference := record.Labels["io.boxr.image"]
+			matched := false
+			for _, value := range values {
+				if imageReference == value || (imageReference != "" && strings.HasPrefix(imageReference, value)) {
+					matched = true
+					break
+				}
+				if imageReference != "" {
+					image, err := imageStore.Inspect(imageReference)
+					if err == nil {
+						imageID := dockerImageID(image.Digest)
+						if strings.HasPrefix(imageID, value) || strings.TrimPrefix(imageID, "sha256:") == value {
+							matched = true
+							break
+						}
+					}
+				}
+			}
+			if !matched {
+				return false
+			}
+		case "volume":
+			matched := false
+			for _, value := range values {
+				for _, mount := range record.Options.BindMounts {
+					if mount.Target == value || mount.Source == value || mount.VolumeName == value {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					break
+				}
+			}
+			if !matched {
+				return false
+			}
+		case "publish":
+			matched := false
+			for _, value := range values {
+				for _, mapping := range record.Options.PublishedPorts {
+					protocol := mapping.Protocol
+					if protocol == "" {
+						protocol = "tcp"
+					}
+					if dockerPortFilterMatches(value, mapping.ContainerPort, protocol) ||
+						dockerPortFilterMatches(value, mapping.HostPort, protocol) {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					break
+				}
+			}
+			if !matched {
+				return false
+			}
+		case "expose":
+			exposed, err := container.NormalizeExposedPorts(record.Options.ExposedPorts)
+			if err != nil {
+				return false
+			}
+			matched := false
+			for _, value := range values {
+				for _, exposedPort := range exposed {
+					portText, protocol, _ := strings.Cut(exposedPort, "/")
+					portNumber, err := strconv.ParseUint(portText, 10, 16)
+					if err == nil && dockerPortFilterMatches(value, uint16(portNumber), protocol) {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					break
+				}
+			}
+			if !matched {
+				return false
+			}
 		case "network":
 			matched := false
 			for _, value := range values {
@@ -986,6 +1067,39 @@ func matchesContainerFilters(record state.Record, filters map[string][]string, n
 		}
 	}
 	return true
+}
+
+// dockerPortFilterMatches implements the Docker port filter syntax for a
+// single candidate port. Ranges are bounded to avoid pathological inputs.
+func dockerPortFilterMatches(filter string, candidate uint16, protocol string) bool {
+	if candidate == 0 || filter == "" || strings.TrimSpace(filter) != filter {
+		return false
+	}
+	portRange, wantedProtocol, hasProtocol := strings.Cut(filter, "/")
+	if !hasProtocol {
+		wantedProtocol = "tcp"
+	}
+	wantedProtocol = strings.ToLower(wantedProtocol)
+	if wantedProtocol != "tcp" && wantedProtocol != "udp" && wantedProtocol != "sctp" {
+		return false
+	}
+	protocol = strings.ToLower(protocol)
+	if protocol == "" {
+		protocol = "tcp"
+	}
+	if protocol != wantedProtocol {
+		return false
+	}
+	firstText, lastText, hasRange := strings.Cut(portRange, "-")
+	if !hasRange {
+		lastText = firstText
+	}
+	first, firstErr := strconv.ParseUint(firstText, 10, 16)
+	last, lastErr := strconv.ParseUint(lastText, 10, 16)
+	if firstErr != nil || lastErr != nil || first == 0 || last < first || last-first+1 > 256 {
+		return false
+	}
+	return uint64(candidate) >= first && uint64(candidate) <= last
 }
 
 func (s *Server) handleContainerKill(writer http.ResponseWriter, request *http.Request, rawID string) {
