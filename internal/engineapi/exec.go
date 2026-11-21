@@ -495,10 +495,14 @@ func writerFlusher(writer http.ResponseWriter) http.Flusher {
 	return flusher
 }
 
-func (s *Server) runDockerExecSession(ctx context.Context, session *dockerExecSession, stdout, stderr io.Writer) {
-	exitCode, err := dockerExecRunner(ctx, session.ContainerID, session.Config, stdout, stderr, func(pid int) {
+func (s *Server) runDockerExecSession(ctx context.Context, session *dockerExecSession, stdin io.Reader, stdout, stderr io.Writer) {
+	exitCode, err := dockerExecRunner(ctx, session.ContainerID, session.Config, stdin, stdout, stderr, func(pid int) {
 		session.mu.Lock()
 		session.PID = pid
+		session.mu.Unlock()
+	}, func(terminal *os.File) {
+		session.mu.Lock()
+		session.terminal = terminal
 		session.mu.Unlock()
 	})
 	if err != nil {
@@ -538,13 +542,13 @@ func (s *Server) handleExecInspect(writer http.ResponseWriter, id string) {
 		"ProcessConfig": map[string]any{
 			"privileged":  false,
 			"user":        session.Config.User,
-			"tty":         false,
+			"tty":         session.Config.Tty,
 			"entrypoint":  entrypoint,
 			"arguments":   arguments,
 			"environment": append([]string(nil), session.Config.Env...),
 			"workingDir":  session.Config.WorkingDir,
 		},
-		"OpenStdin":   false,
+		"OpenStdin":   session.Config.AttachStdin,
 		"OpenStderr":  session.Config.AttachStderr,
 		"OpenStdout":  session.Config.AttachStdout,
 		"CanRemove":   !session.Running,
@@ -552,6 +556,20 @@ func (s *Server) handleExecInspect(writer http.ResponseWriter, id string) {
 		"Pid":         session.PID,
 		"DetachKeys":  session.Config.DetachKeys,
 	})
+}
+
+type dockerExecTTYWriter struct {
+	writer io.Writer
+	mu     *sync.Mutex
+}
+
+func (writer *dockerExecTTYWriter) Write(data []byte) (int, error) {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	if err := writeDockerExecBytes(writer.writer, data); err != nil {
+		return 0, err
+	}
+	return len(data), nil
 }
 
 type dockerExecFrameWriter struct {
