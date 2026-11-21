@@ -479,7 +479,6 @@ func (o Options) Validate() error {
 	return nil
 }
 
-
 func validateUserSpec(spec string) error {
 	if spec == "" {
 		return nil
