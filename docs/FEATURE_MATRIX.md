@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 899 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 900 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 
 ## Implemented capabilities
@@ -906,3 +906,4 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 897. Engine API can expose remote TCP access only through mutually authenticated TLS with client certificates verified by a configured CA
 898. Engine API-created containers persist writable OverlayFS layers across stop and restart and remove owned storage with container deletion
 899. Engine API containers retain a private immutable image rootfs snapshot across stops, survive local image-tag deletion, and remove owned snapshots with container deletion
+900. Engine API volume mounts populate empty pre-created local volumes from the immutable image rootfs by default and honor Docker VolumeOptions.NoCopy
