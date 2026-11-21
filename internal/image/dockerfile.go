@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/manit6752025/boxr/internal/container"
 )
 
 type dockerfileStep struct {
