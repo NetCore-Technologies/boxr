@@ -1770,6 +1770,7 @@ func TestDockerNetworkConnectDisconnectAndInspectEndpoint(t *testing.T) {
 	if inspectResponse.Code != http.StatusOK {
 		t.Fatalf("network inspect after disconnect status=%d body=%s", inspectResponse.Code, inspectResponse.Body.String())
 	}
+	inspected = dockerNetworkResponse{}
 	if err := json.Unmarshal(inspectResponse.Body.Bytes(), &inspected); err != nil {
 		t.Fatal(err)
 	}
