@@ -711,19 +711,32 @@ func parseDockerBind(value string) (container.BindMount, error) {
 }
 
 func validateDockerBindSource(path string) error {
-	if path == string(filepath.Separator) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return fmt.Errorf("bind source must be a clean absolute path")
+	}
+	if path == string(filepath.Separator) || path == filepath.VolumeName(path)+string(filepath.Separator) {
 		return fmt.Errorf("bind source cannot be the host filesystem root")
 	}
-	parts := strings.Split(strings.TrimPrefix(path, string(filepath.Separator)), string(filepath.Separator))
-	current := string(filepath.Separator)
+
+	rootPath := filepath.VolumeName(path) + string(filepath.Separator)
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return fmt.Errorf("open bind source volume root: %w", err)
+	}
+	defer root.Close()
+
+	relative := strings.TrimPrefix(path, rootPath)
+	parts := strings.Split(relative, string(filepath.Separator))
+	walked := make([]string, 0, len(parts))
 	for index, part := range parts {
-		if part == "" {
-			continue
+		if part == "" || part == "." || part == ".." {
+			return fmt.Errorf("bind source contains an invalid path component")
 		}
-		current = filepath.Join(current, part)
-		info, err := os.Lstat(current)
+		walked = append(walked, part)
+		current := strings.Join(walked, string(filepath.Separator))
+		info, err := root.Lstat(current)
 		if err != nil {
-			return fmt.Errorf("inspect bind source %s: %w", current, err)
+			return fmt.Errorf("inspect bind source component %s: %w", current, err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("bind source contains symlink component %s", current)
