@@ -3,7 +3,6 @@ package engineapi
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"testing"
 
 	"github.com/manit6752025/boxr/internal/container"
@@ -46,5 +45,4 @@ func TestInfoCountsPausedContainersSeparately(t *testing.T) {
 	if got := info["ContainersStopped"]; got != float64(1) {
 		t.Errorf("ContainersStopped = %v, want 1", got)
 	}
-	_ = os.Getpid()
 }
