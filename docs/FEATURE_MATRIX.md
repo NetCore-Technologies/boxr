@@ -929,3 +929,5 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 915. Docker EndpointConfig rejects unsupported aliases links IPv6 link-local addresses and driver options instead of silently dropping them
 
 916. Docker bridge IPAM persists, validates, inspects and allocates only within configured `IPRange` prefixes, including explicit static endpoint address checks
+
+917. Docker bridge IPAM auxiliary IPv4 reservations are persisted, returned by inspect, excluded from dynamic allocation and rejected for static endpoint assignment
