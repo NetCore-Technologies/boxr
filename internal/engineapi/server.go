@@ -5,9 +5,9 @@ package engineapi
 
 import (
 	"encoding/base64"
-	"errors"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
