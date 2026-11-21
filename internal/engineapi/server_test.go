@@ -2022,3 +2022,135 @@ func TestParseDockerNetworkUntilAcceptsDockerTimestampForms(t *testing.T) {
 		}
 	}
 }
+
+
+func TestEngineAPIImageSaveAndLoadDockerArchives(t *testing.T) {
+	server := setupEngineAPITest(t)
+	const reference = "registry.example/team/boxr-archive:v1"
+	const alias = "registry.example/team/boxr-archive:stable"
+	importEngineAPITestImage(t, reference)
+	if err := imageStore.Tag(reference, alias); err != nil {
+		t.Fatal(err)
+	}
+
+	archivePath := filepath.Join(t.TempDir(), "saved.tar")
+	if err := imageStore.SaveDockerMany([]string{reference, alias}, archivePath); err != nil {
+		t.Fatalf("save Docker archive fixture: %v", err)
+	}
+	tags, err := imageStore.DockerArchiveTags(archivePath)
+	if err != nil {
+		t.Fatalf("preflight Docker archive tags: %v", err)
+	}
+	if len(tags) != 2 || tags[0] != alias || tags[1] != reference {
+		t.Fatalf("Docker archive tags = %v", tags)
+	}
+	archiveData, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	record, err := state.Create("docker-load-user", []string{"/bin/app"}, container.Options{}, map[string]string{"io.boxr.image": reference})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadRequest := func(body []byte, query string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/v1.45/images/load"+query, bytes.NewReader(body))
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		return response
+	}
+	response := loadRequest(archiveData, "")
+	if response.Code != http.StatusConflict {
+		t.Fatalf("loading an archive that retags an in-use image status=%d body=%s", response.Code, response.Body.String())
+	}
+	if _, err := imageStore.Inspect(reference); err != nil {
+		t.Fatalf("in-use image tag was changed by rejected load: %v", err)
+	}
+	if err := state.RemoveCreated(record.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	response = loadRequest(archiveData, "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("Docker image load status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "Loaded image: "+reference) ||
+		!strings.Contains(response.Body.String(), "Loaded image: "+alias) {
+		t.Fatalf("Docker image load progress = %s", response.Body.String())
+	}
+	if _, err := imageStore.Inspect(reference); err != nil {
+		t.Fatalf("loaded primary image not found: %v", err)
+	}
+	if _, err := imageStore.Inspect(alias); err != nil {
+		t.Fatalf("loaded alias image not found: %v", err)
+	}
+
+	response = engineAPIRequest(server, http.MethodGet, "/v1.45/images/"+reference+"/get")
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/x-tar" {
+		t.Fatalf("single image export status=%d content-type=%q body=%s", response.Code, response.Header().Get("Content-Type"), response.Body.String())
+	}
+	if !strings.Contains(response.Header().Get("Content-Disposition"), "boxr-images.tar") || response.Body.Len() == 0 {
+		t.Fatalf("single image export headers or body missing: headers=%v bytes=%d", response.Header(), response.Body.Len())
+	}
+	exportedPath := filepath.Join(t.TempDir(), "exported.tar")
+	if err := os.WriteFile(exportedPath, response.Body.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	exportedTags, err := imageStore.DockerArchiveTags(exportedPath)
+	if err != nil {
+		t.Fatalf("verify exported Docker archive: %v", err)
+	}
+	if len(exportedTags) != 1 || exportedTags[0] != reference {
+		t.Fatalf("single image export tags = %v", exportedTags)
+	}
+
+	query := url.Values{}
+	query.Add("names", reference)
+	query.Add("names", alias)
+	response = engineAPIRequest(server, http.MethodGet, "/v1.45/images/get?"+query.Encode())
+	if response.Code != http.StatusOK || response.Body.Len() == 0 {
+		t.Fatalf("multi-image export status=%d bodyBytes=%d body=%s", response.Code, response.Body.Len(), response.Body.String())
+	}
+	exportedPath = filepath.Join(t.TempDir(), "exported-many.tar")
+	if err := os.WriteFile(exportedPath, response.Body.Bytes(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	exportedTags, err = imageStore.DockerArchiveTags(exportedPath)
+	if err != nil {
+		t.Fatalf("verify multi-image Docker archive: %v", err)
+	}
+	if len(exportedTags) != 2 || exportedTags[0] != alias || exportedTags[1] != reference {
+		t.Fatalf("multi-image export tags = %v", exportedTags)
+	}
+
+	response = loadRequest(archiveData, "?quiet=1")
+	if response.Code != http.StatusOK || response.Body.Len() != 0 {
+		t.Fatalf("quiet Docker image load status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestEngineAPIImageArchiveEndpointsRejectInvalidInput(t *testing.T) {
+	server := setupEngineAPITest(t)
+	for _, target := range []string{
+		"/v1.45/images/get",
+		"/v1.45/images/get?names=",
+		"/v1.45/images/registry.example/team/missing:v1/get",
+	} {
+		response := engineAPIRequest(server, http.MethodGet, target)
+		if response.Code != http.StatusBadRequest && response.Code != http.StatusNotFound {
+			t.Errorf("%s status=%d body=%s", target, response.Code, response.Body.String())
+		}
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1.45/images/load", strings.NewReader("not a Docker archive"))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid Docker image archive status=%d body=%s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodPost, "/v1.45/images/load?quiet=maybe", strings.NewReader("archive"))
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid quiet parameter status=%d body=%s", response.Code, response.Body.String())
+	}
+}
