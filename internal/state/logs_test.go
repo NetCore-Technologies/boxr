@@ -82,7 +82,7 @@ func TestLogOffsetAndCopyFollowLargeLogsWithoutUnboundedReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	largeSize := maxLogBytes + 4
-	if err := logFile.Truncate(largeSize); err != nil {
+	if err := logFile.Truncate(maxLogBytes); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := logFile.Write([]byte("tail")); err != nil {
