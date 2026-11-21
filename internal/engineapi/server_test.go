@@ -1800,7 +1800,6 @@ func TestVerifyDockerContainerPIDRejectsNonBoxrProcess(t *testing.T) {
 	}
 }
 
-
 func TestDockerAnonymousVolumeCreateAndPruneProtectsContainerReferences(t *testing.T) {
 	server := setupEngineAPITest(t)
 	t.Setenv("BOXR_DATA_DIR", filepath.Join(t.TempDir(), "data"))
