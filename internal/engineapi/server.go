@@ -155,6 +155,15 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			s.handleContainerUnpause(writer, request, containerID)
 			return
 		}
+		if strings.HasSuffix(remainder, "/attach") {
+			containerID := strings.TrimSuffix(remainder, "/attach")
+			if containerID == "" || strings.Contains(containerID, "/") {
+				writeError(writer, http.StatusNotFound, fmt.Errorf("container attach endpoint not found"))
+				return
+			}
+			s.handleContainerAttach(writer, request, containerID)
+			return
+		}
 		if strings.HasSuffix(remainder, "/archive") {
 			containerID := strings.TrimSuffix(remainder, "/archive")
 			if containerID == "" || strings.Contains(containerID, "/") {
