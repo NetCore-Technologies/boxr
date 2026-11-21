@@ -108,7 +108,8 @@ func TestDockerStatsBlockIOConvertsCgroupCounters(t *testing.T) {
 	if !ok || writeIO["value"] != int64(2) {
 		t.Fatalf("Docker 8:0 write-I/O entry = %#v, found=%t", writeIO, ok)
 	}
-	if serviceBytes[0]["major"] != int64(8) || serviceBytes[0]["minor"] != int64(0) {
-		t.Fatalf("Docker block IO device ordering is not deterministic: %#v", serviceBytes)
+	if serviceBytes[0]["major"] != int64(8) || serviceBytes[0]["minor"] != int64(0) ||
+		serviceBytes[2]["major"] != int64(253) || serviceBytes[2]["minor"] != int64(1) {
+		t.Fatalf("Docker block IO device ordering is not numeric and deterministic: %#v", serviceBytes)
 	}
 }
