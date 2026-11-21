@@ -84,6 +84,7 @@ func TestDockerContainerUpdateRejectsInvalidRequestsBeforeApplying(t *testing.T)
 		{name: "reservation above memory", body: `{"Memory":1048576,"MemoryReservation":2097152}`},
 		{name: "negative CPU", body: `{"NanoCpus":-1}`},
 		{name: "negative PID limit", body: `{"PidsLimit":-2}`},
+		{name: "reservation equal to hard limit", body: `{"Memory":1048576,"MemoryReservation":1048576}`},
 		{name: "unsupported field", body: `{"CpuShares":1024}`},
 		{name: "trailing JSON", body: `{"Memory":1} {"Memory":2}`},
 	} {
@@ -175,7 +176,99 @@ func TestDockerOptionsCreatesManagedCgroupAndAcceptsUnlimitedSwap(t *testing.T) 
 	if err != nil {
 		t.Fatalf("dockerOptions with unlimited swap: %v", err)
 	}
-	if !options.CgroupEnabled || options.MemorySwapMaxSet || options.MemorySwapMaxBytes != 0 {
+	if !options.CgroupEnabled || !options.MemorySwapUnlimited || options.MemorySwapMaxSet || options.MemorySwapMaxBytes != 0 {
 		t.Fatalf("Docker options do not create a managed unlimited cgroup: %+v", options)
+	}
+}
+
+func TestDockerOptionsAppliesDockerDefaultSwapAlongsideMemoryLimit(t *testing.T) {
+	options, err := dockerOptions(dockerHostConfig{Memory: 64 << 20})
+	if err != nil {
+		t.Fatalf("dockerOptions with default swap: %v", err)
+	}
+	if !options.MemorySwapDefaulted || !options.MemorySwapMaxSet || options.MemorySwapMaxBytes != 64<<20 {
+		t.Fatalf("Docker default memory+swap settings = %+v", options)
+	}
+}
+
+func TestDockerOptionsDefaultSwapCanBeActivatedByLaterMemoryUpdate(t *testing.T) {
+	options, err := dockerOptions(dockerHostConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !options.MemorySwapDefaulted || options.MemorySwapMaxSet {
+		t.Fatalf("unlimited-memory Docker default should remain implicit: %+v", options)
+	}
+}
+
+func TestDockerContainerUpdatePreservesMemorySwapSemanticsWhenMemoryChanges(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		initial       container.Options
+		body          string
+		wantSwap      int64
+		wantSet       bool
+		wantDefaulted bool
+		wantStatus    int
+	}{
+		{
+			name: "default swap follows the new memory limit",
+			initial: container.Options{CgroupEnabled: true, MemoryLimitBytes: 64 << 20, MemorySwapMaxBytes: 64 << 20, MemorySwapMaxSet: true, MemorySwapDefaulted: true},
+			body: `{"Memory":134217728}`, wantSwap: 128 << 20, wantSet: true, wantDefaulted: true, wantStatus: http.StatusOK,
+		},
+		{
+			name: "explicit total swap remains constant",
+			initial: container.Options{CgroupEnabled: true, MemoryLimitBytes: 64 << 20, MemorySwapMaxBytes: 64 << 20, MemorySwapMaxSet: true},
+			body: `{"Memory":100663296}`, wantSwap: 32 << 20, wantSet: true, wantStatus: http.StatusOK,
+		},
+		{
+			name: "memory cannot exceed an explicit total swap ceiling",
+			initial: container.Options{CgroupEnabled: true, MemoryLimitBytes: 64 << 20, MemorySwapMaxBytes: 64 << 20, MemorySwapMaxSet: true},
+			body: `{"Memory":150994944}`, wantStatus: http.StatusBadRequest,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := setupEngineAPITest(t)
+			record := createEngineAPITestContainer(t, "resource-swap-"+strings.ReplaceAll(test.name, " ", "-"), test.initial)
+			server.verifyUpdatePID = func(state.Record) error { return nil }
+			var applied container.Options
+			server.updateCgroupResources = func(_ int, options container.Options, _ container.CgroupResourceUpdate) error {
+				applied = options
+				return nil
+			}
+			request := httptest.NewRequest(http.MethodPost, "/containers/"+record.ID+"/update", strings.NewReader(test.body))
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			if response.Code != test.wantStatus {
+				t.Fatalf("status=%d body=%s, want %d", response.Code, response.Body.String(), test.wantStatus)
+			}
+			if test.wantStatus == http.StatusOK && (applied.MemorySwapMaxBytes != test.wantSwap ||
+				applied.MemorySwapMaxSet != test.wantSet || applied.MemorySwapDefaulted != test.wantDefaulted) {
+				t.Fatalf("updated swap options = %+v", applied)
+			}
+		})
+	}
+}
+
+func TestDockerContainerUpdatePreservesExplicitUnlimitedSwap(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record := createEngineAPITestContainer(t, "resource-swap-unlimited", container.Options{
+		CgroupEnabled: true, MemoryLimitBytes: 64 << 20, MemorySwapUnlimited: true,
+	})
+	server.verifyUpdatePID = func(state.Record) error { return nil }
+	var applied container.Options
+	server.updateCgroupResources = func(_ int, options container.Options, _ container.CgroupResourceUpdate) error {
+		applied = options
+		return nil
+	}
+	request := httptest.NewRequest(http.MethodPost, "/containers/"+record.ID+"/update",
+		strings.NewReader(`{"Memory":134217728}`))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !applied.MemorySwapUnlimited || applied.MemorySwapMaxSet || applied.MemorySwapMaxBytes != 0 {
+		t.Fatalf("explicit unlimited swap was not preserved: %+v", applied)
 	}
 }

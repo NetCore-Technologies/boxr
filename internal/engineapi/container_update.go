@@ -151,6 +151,11 @@ func (s *Server) handleContainerUpdate(writer http.ResponseWriter, request *http
 			options.PidsLimit = 0
 		}
 	}
+	if input.Memory != nil && input.MemorySwap == nil && !record.Options.MemorySwapUnlimited {
+		// A Docker memory change also changes the effective swap-only ceiling
+		// whenever swap is defaulted or a total MemorySwap limit was configured.
+		update.MemorySwap = true
+	}
 	if err := options.Validate(); err != nil {
 		writeError(writer, http.StatusBadRequest, fmt.Errorf("invalid updated container resources: %w", err))
 		return

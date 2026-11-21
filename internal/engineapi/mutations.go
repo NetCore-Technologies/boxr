@@ -993,7 +993,8 @@ func dockerOptions(host dockerHostConfig) (container.Options, error) {
 			return options, fmt.Errorf("NanoCpus is outside the supported range")
 		}
 	}
-	if host.MemorySwap > 0 {
+	switch {
+	case host.MemorySwap > 0:
 		if host.Memory == 0 {
 			return options, fmt.Errorf("MemorySwap requires a positive Memory limit so Boxr can derive the swap-only cgroup limit")
 		}
@@ -1002,6 +1003,13 @@ func dockerOptions(host dockerHostConfig) (container.Options, error) {
 		}
 		options.MemorySwapMaxBytes = host.MemorySwap - host.Memory
 		options.MemorySwapMaxSet = true
+	case host.MemorySwap == -1:
+		options.MemorySwapUnlimited = true
+	case host.MemorySwap == 0:
+		// Docker's default with a memory limit allows an equal amount of swap.
+		options.MemorySwapDefaulted = true
+		options.MemorySwapMaxBytes = host.Memory
+		options.MemorySwapMaxSet = host.Memory > 0
 	}
 	if host.Privileged || host.PublishAllPorts || len(host.CapAdd) > 0 || len(host.Devices) > 0 || len(host.SecurityOpt) > 0 || len(host.Tmpfs) > 0 || host.ShmSize > 0 {
 		return options, fmt.Errorf("Privileged, CapAdd, Devices, SecurityOpt, legacy Tmpfs, ShmSize and PublishAllPorts are not supported by Engine API create")

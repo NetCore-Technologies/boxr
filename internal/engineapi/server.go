@@ -578,6 +578,27 @@ func (s *Server) handleContainers(writer http.ResponseWriter, request *http.Requ
 	writeJSON(writer, http.StatusOK, result)
 }
 
+func dockerMemorySwapTotal(options container.Options) int64 {
+	if options.MemorySwapUnlimited {
+		return -1
+	}
+	if options.MemorySwapMaxSet || options.MemorySwapMaxBytes > 0 {
+		const maxInt64 = int64(1<<63 - 1)
+		if options.MemorySwapMaxBytes > maxInt64-options.MemoryLimitBytes {
+			return maxInt64
+		}
+		return options.MemoryLimitBytes + options.MemorySwapMaxBytes
+	}
+	if options.MemoryLimitBytes > 0 {
+		const maxInt64 = int64(1<<63 - 1)
+		if options.MemoryLimitBytes > maxInt64/2 {
+			return maxInt64
+		}
+		return options.MemoryLimitBytes * 2
+	}
+	return 0
+}
+
 func dockerNetworkMode(options container.Options) string {
 	switch options.NetworkMode {
 	case "", "none":
@@ -1046,7 +1067,10 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 		"OpenStdin":    false, "StdinOnce": false, "Tty": false,
 	}
 	hostConfig := map[string]any{
-		"NetworkMode": dockerNetworkMode(record.Options), "Memory": record.Options.MemoryLimitBytes,
+		"NetworkMode": dockerNetworkMode(record.Options),
+		"Memory": record.Options.MemoryLimitBytes,
+		"MemoryReservation": record.Options.MemoryLowBytes,
+		"MemorySwap": dockerMemorySwapTotal(record.Options),
 		"NanoCpus": int64(record.Options.CPUs * 1e9), "PidsLimit": record.Options.PidsLimit,
 		"RestartPolicy": map[string]any{"Name": dockerRestartPolicy(record.Options.RestartPolicy), "MaximumRetryCount": record.Options.RestartMaxRetries},
 		"PortBindings":  dockerPortBindings(record.Options), "Binds": dockerBinds(record.Options),
