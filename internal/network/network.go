@@ -31,6 +31,7 @@ const (
 	storeVersion    = 1
 	maxStoreBytes   = 4 << 20
 	maxNetworkCount = 128
+	maxAuxiliaryAddresses = 256
 )
 
 var (
@@ -1318,6 +1319,9 @@ func allocationPrefix(network Network) (netip.Prefix, error) {
 }
 
 func validateAuxiliaryAddresses(subnet netip.Prefix, gateway netip.Addr, addresses map[string]string) (map[string]string, error) {
+	if len(addresses) > maxAuxiliaryAddresses {
+		return nil, fmt.Errorf("at most %d auxiliary IPv4 addresses are allowed per network", maxAuxiliaryAddresses)
+	}
 	reserved := make(map[string]string, len(addresses))
 	for name, value := range addresses {
 		if !auxAddressNameRE.MatchString(name) {
