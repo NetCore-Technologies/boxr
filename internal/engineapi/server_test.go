@@ -3179,3 +3179,66 @@ func TestParseDockerEndpointConfigRejectsUnsupportedAndMalformedFields(t *testin
 		})
 	}
 }
+
+
+func TestDockerContainerFiltersMatchAncestorVolumeAndPorts(t *testing.T) {
+	record := state.Record{
+		ID: "container-filter-metadata",
+		Labels: map[string]string{"io.boxr.image": "registry.example/api:1.2"},
+		Options: container.Options{
+			BindMounts: []container.BindMount{{
+				Source: "/srv/data/api", Target: "/var/lib/api", VolumeName: "api-data",
+			}},
+			ExposedPorts: []string{"53/udp", "8080-8082/tcp"},
+			PublishedPorts: []container.PortMapping{{
+				HostIP: "127.0.0.1", HostPort: 18080, ContainerPort: 8080, Protocol: "tcp",
+			}},
+		},
+	}
+	for _, filter := range []struct {
+		name   string
+		key    string
+		value  string
+		want   bool
+	}{
+		{name: "ancestor exact reference", key: "ancestor", value: "registry.example/api:1.2", want: true},
+		{name: "ancestor reference prefix", key: "ancestor", value: "registry.example/api", want: true},
+		{name: "ancestor mismatch", key: "ancestor", value: "registry.example/db:1.2", want: false},
+		{name: "volume name", key: "volume", value: "api-data", want: true},
+		{name: "volume destination", key: "volume", value: "/var/lib/api", want: true},
+		{name: "volume source", key: "volume", value: "/srv/data/api", want: true},
+		{name: "volume mismatch", key: "volume", value: "other-volume", want: false},
+		{name: "published container port", key: "publish", value: "8080/tcp", want: true},
+		{name: "published host port", key: "publish", value: "18080", want: true},
+		{name: "published range", key: "publish", value: "8079-8081/tcp", want: true},
+		{name: "published protocol mismatch", key: "publish", value: "8080/udp", want: false},
+		{name: "published mismatch", key: "publish", value: "8081", want: false},
+		{name: "exposed port", key: "expose", value: "53/udp", want: true},
+		{name: "exposed range", key: "expose", value: "8081-8085/tcp", want: true},
+		{name: "exposed not published", key: "expose", value: "8082", want: true},
+		{name: "exposed mismatch", key: "expose", value: "18080/tcp", want: false},
+	} {
+		t.Run(filter.name, func(t *testing.T) {
+			filters := map[string][]string{filter.key: {filter.value}}
+			if got := matchesContainerFilters(record, filters); got != filter.want {
+				t.Fatalf("matchesContainerFilters(%s=%s)=%t, want %t", filter.key, filter.value, got, filter.want)
+			}
+		})
+	}
+}
+
+func TestDockerPortFilterMatchesRejectsInvalidAndUnboundedRanges(t *testing.T) {
+	for _, value := range []string{"", "0", "1-300", "80-79", "8080/icmp", "8080/tcp/udp", "65536", " 80"} {
+		t.Run(value, func(t *testing.T) {
+			if dockerPortFilterMatches(value, 80, "tcp") {
+				t.Fatalf("invalid Docker port filter %q matched", value)
+			}
+		})
+	}
+	if dockerPortFilterMatches("8080-8082/tcp", 8081, "tcp") != true {
+		t.Fatal("valid bounded TCP port range did not match")
+	}
+	if dockerPortFilterMatches("8080-8082/tcp", 8081, "udp") {
+		t.Fatal("TCP port filter matched an UDP candidate")
+	}
+}
