@@ -3,12 +3,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
-	"bytes"
 	"flag"
 	"fmt"
 	"io"
