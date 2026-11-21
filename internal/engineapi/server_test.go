@@ -3087,3 +3087,38 @@ func TestDockerNetworkAttachmentsReturnEmptyMapsForUnattachedContainers(t *testi
 		t.Fatalf("Docker inspect networks = %#v, want empty object", settings["Networks"])
 	}
 }
+
+
+func TestDockerContainerFiltersMatchNetworkHealthExitAndLabelExclusion(t *testing.T) {
+	exitCode := 1
+	record := state.Record{
+		ID: "container-filter-test", Status: "exited", ExitCode: &exitCode,
+		Labels: map[string]string{"team": "platform", "tier": "api"},
+		Health: &state.HealthState{Status: "unhealthy"},
+	}
+	networks := map[string]any{
+		"frontend": map[string]any{"NetworkID": "network-frontend-identifier"},
+	}
+	for _, filter := range []struct {
+		name   string
+		values map[string][]string
+		want   bool
+	}{
+		{name: "network name", values: map[string][]string{"network": {"frontend"}}, want: true},
+		{name: "network ID prefix", values: map[string][]string{"network": {"network-front"}}, want: true},
+		{name: "network mismatch", values: map[string][]string{"network": {"backend"}}, want: false},
+		{name: "health", values: map[string][]string{"health": {"unhealthy"}}, want: true},
+		{name: "health mismatch", values: map[string][]string{"health": {"healthy"}}, want: false},
+		{name: "exit code", values: map[string][]string{"exited": {"1"}}, want: true},
+		{name: "exit code mismatch", values: map[string][]string{"exited": {"0"}}, want: false},
+		{name: "label exclusion", values: map[string][]string{"label!": {"team=platform"}}, want: false},
+		{name: "label exclusion non-match", values: map[string][]string{"label!": {"team=database"}}, want: true},
+		{name: "multiple filters are conjunctive", values: map[string][]string{"network": {"frontend"}, "health": {"unhealthy"}, "exited": {"1"}}, want: true},
+	} {
+		t.Run(filter.name, func(t *testing.T) {
+			if got := matchesContainerFilters(record, filter.values, networks); got != filter.want {
+				t.Fatalf("matchesContainerFilters()=%t, want %t", got, filter.want)
+			}
+		})
+	}
+}
