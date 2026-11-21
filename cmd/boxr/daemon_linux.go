@@ -46,13 +46,11 @@ func runDaemon(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "boxr daemon: unexpected positional arguments")
 		return 2
 	}
-	var (
-		err         error
-		listener    net.Listener
-		serveListener net.Listener
-		socketPath  string
-		socketInfo  os.FileInfo
-	)
+	var err error
+	var listener net.Listener
+	var serveListener net.Listener
+	var socketPath string
+	var socketInfo os.FileInfo
 	tcpListener := strings.HasPrefix(strings.ToLower(host), "tcp://")
 	if tcpListener {
 		if !*tlsVerify {
