@@ -103,3 +103,30 @@ func TestOptionsValidateContainerUserSpecAndUserNamespaceMapping(t *testing.T) {
 		t.Fatal("non-root user was accepted by the single-ID user namespace mapping")
 	}
 }
+
+func TestPrepareExecUserRejectsNonRootInSingleIDUserNamespace(t *testing.T) {
+	_, _, err := PrepareExecUser("40000:40000", true)
+	if err == nil {
+		t.Fatal("non-root exec identity was accepted in a single-ID user namespace")
+	}
+}
+
+func TestPrepareExecUserAllowsRootInSingleIDUserNamespace(t *testing.T) {
+	t.Setenv("HOME", "/")
+	finish, preserveSetUID, err := PrepareExecUser("0:0", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preserveSetUID {
+		t.Fatal("root user switch should not need to preserve CAP_SETUID")
+	}
+	if finish == nil {
+		t.Fatal("root user preparation returned no completion function")
+	}
+	if err := finish(); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("HOME"); got != "/root" {
+		t.Fatalf("HOME=%q, want /root", got)
+	}
+}

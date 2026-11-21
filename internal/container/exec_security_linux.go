@@ -53,7 +53,6 @@ func ApplyExecRestrictions(options Options) error {
 	return nil
 }
 
-
 // PrepareExecUser resolves an exec USER against the container root filesystem.
 // The returned closure performs the final UID switch after capabilities drop.
 func PrepareExecUser(spec string, userNamespace bool) (func() error, bool, error) {

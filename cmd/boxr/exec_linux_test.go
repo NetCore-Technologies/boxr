@@ -151,6 +151,16 @@ func TestFirstExecTerminalSelectsFirstAvailableTerminal(t *testing.T) {
 	}
 }
 
+func TestExecRejectsMalformedUserBeforeContainerLookup(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := runExec([]string{"--user", "bad user", "missing-container", "/bin/true"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("exec with malformed user returned %d, want 2 (stderr=%q)", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "invalid --user") {
+		t.Fatalf("expected malformed user diagnostic, got %q", stderr.String())
+	}
+}
+
 func TestExpandExecShortFlagsSupportsDockerStyleCombinedOptions(t *testing.T) {
 	tests := []struct {
 		name string
