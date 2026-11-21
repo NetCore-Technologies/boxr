@@ -37,7 +37,7 @@ func TestDockerStatsSnapshotUsesDistinctPreviousCounters(t *testing.T) {
 		},
 	}
 
-	payload, _, err := dockerStatsSnapshotWithPrevious(record, previous)
+	payload, _, err := dockerStatsSnapshotFromStats(record, current, previous)
 	if err != nil {
 		t.Fatal(err)
 	}
