@@ -272,7 +272,107 @@ func TestContainerAttachSupportsDockerTCPUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
+
 	requestPath := "/v1.45/containers/" + record.ID + "/attach?logs=1&stream=0&stdout=1"
+	if _, err := fmt.Fprintf(connection,
+		"POST %s HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Length: 0\r\n\r\n",
+		requestPath, target.Host); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(connection)
+	statusLine, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(statusLine, "101 UPGRADED") {
+		t.Fatalf("Docker attach upgrade response = %q", statusLine)
+	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line == "\r\n" || line == "\n" {
+			break
+		}
+	}
+
+	var frameHeader [8]byte
+	if _, err := io.ReadFull(reader, frameHeader[:]); err != nil {
+		t.Fatalf("read Docker attach frame header: %v", err)
+	}
+	if frameHeader[0] != 1 {
+		t.Fatalf("Docker attach stream=%d, want stdout stream 1", frameHeader[0])
+	}
+	if got := binary.BigEndian.Uint32(frameHeader[4:]); got != uint32(len(payload)) {
+		t.Fatalf("Docker attach frame length=%d want %d", got, len(payload))
+	}
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(reader, got); err != nil {
+		t.Fatalf("read Docker attach frame payload: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("Docker attach payload=%q want %q", got, payload)
+	}
+}
+
+func TestContainerAttachForwardsDockerUpgradedStdin(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("attach-stdin-test", []string{"/bin/cat"}, container.Options{OpenStdin: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := state.OpenLog(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+
+	socketPath, err := state.EngineStdinSocketPath(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if err := os.Chmod(socketPath, 0600); err != nil {
+		t.Fatal(err)
+	}
+	received := make(chan string, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		accepted, err := listener.Accept()
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		defer accepted.Close()
+		data, err := io.ReadAll(accepted)
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		received <- string(data)
+	}()
+
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	target, err := url.Parse(httpServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := net.Dial("tcp", target.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestPath := "/v1.45/containers/" + record.ID + "/attach?stdin=1&stream=1"
 	if _, err := fmt.Fprintf(connection,
 		"POST %s HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Length: 0\r\n\r\n",
 		requestPath, target.Host); err != nil {
