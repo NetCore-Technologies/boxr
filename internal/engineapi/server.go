@@ -2047,7 +2047,13 @@ func dockerStatsCPUUsage(stats state.Stats) map[string]any {
 func dockerStatsBlockIO(counters map[string]string) map[string]any {
 	serviceBytes := make([]map[string]any, 0, len(counters)*2)
 	serviced := make([]map[string]any, 0, len(counters)*2)
-	for device, raw := range counters {
+	devices := make([]string, 0, len(counters))
+	for device := range counters {
+		devices = append(devices, device)
+	}
+	sort.Strings(devices)
+	for _, device := range devices {
+		raw := counters[device]
 		majorText, minorText, ok := strings.Cut(device, ":")
 		if !ok {
 			continue
