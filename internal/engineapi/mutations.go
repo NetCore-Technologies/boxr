@@ -724,15 +724,6 @@ func createContainerRecord(name string, input dockerCreateRequest) (state.Record
 		_ = state.RemoveCreated(record.ID)
 		return empty, fmt.Errorf("unpack verified image into persistent container rootfs: %w", err)
 	}
-	if err := copyUpDockerVolumes(options.BindMounts, rootPath); err != nil {
-		cleanupErr := state.RemoveManagedRootFS(record.ID)
-		removeErr := state.RemoveCreated(record.ID)
-		return empty, errors.Join(
-			fmt.Errorf("copy image data into Docker volumes: %w", err),
-			cleanupErr,
-			removeErr,
-		)
-	}
 	record, err = state.ConfigureManagedRootFS(record.ID, rootPath)
 	if err != nil {
 		cleanupErr := state.RemoveManagedRootFS(record.ID)
@@ -749,6 +740,12 @@ func createContainerRecord(name string, input dockerCreateRequest) (state.Record
 			return empty, fmt.Errorf("configure persistent container writable layer: %v; roll back container creation: %w", err, removeErr)
 		}
 		return empty, fmt.Errorf("configure persistent container writable layer: %w", err)
+	}
+	if err := copyUpDockerVolumes(options.BindMounts, rootPath); err != nil {
+		if removeErr := state.RemoveCreated(record.ID); removeErr != nil {
+			return empty, fmt.Errorf("copy image data into Docker volumes: %v; roll back container creation: %w", err, removeErr)
+		}
+		return empty, fmt.Errorf("copy image data into Docker volumes: %w", err)
 	}
 	return record, nil
 }
