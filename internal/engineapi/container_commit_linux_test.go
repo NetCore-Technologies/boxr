@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/manit6752025/boxr/internal/config"
 	imageStore "github.com/manit6752025/boxr/internal/image"
 	"github.com/manit6752025/boxr/internal/state"
 )
@@ -95,6 +96,78 @@ func TestDockerContainerCommitSnapshotsWritableLayerAndConfig(t *testing.T) {
 	}
 	if string(data) != "committed=true"+string([]byte{10}) {
 		t.Fatalf("committed writable-layer content = %q", data)
+	}
+}
+
+func TestDockerCreatePreservesEnvironmentPrivatelyAndCommitInheritsIt(t *testing.T) {
+	server := setupEngineAPITest(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bin", "app"), []byte("test image"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := imageStore.ImportRootFSWithConfig(root, "env-commit-base:latest", "linux", "amd64", "",
+		imageStore.ImageRuntimeConfig{
+			Entrypoint: []string{"/bin/app"},
+			Env:        []string{"BASE=from-image", "KEEP=yes"},
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := bytes.NewBufferString(`{"Image":"env-commit-base:latest","Env":["BASE=from-container","APP_MODE=production"]}`)
+	create := httptest.NewRecorder()
+	server.ServeHTTP(create, httptest.NewRequest(http.MethodPost, "/v1.45/containers/create", payload))
+	if create.Code != http.StatusCreated {
+		t.Fatalf("container create status=%d body=%s", create.Code, create.Body.String())
+	}
+	var created struct {
+		ID string `json:"Id"`
+	}
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	record, err := state.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(record.Options.Env) != 0 {
+		t.Fatalf("public container state leaked environment values: %#v", record.Options.Env)
+	}
+
+	privateData, err := state.ReadEngineConfig(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var private config.RunFile
+	if err := json.Unmarshal(privateData, &private); err != nil {
+		t.Fatal(err)
+	}
+	wantEnv := []string{"BASE=from-container", "KEEP=yes", "APP_MODE=production"}
+	if len(private.Options.Env) != len(wantEnv) {
+		t.Fatalf("private environment = %#v, want %#v", private.Options.Env, wantEnv)
+	}
+	for i, expected := range wantEnv {
+		if private.Options.Env[i] != expected {
+			t.Fatalf("private environment = %#v, want %#v", private.Options.Env, wantEnv)
+		}
+	}
+
+	commit := engineAPIRequest(server, http.MethodPost,
+		"/commit?container="+record.ID+"&repo=env-commit-result&tag=latest")
+	if commit.Code != http.StatusCreated {
+		t.Fatalf("commit status=%d body=%s", commit.Code, commit.Body.String())
+	}
+	image, err := imageStore.Inspect("env-commit-result:latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, expected := range wantEnv {
+		if i >= len(image.RuntimeConfig.Env) || image.RuntimeConfig.Env[i] != expected {
+			t.Fatalf("committed image environment = %#v, want %#v", image.RuntimeConfig.Env, wantEnv)
+		}
 	}
 }
 
