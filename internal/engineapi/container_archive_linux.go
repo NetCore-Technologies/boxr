@@ -215,7 +215,7 @@ func (s *Server) handleContainerArchive(writer http.ResponseWriter, request *htt
 	}
 
 	live := record.Status == "running" || record.Status == "paused"
-	if live && request.Method == http.MethodPut && dockerArchivePathUsesRestrictedMount(containerPath) {
+	if live && dockerArchivePathUsesRestrictedMount(containerPath) {
 		writeError(writer, http.StatusBadRequest, fmt.Errorf("copying through /proc, /sys or /dev is not supported"))
 		return
 	}
@@ -240,7 +240,14 @@ func (s *Server) handleContainerArchive(writer http.ResponseWriter, request *htt
 
 	switch request.Method {
 	case http.MethodGet, http.MethodHead:
-		s.handleDockerArchiveGet(writer, request, lowerRoot, upperRoot, containerPath, contentsOnly, directoryExpected)
+		readLower, readUpper := lowerRoot, upperRoot
+		if live {
+			// Resolve live bind mounts and writable files through the verified
+			// container root without opening host /proc, /sys or /dev paths.
+			readLower = filepath.Join("/proc", strconv.Itoa(record.PID), "root", ".")
+			readUpper = ""
+		}
+		s.handleDockerArchiveGet(writer, request, readLower, readUpper, containerPath, contentsOnly, directoryExpected)
 	case http.MethodPut:
 		if upperInfo, statErr := os.Lstat(upperRoot); errors.Is(statErr, os.ErrNotExist) {
 			if err := os.MkdirAll(upperRoot, 0700); err != nil {
@@ -305,6 +312,12 @@ func (s *Server) handleDockerArchiveGet(writer http.ResponseWriter, request *htt
 		writeError(writer, http.StatusInternalServerError, fmt.Errorf("encode container path metadata: %w", err))
 		return
 	}
+	writer.Header().Set("X-Docker-Container-Path-Stat", base64.StdEncoding.EncodeToString(statJSON))
+	if request.Method == http.MethodHead {
+		writer.Header().Set("Content-Type", "application/x-tar")
+		writer.WriteHeader(http.StatusOK)
+		return
+	}
 
 	temporary, err := os.CreateTemp("", ".boxr-docker-archive-*.tar")
 	if err != nil {
@@ -361,7 +374,6 @@ func (s *Server) handleDockerArchiveGet(writer http.ResponseWriter, request *htt
 	}
 	writer.Header().Set("Content-Type", "application/x-tar")
 	writer.Header().Set("Content-Length", strconv.FormatInt(size, 10))
-	writer.Header().Set("X-Docker-Container-Path-Stat", base64.StdEncoding.EncodeToString(statJSON))
 	writer.Header().Set("Content-Disposition", "attachment")
 	writer.WriteHeader(http.StatusOK)
 	if request.Method != http.MethodHead {
