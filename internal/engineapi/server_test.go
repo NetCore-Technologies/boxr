@@ -2253,8 +2253,8 @@ func TestDockerNetworkConnectDisconnectAndInspectEndpoint(t *testing.T) {
 	server.removeNetwork = func(name string) error {
 		return boxrnetwork.RemoveWithRunner(context.Background(), name, runner)
 	}
-	server.joinNetwork = func(name string, pid int, id string, ports ...boxrnetwork.PortMapping) (string, error) {
-		return boxrnetwork.JoinWithRunner(context.Background(), name, pid, id, runner, ports...)
+	server.joinNetwork = func(name string, pid int, id string, endpoint boxrnetwork.EndpointOptions, ports ...boxrnetwork.PortMapping) (string, error) {
+		return boxrnetwork.JoinWithRunnerOptions(context.Background(), name, pid, id, runner, endpoint, ports...)
 	}
 	server.leaveNetwork = func(name, id string) error {
 		return boxrnetwork.LeaveWithRunner(context.Background(), name, id, runner)
