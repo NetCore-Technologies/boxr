@@ -375,7 +375,7 @@ func copyUpRootFSTree(source, destination string) (int64, int64, error) {
 				return fmt.Errorf("open image file %s: %w", relative, err)
 			}
 			openedInfo, statErr := input.Stat()
-			if statErr != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
+			if statErr != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) || openedInfo.Size() != info.Size() {
 				closeErr := input.Close()
 				return errors.Join(
 					fmt.Errorf("image file %s changed while preparing volume copy-up", relative),
@@ -428,9 +428,9 @@ func copyUpRootFSTree(source, destination string) (int64, int64, error) {
 }
 
 // CopyUpFromRootFS populates an empty managed volume from a directory in a
- // verified image rootfs. Non-empty volumes are never modified. The source is
- // archived and safely extracted using the rootfs package's path, symlink and
- // size checks before any entries are published into the volume.
+// verified image rootfs. Non-empty volumes are never modified. Traversal is
+// bounded, special files are rejected, and symlinks are copied without being
+// followed so their targets retain their container-root semantics.
 func CopyUpFromRootFS(name, rootPath, mountTarget string) error {
 	mu.Lock()
 	defer mu.Unlock()
