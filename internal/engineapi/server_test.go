@@ -222,6 +222,9 @@ func TestEventsStreamDockerContainerEventShape(t *testing.T) {
 		}
 		actor := event["Actor"].(map[string]any)
 		if event["Type"] == "container" && actor["ID"] == record.ID {
+			if event["Action"] != "start" || event["status"] != "start" || event["id"] != record.ID || event["scope"] != "local" {
+				t.Fatalf("Docker event compatibility fields = %#v", event)
+			}
 			found = true
 			break
 		}

@@ -1629,11 +1629,15 @@ func (s *Server) handleEvents(writer http.ResponseWriter, request *http.Request)
 			} else {
 				attributes["name"] = event.Name
 			}
+			action := dockerEventAction(event.Action)
 			payload := map[string]any{
-				"Type": "container", "Action": dockerEventAction(event.Action),
+				"Type": "container", "Action": action,
 				"Actor": map[string]any{
 					"ID": event.ID, "Attributes": attributes,
 				},
+				// Preserve legacy aliases for older Docker Engine API clients.
+				"status": action, "id": event.ID,
+				"scope": "local",
 				"time": event.Time.Unix(), "timeNano": event.Time.UnixNano(),
 			}
 			if json.NewEncoder(writer).Encode(payload) != nil {
