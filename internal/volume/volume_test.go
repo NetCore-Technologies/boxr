@@ -171,3 +171,22 @@ func TestCreateRejectsInvalidLabels(t *testing.T) {
 		}
 	}
 }
+
+
+func TestCreateAnonymousVolumePersistsAnonymousIdentity(t *testing.T) {
+	useTempData(t)
+	created, err := CreateAnonymous(map[string]string{"purpose": "engine-api"})
+	if err != nil {
+		t.Fatalf("create anonymous volume: %v", err)
+	}
+	if !created.Anonymous || len(created.Name) != 64 {
+		t.Fatalf("anonymous volume identity = %+v", created)
+	}
+	loaded, err := Get(created.Name)
+	if err != nil {
+		t.Fatalf("get anonymous volume: %v", err)
+	}
+	if !loaded.Anonymous || loaded.Labels["purpose"] != "engine-api" {
+		t.Fatalf("persisted anonymous volume = %+v", loaded)
+	}
+}
