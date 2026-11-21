@@ -5215,7 +5215,17 @@ func runStop(args []string, stdout, stderr io.Writer) int {
 			failed = true
 			continue
 		}
-		if err := state.Signal(record.ID, "TERM"); err != nil {
+		stopSignal, signalErr := container.NormalizeStopSignal(record.Options.StopSignal)
+		if signalErr != nil {
+			_ = state.CancelStopRequest(record.ID)
+			fmt.Fprintf(stderr, "boxr stop: %s: invalid persisted stop signal: %v\n", record.ID, signalErr)
+			failed = true
+			continue
+		}
+		if stopSignal == "" {
+			stopSignal = "SIGTERM"
+		}
+		if err := state.Signal(record.ID, stopSignal); err != nil {
 			_ = state.CancelStopRequest(record.ID)
 			fmt.Fprintf(stderr, "boxr stop: %s: %v\n", record.ID, err)
 			failed = true

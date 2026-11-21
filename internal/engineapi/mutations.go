@@ -655,9 +655,7 @@ func createContainerRecord(name string, input dockerCreateRequest) (result state
 	if len(input.Healthcheck) > 0 && string(input.Healthcheck) != "null" {
 		return empty, fmt.Errorf("Docker Healthcheck configuration is not implemented by Engine API create")
 	}
-	if input.StopSignal != "" && !strings.EqualFold(input.StopSignal, "SIGTERM") && !strings.EqualFold(input.StopSignal, "TERM") {
-		return empty, fmt.Errorf("only the default SIGTERM stop signal is supported")
-	}
+
 	if strings.TrimSpace(name) != "" {
 		name = strings.TrimPrefix(name, "/")
 	}
@@ -682,6 +680,11 @@ func createContainerRecord(name string, input dockerCreateRequest) (result state
 	}
 	options.Hostname = input.Hostname
 	options.Env = container.MergeEnvironment(image.RuntimeConfig.Env, input.Env)
+	stopSignal, err := dockerConfigStopSignal(input.StopSignal, image.RuntimeConfig.StopSignal)
+	if err != nil {
+		return empty, fmt.Errorf("validate Docker Config.StopSignal: %w", err)
+	}
+	options.StopSignal = stopSignal
 	exposedPorts, err := dockerConfigExposedPorts(input.ExposedPorts, image.RuntimeConfig.ExposedPorts)
 	if err != nil {
 		return empty, fmt.Errorf("validate Docker Config.ExposedPorts: %w", err)
@@ -785,6 +788,16 @@ func createContainerRecord(name string, input dockerCreateRequest) (result state
 	}
 	anonymousVolumesCommitted = true
 	return record, nil
+}
+
+// dockerConfigStopSignal applies the container override or inherits the image
+// signal. An empty result means Docker's default SIGTERM at stop time.
+func dockerConfigStopSignal(requested, imageDefault string) (string, error) {
+	value := imageDefault
+	if requested != "" {
+		value = requested
+	}
+	return container.NormalizeStopSignal(value)
 }
 
 // dockerConfigExposedPorts merges image defaults and create-request metadata.
@@ -1499,9 +1512,21 @@ func (s *Server) handleContainerStop(writer http.ResponseWriter, request *http.R
 		writeError(writer, http.StatusConflict, err)
 		return
 	}
-	signal := "TERM"
+	signal, err := dockerConfigStopSignal(record.Options.StopSignal, "")
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, fmt.Errorf("validate persisted container stop signal: %w", err))
+		return
+	}
+	if signal == "" {
+		signal = "SIGTERM"
+	}
+	killSent := signal == "SIGKILL"
 	if timeout == 0 {
-		signal = "KILL"
+		signal = "SIGKILL"
+		killSent = true
+	}
+	if killSent {
+		timeout = 2 * time.Second
 	}
 	if err := state.Signal(record.ID, signal); err != nil {
 		if rollbackErr := state.CancelStopRequest(record.ID); rollbackErr != nil {
@@ -1524,14 +1549,14 @@ func (s *Server) handleContainerStop(writer http.ResponseWriter, request *http.R
 			writer.WriteHeader(http.StatusNoContent)
 			return
 		}
-		if !time.Now().Before(deadline) && signal != "KILL" {
-			if killErr := state.Signal(record.ID, "KILL"); killErr != nil {
+		if !time.Now().Before(deadline) && !killSent {
+			if killErr := state.Signal(record.ID, "SIGKILL"); killErr != nil {
 				writeError(writer, http.StatusConflict, killErr)
 				return
 			}
-			signal = "KILL"
+			killSent = true
 			deadline = time.Now().Add(2 * time.Second)
-		} else if signal == "KILL" && !time.Now().Before(deadline) {
+		} else if killSent && !time.Now().Before(deadline) {
 			writeError(writer, http.StatusInternalServerError, fmt.Errorf("container did not stop after SIGKILL"))
 			return
 		}

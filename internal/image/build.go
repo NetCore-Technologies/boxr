@@ -58,6 +58,7 @@ type ImageRuntimeConfig struct {
 	Labels       map[string]string   `json:"Labels,omitempty"`
 	Volumes      map[string]struct{} `json:"Volumes,omitempty"`
 	ExposedPorts map[string]struct{} `json:"ExposedPorts,omitempty"`
+	StopSignal   string              `json:"StopSignal,omitempty"`
 }
 
 // LoadBuildSpec reads a bounded strict JSON recipe. Unknown fields and trailing
@@ -141,6 +142,12 @@ func ValidateBuildSpec(spec BuildSpec) error {
 		normalized, err := container.NormalizeExposedPorts([]string{target})
 		if err != nil || len(normalized) != 1 || normalized[0] != target {
 			return fmt.Errorf("image exposed port %q must be a canonical port/protocol key", target)
+		}
+	}
+	if spec.Config.StopSignal != "" {
+		normalized, err := container.NormalizeStopSignal(spec.Config.StopSignal)
+		if err != nil || normalized != spec.Config.StopSignal {
+			return fmt.Errorf("image StopSignal %q must be a canonical supported signal", spec.Config.StopSignal)
 		}
 	}
 	if strings.ContainsAny(spec.Config.User, "\x00\r\n") || len(spec.Config.User) > 256 {
@@ -595,6 +602,7 @@ func inheritBuildRuntimeConfig(base, overrides ImageRuntimeConfig) ImageRuntimeC
 		Labels:       make(map[string]string, len(base.Labels)+len(overrides.Labels)),
 		Volumes:      cloneBuildVolumes(base.Volumes),
 		ExposedPorts: cloneBuildExposedPorts(base.ExposedPorts),
+		StopSignal:   base.StopSignal,
 	}
 	if overrides.Entrypoint != nil {
 		result.Entrypoint = cloneBuildStrings(overrides.Entrypoint)
@@ -634,6 +642,9 @@ func inheritBuildRuntimeConfig(base, overrides ImageRuntimeConfig) ImageRuntimeC
 	}
 	if len(result.ExposedPorts) == 0 {
 		result.ExposedPorts = nil
+	}
+	if overrides.StopSignal != "" {
+		result.StopSignal = overrides.StopSignal
 	}
 	return result
 }

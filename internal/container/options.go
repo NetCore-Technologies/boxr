@@ -47,6 +47,7 @@ type Options struct {
 	NetworkName        string            `json:"networkName,omitempty"`
 	PublishedPorts     []PortMapping     `json:"publishedPorts,omitempty"`
 	ExposedPorts       []string          `json:"exposedPorts,omitempty"`
+	StopSignal         string            `json:"stopSignal,omitempty"`
 	UserNamespace      bool              `json:"userNamespace,omitempty"`
 	NoNewPrivileges    bool              `json:"noNewPrivileges,omitempty"`
 	SeccompProfile     string            `json:"seccompProfile,omitempty"`
@@ -81,6 +82,35 @@ func (mapping PortMapping) Normalize() (PortMapping, error) {
 		return PortMapping{}, fmt.Errorf("published port protocol must be tcp or udp")
 	}
 	return mapping, nil
+}
+
+// NormalizeStopSignal validates Docker's supported stop signals and returns a
+// canonical SIG-prefixed name suitable for persistence and process signalling.
+func NormalizeStopSignal(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	if strings.TrimSpace(value) != value || strings.ContainsAny(value, "\x00\r\n") {
+		return "", fmt.Errorf("stop signal must not contain whitespace or control characters")
+	}
+	name := strings.ToUpper(strings.TrimPrefix(strings.ToUpper(value), "SIG"))
+	if number, err := strconv.Atoi(name); err == nil {
+		signals := map[int]string{
+			1: "HUP", 2: "INT", 3: "QUIT", 9: "KILL",
+			10: "USR1", 12: "USR2", 15: "TERM", 18: "CONT", 19: "STOP",
+		}
+		var ok bool
+		name, ok = signals[number]
+		if !ok {
+			return "", fmt.Errorf("stop signal number %d is not supported", number)
+		}
+	}
+	switch name {
+	case "HUP", "INT", "QUIT", "KILL", "USR1", "USR2", "TERM", "CONT", "STOP":
+		return "SIG" + name, nil
+	default:
+		return "", fmt.Errorf("stop signal %q is not supported", value)
+	}
 }
 
 // NormalizeExposedPorts expands Docker-style ranges, applies the default TCP
@@ -263,6 +293,9 @@ func (o Options) Validate() error {
 	}
 	if _, err := NormalizeExposedPorts(o.ExposedPorts); err != nil {
 		return fmt.Errorf("exposed ports: %w", err)
+	}
+	if _, err := NormalizeStopSignal(o.StopSignal); err != nil {
+		return fmt.Errorf("stop signal: %w", err)
 	}
 	if len(o.PublishedPorts) > 128 {
 		return fmt.Errorf("at most 128 published port mappings are supported")

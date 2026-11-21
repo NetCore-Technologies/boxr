@@ -1022,6 +1022,7 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 		"Hostname": record.Options.Hostname, "Cmd": record.Command,
 		"Image": image, "WorkingDir": record.Options.Workdir, "Labels": record.Labels,
 		"ExposedPorts": dockerContainerExposedPorts(record.Options.ExposedPorts),
+		"StopSignal":   record.Options.StopSignal,
 		"OpenStdin":    false, "StdinOnce": false, "Tty": false,
 	}
 	hostConfig := map[string]any{
@@ -1360,7 +1361,7 @@ func dockerImageConfig(config imageStore.ImageRuntimeConfig) map[string]any {
 	return map[string]any{
 		"Env": env, "Cmd": command, "Entrypoint": entrypoint,
 		"WorkingDir": config.WorkingDir, "User": config.User, "Labels": labels,
-		"Volumes": volumes, "ExposedPorts": exposedPorts,
+		"Volumes": volumes, "ExposedPorts": exposedPorts, "StopSignal": config.StopSignal,
 	}
 }
 

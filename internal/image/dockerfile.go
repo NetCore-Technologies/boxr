@@ -455,7 +455,18 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 				return fmt.Errorf("line %d: Dockerfile declares more than 256 exposed ports", lineNumber)
 			}
 
-		case "ONBUILD", "HEALTHCHECK", "STOPSIGNAL", "SHELL":
+		case "STOPSIGNAL":
+			if expanded == "" || strings.ContainsAny(expanded, " \t") {
+				return fmt.Errorf("line %d: STOPSIGNAL expects one signal name or number", lineNumber)
+			}
+			signal, err := container.NormalizeStopSignal(expanded)
+			if err != nil {
+				return fmt.Errorf("line %d: invalid STOPSIGNAL: %w", lineNumber, err)
+			}
+			spec.Config.StopSignal = signal
+
+		case "ONBUILD", "HEALTHCHECK", "SHELL":
+			return fmt.Errorf("line %d: Dockerfile instruction %s is not supported yet", lineNumber, instruction)
 		default:
 			return fmt.Errorf("line %d: unknown Dockerfile instruction %s", lineNumber, instruction)
 		}

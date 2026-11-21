@@ -459,3 +459,32 @@ func TestOptionsValidateRestartPoliciesAndBudgets(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeStopSignalCanonicalizesNamesAndNumbers(t *testing.T) {
+	for input, want := range map[string]string{
+		"SIGTERM": "SIGTERM",
+		"term":    "SIGTERM",
+		"SIGQUIT": "SIGQUIT",
+		"2":       "SIGINT",
+		"15":      "SIGTERM",
+	} {
+		got, err := NormalizeStopSignal(input)
+		if err != nil || got != want {
+			t.Errorf("NormalizeStopSignal(%q) = %q, %v; want %q", input, got, err, want)
+		}
+	}
+	if got, err := NormalizeStopSignal(""); err != nil || got != "" {
+		t.Fatalf("empty stop signal = %q, %v", got, err)
+	}
+}
+
+func TestNormalizeStopSignalRejectsUnsupportedAndUnsafeValues(t *testing.T) {
+	for _, input := range []string{"0", "11", "SIGFOO", "SIGTERM KILL", " TERM", "TERM ", "TERM\n"} {
+		if _, err := NormalizeStopSignal(input); err == nil {
+			t.Errorf("NormalizeStopSignal(%q) unexpectedly succeeded", input)
+		}
+	}
+	if err := (Options{StopSignal: "SIGFOO"}).Validate(); err == nil {
+		t.Fatal("Options.Validate accepted an unsupported stop signal")
+	}
+}

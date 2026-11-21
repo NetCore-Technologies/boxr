@@ -14,7 +14,7 @@ import (
 )
 
 func TestParseDockerfileSupportedInstructions(t *testing.T) {
-	spec, err := ParseDockerfile([]byte("# syntax=docker/dockerfile:1\nARG APP_ROOT=/opt/demo\nFROM scratch AS runtime\nARG APP_ROOT\nWORKDIR $APP_ROOT\nCOPY [\"server\", \"config/\", \".\"]\nENV APP_MODE=production GREETING=\"hello world\"\nLABEL org.example.component=api org.example.tier=\"edge service\"\nUSER 1000:1000\nENTRYPOINT [\"/opt/demo/server\"]\nCMD echo --serve --port 8080\nEXPOSE 80 443/tcp 5353/udp 5000-5002/udp\n"))
+	spec, err := ParseDockerfile([]byte("# syntax=docker/dockerfile:1\nARG APP_ROOT=/opt/demo\nFROM scratch AS runtime\nARG APP_ROOT\nWORKDIR $APP_ROOT\nCOPY [\"server\", \"config/\", \".\"]\nENV APP_MODE=production GREETING=\"hello world\"\nLABEL org.example.component=api org.example.tier=\"edge service\"\nUSER 1000:1000\nENTRYPOINT [\"/opt/demo/server\"]\nCMD echo --serve --port 8080\nEXPOSE 80 443/tcp 5353/udp 5000-5002/udp\nSTOPSIGNAL SIGQUIT\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +43,9 @@ func TestParseDockerfileSupportedInstructions(t *testing.T) {
 		if _, ok := spec.Config.ExposedPorts[port]; !ok {
 			t.Errorf("EXPOSE metadata missing %q: %#v", port, spec.Config.ExposedPorts)
 		}
+	}
+	if spec.Config.StopSignal != "SIGQUIT" {
+		t.Errorf("STOPSIGNAL = %q, want SIGQUIT", spec.Config.StopSignal)
 	}
 }
 
@@ -83,7 +86,7 @@ func TestBuildDockerfileUsesDockerignoreAndPersistsConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	dockerfile := filepath.Join(contextDir, "Dockerfile")
-	if err := os.WriteFile(dockerfile, []byte("FROM scratch\nWORKDIR /opt/demo\nCOPY . .\nENV MODE=production\nLABEL org.example.component=api\nUSER 1000:1000\nENTRYPOINT [\"/opt/demo/server\"]\nCMD [\"--serve\"]\nEXPOSE 8080/tcp\n"), 0600); err != nil {
+	if err := os.WriteFile(dockerfile, []byte("FROM scratch\nWORKDIR /opt/demo\nCOPY . .\nENV MODE=production\nLABEL org.example.component=api\nUSER 1000:1000\nENTRYPOINT [\"/opt/demo/server\"]\nCMD [\"--serve\"]\nEXPOSE 8080/tcp\nSTOPSIGNAL SIGINT\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(contextDir, ".dockerignore"), []byte("*.secret\n"), 0600); err != nil {
@@ -108,6 +111,9 @@ func TestBuildDockerfileUsesDockerignoreAndPersistsConfig(t *testing.T) {
 	}
 	if _, ok := verified.RuntimeConfig.ExposedPorts["8080/tcp"]; !ok {
 		t.Errorf("image EXPOSE metadata = %#v", verified.RuntimeConfig.ExposedPorts)
+	}
+	if verified.RuntimeConfig.StopSignal != "SIGINT" {
+		t.Errorf("image StopSignal = %q, want SIGINT", verified.RuntimeConfig.StopSignal)
 	}
 	unpacked := filepath.Join(t.TempDir(), "rootfs")
 	if _, err := Unpack("demo:dockerfile", unpacked); err != nil {
