@@ -242,40 +242,64 @@ func writeImagePullStreamError(encoder *json.Encoder, err error) {
 
 func dockerImageTagTarget(source string, query url.Values) (string, error) {
 	repository, err := singleQueryValue(query, "repo")
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	tag, err := singleQueryValue(query, "tag")
-	if err != nil { return "", err }
-	if tag == "" { tag = "latest" }
+	if err != nil {
+		return "", err
+	}
+	if tag == "" {
+		tag = "latest"
+	}
 	if strings.ContainsAny(repository+tag, "\x00\r\n ") {
 		return "", fmt.Errorf("repo and tag must be literal image reference components")
 	}
 	if repository == "" {
 		repository = source
 		lastSlash, lastColon := strings.LastIndex(repository, "/"), strings.LastIndex(repository, ":")
-		if lastColon > lastSlash { repository = repository[:lastColon] }
+		if lastColon > lastSlash {
+			repository = repository[:lastColon]
+	}
 	}
 	target, err := normalizeDockerLocalImageReference(repository + ":" + tag)
-	if err != nil { return "", fmt.Errorf("invalid target image reference: %w", err) }
+	if err != nil {
+		return "", fmt.Errorf("invalid target image reference: %w", err)
+	}
 	return target, nil
 }
 
 func (s *Server) handleImageTag(writer http.ResponseWriter, request *http.Request, rawSource string) {
 	source, err := decodeDockerImageReference(rawSource)
-	if err != nil { writeError(writer, http.StatusBadRequest, err); return }
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
 	target, err := dockerImageTagTarget(source, request.URL.Query())
-	if err != nil { writeError(writer, http.StatusBadRequest, err); return }
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
 	if _, err := imageStore.Inspect(source); err != nil {
-		if strings.Contains(err.Error(), "not found") { writeError(writer, http.StatusNotFound, err) } else { writeError(writer, http.StatusInternalServerError, err) }
+		if strings.Contains(err.Error(), "not found") {
+			writeError(writer, http.StatusNotFound, err)
+		} else {
+			writeError(writer, http.StatusInternalServerError, err)
+		}
 		return
 	}
 	if _, err := imageStore.Verify(source); err != nil {
-		writeError(writer, http.StatusConflict, fmt.Errorf("verify source image: %w", err)); return
+		writeError(writer, http.StatusConflict, fmt.Errorf("verify source image: %w", err))
+		return
 	}
 	s.imageMu.Lock()
 	defer s.imageMu.Unlock()
 	if target != source {
 		records, err := state.List(true)
-		if err != nil { writeError(writer, http.StatusInternalServerError, err); return }
+		if err != nil {
+			writeError(writer, http.StatusInternalServerError, err)
+			return
+		}
 		for _, record := range records {
 			if record.Labels["io.boxr.image"] == target {
 				writeError(writer, http.StatusConflict, fmt.Errorf("target image tag %q is referenced by container %s", target, record.ID))
@@ -284,7 +308,11 @@ func (s *Server) handleImageTag(writer http.ResponseWriter, request *http.Reques
 		}
 	}
 	if err := imageStore.Tag(source, target); err != nil {
-		if strings.Contains(err.Error(), "not found") { writeError(writer, http.StatusNotFound, err) } else { writeError(writer, http.StatusConflict, err) }
+		if strings.Contains(err.Error(), "not found") {
+			writeError(writer, http.StatusNotFound, err)
+		} else {
+			writeError(writer, http.StatusConflict, err)
+		}
 		return
 	}
 	writer.WriteHeader(http.StatusCreated)
