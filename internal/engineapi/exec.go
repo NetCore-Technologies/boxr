@@ -338,6 +338,18 @@ func decodeDockerExecStartConfig(request *http.Request) (dockerExecStartConfig, 
 	return config, nil
 }
 
+func dockerExecUpgradeRequested(request *http.Request) bool {
+	if !strings.EqualFold(strings.TrimSpace(request.Header.Get("Upgrade")), "tcp") {
+		return false
+	}
+	for _, token := range strings.Split(request.Header.Get("Connection"), ",") {
+		if strings.EqualFold(strings.TrimSpace(token), "upgrade") {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) handleExecStart(writer http.ResponseWriter, request *http.Request, id string) {
 	if request.URL.RawQuery != "" {
 		writeError(writer, http.StatusBadRequest, fmt.Errorf("exec start does not accept query parameters"))
@@ -353,26 +365,106 @@ func (s *Server) handleExecStart(writer http.ResponseWriter, request *http.Reque
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
+	upgrade := dockerExecUpgradeRequested(request) && !startConfig.Detach
+
 	session.mu.Lock()
 	if session.Started {
 		session.mu.Unlock()
 		writeError(writer, http.StatusConflict, fmt.Errorf("exec session %q has already been started", id))
 		return
 	}
+	if startConfig.Tty != session.Config.Tty {
+		session.mu.Unlock()
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("exec start Tty must match the Tty setting supplied at exec create"))
+		return
+	}
+	if len(startConfig.ConsoleSize) != 0 {
+		if !session.Config.Tty || len(startConfig.ConsoleSize) != 2 ||
+			startConfig.ConsoleSize[0] == 0 || startConfig.ConsoleSize[1] == 0 ||
+			startConfig.ConsoleSize[0] > 65535 || startConfig.ConsoleSize[1] > 65535 {
+			session.mu.Unlock()
+			writeError(writer, http.StatusBadRequest, fmt.Errorf("ConsoleSize requires a TTY and dimensions between 1 and 65535"))
+			return
+		}
+		session.Config.ConsoleSize = append([]uint(nil), startConfig.ConsoleSize...)
+	}
+	if session.Config.AttachStdin && !startConfig.Detach && !upgrade {
+		session.mu.Unlock()
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("exec AttachStdin requires an HTTP Upgrade: tcp connection"))
+		return
+	}
+
+	var connection io.ReadWriteCloser
+	var hijackedReader io.Reader
+	if upgrade {
+		hijacker, supported := writer.(http.Hijacker)
+		if !supported {
+			session.mu.Unlock()
+			writeError(writer, http.StatusInternalServerError, fmt.Errorf("HTTP server does not support exec stream hijacking"))
+			return
+		}
+		conn, buffered, hijackErr := hijacker.Hijack()
+		if hijackErr != nil {
+			session.mu.Unlock()
+			writeError(writer, http.StatusInternalServerError, fmt.Errorf("hijack Docker exec stream: %w", hijackErr))
+			return
+		}
+		if _, writeErr := buffered.WriteString("HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"); writeErr != nil {
+			session.mu.Unlock()
+			_ = conn.Close()
+			return
+		}
+		if flushErr := buffered.Flush(); flushErr != nil {
+			session.mu.Unlock()
+			_ = conn.Close()
+			return
+		}
+		connection = conn
+		hijackedReader = buffered.Reader
+	}
+
 	session.Started = true
 	session.Running = true
 	started := time.Now().UTC()
 	session.StartedAt = &started
 	detach := startConfig.Detach
+	attachStdin := session.Config.AttachStdin
 	attachStdout := session.Config.AttachStdout
 	attachStderr := session.Config.AttachStderr
+	tty := session.Config.Tty
 	session.mu.Unlock()
 
 	if detach {
 		writer.WriteHeader(http.StatusOK)
-		go s.runDockerExecSession(context.Background(), session, io.Discard, io.Discard)
+		go s.runDockerExecSession(context.Background(), session, nil, io.Discard, io.Discard)
 		return
 	}
+
+	if connection != nil {
+		defer connection.Close()
+		var stdin io.Reader
+		if attachStdin {
+			stdin = hijackedReader
+		}
+		var stdout, stderr io.Writer = io.Discard, io.Discard
+		var outputMu sync.Mutex
+		if tty {
+			if attachStdout || attachStderr {
+				combined := &dockerExecTTYWriter{writer: connection, mu: &outputMu}
+				stdout, stderr = combined, combined
+			}
+		} else {
+			if attachStdout {
+				stdout = &dockerExecFrameWriter{writer: connection, stream: 1, mu: &outputMu}
+			}
+			if attachStderr {
+				stderr = &dockerExecFrameWriter{writer: connection, stream: 2, mu: &outputMu}
+			}
+		}
+		s.runDockerExecSession(context.Background(), session, stdin, stdout, stderr)
+		return
+	}
+
 	writer.Header().Set("Content-Type", "application/vnd.docker.raw-stream")
 	writer.Header().Set("Cache-Control", "no-cache")
 	writer.WriteHeader(http.StatusOK)
@@ -382,13 +474,20 @@ func (s *Server) handleExecStart(writer http.ResponseWriter, request *http.Reque
 	var outputMu sync.Mutex
 	var stdout io.Writer = io.Discard
 	var stderr io.Writer = io.Discard
-	if attachStdout {
-		stdout = &dockerExecFrameWriter{writer: writer, flusher: writerFlusher(writer), stream: 1, mu: &outputMu}
+	if tty {
+		if attachStdout || attachStderr {
+			combined := &dockerExecTTYWriter{writer: writer, mu: &outputMu}
+			stdout, stderr = combined, combined
+		}
+	} else {
+		if attachStdout {
+			stdout = &dockerExecFrameWriter{writer: writer, flusher: writerFlusher(writer), stream: 1, mu: &outputMu}
+		}
+		if attachStderr {
+			stderr = &dockerExecFrameWriter{writer: writer, flusher: writerFlusher(writer), stream: 2, mu: &outputMu}
+		}
 	}
-	if attachStderr {
-		stderr = &dockerExecFrameWriter{writer: writer, flusher: writerFlusher(writer), stream: 2, mu: &outputMu}
-	}
-	s.runDockerExecSession(context.Background(), session, stdout, stderr)
+	s.runDockerExecSession(request.Context(), session, nil, stdout, stderr)
 }
 
 func writerFlusher(writer http.ResponseWriter) http.Flusher {
