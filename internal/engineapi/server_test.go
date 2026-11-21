@@ -228,7 +228,7 @@ func TestEventsStreamDockerContainerEventShape(t *testing.T) {
 	}
 }
 
-func newEngineAPITestRegistry(t *testing.T) (*httptest.Server, string) {
+func newEngineAPITestRegistry(t *testing.T) (*httptest.Server, string, string) {
 	t.Helper()
 	fileData := []byte("pulled OCI image\n")
 	var tarBytes bytes.Buffer
@@ -296,7 +296,7 @@ func newEngineAPITestRegistry(t *testing.T) (*httptest.Server, string) {
 			return
 		}
 		switch request.URL.Path {
-		case "/v2/team/app/manifests/v1":
+		case "/v2/team/app/manifests/v1", "/v2/team/app/manifests/" + manifestDigest:
 			writer.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 			writer.Header().Set("Docker-Content-Digest", manifestDigest)
 			_, _ = writer.Write(manifest)
@@ -312,7 +312,7 @@ func newEngineAPITestRegistry(t *testing.T) (*httptest.Server, string) {
 	}))
 	t.Cleanup(server.Close)
 	registryHost := strings.TrimPrefix(server.URL, "http://")
-	return server, registryHost + "/team/app"
+	return server, registryHost + "/team/app", manifestDigest
 }
 
 func newEngineAPITestPushRegistry(t *testing.T) (*httptest.Server, string, func() (int, bool)) {
@@ -489,7 +489,7 @@ func TestEngineAPIImagePushRejectsMissingImagesAndMalformedQueries(t *testing.T)
 
 func TestEngineAPIImageCreatePullsAuthenticatedOCIImage(t *testing.T) {
 	server := setupEngineAPITest(t)
-	registryServer, remoteImage := newEngineAPITestRegistry(t)
+	registryServer, remoteImage, _ := newEngineAPITestRegistry(t)
 	localReference := remoteImage + ":v1"
 	authConfig, err := json.Marshal(map[string]string{
 		"username": "boxr-test", "password": "registry-secret",
@@ -540,12 +540,70 @@ func TestEngineAPIImageCreatePullsAuthenticatedOCIImage(t *testing.T) {
 	}
 }
 
+func TestEngineAPIImageCreatePullsDigestPinnedOCIImageAndCreatesContainer(t *testing.T) {
+	for _, mode := range []string{"fromImage", "tag"} {
+		t.Run(mode, func(t *testing.T) {
+			server := setupEngineAPITest(t)
+			registryServer, remoteImage, manifestDigest := newEngineAPITestRegistry(t)
+			digestReference := remoteImage + "@" + manifestDigest
+			localReference := remoteImage + ":sha256-" + strings.TrimPrefix(manifestDigest, "sha256:")
+
+			var target string
+			switch mode {
+			case "fromImage":
+				target = "/v1.45/images/create?fromImage=" + url.QueryEscape(digestReference) + "&platform=linux%2Famd64"
+			case "tag":
+				target = "/v1.45/images/create?fromImage=" + url.QueryEscape(remoteImage) + "&tag=" + url.QueryEscape(manifestDigest) + "&platform=linux%2Famd64"
+			}
+
+			authConfig, err := json.Marshal(map[string]string{
+				"username": "boxr-test", "password": "registry-secret",
+				"serveraddress": registryServer.URL,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, target, nil)
+			request.Header.Set("X-Registry-Auth", base64.RawURLEncoding.EncodeToString(authConfig))
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("digest image pull status=%d body=%s", response.Code, response.Body.String())
+			}
+			if !strings.Contains(response.Body.String(), "Pull complete") || !strings.Contains(response.Body.String(), "Digest: "+manifestDigest) {
+				t.Fatalf("digest pull progress stream = %s", response.Body.String())
+			}
+			image, err := imageStore.Inspect(localReference)
+			if err != nil {
+				t.Fatalf("digest-pinned image was not imported as %q: %v", localReference, err)
+			}
+			if image.OS != "linux" || image.Arch != "amd64" {
+				t.Fatalf("digest-pinned image platform = %s/%s", image.OS, image.Arch)
+			}
+
+			created, err := createContainerRecord("digest-image-"+mode, dockerCreateRequest{Image: digestReference})
+			if err != nil {
+				t.Fatalf("create container from digest-pinned image reference: %v", err)
+			}
+			if created.Labels["io.boxr.image"] != localReference {
+				t.Fatalf("container image label = %q, want stable digest alias %q", created.Labels["io.boxr.image"], localReference)
+			}
+			if err := state.RemoveCreated(created.ID); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestEngineAPIImageCreateRejectsInvalidQueriesAndAuth(t *testing.T) {
 	server := setupEngineAPITest(t)
 	for _, target := range []string{
 		"/images/create",
 		"/images/create?fromImage=not-a-valid-reference%20value",
 		"/images/create?fromImage=example.com/team/app&tag=",
+		"/images/create?fromImage=example.com/team/app%40sha256%3Abad",
+		"/images/create?fromImage=example.com/team/app%40sha256%3Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&tag=v1",
+		"/images/create?fromImage=example.com/team/app&tag=sha256%3Abad",
 	} {
 		response := engineAPIRequest(server, http.MethodPost, target)
 		if response.Code != http.StatusBadRequest {

@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 888 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 889 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 
 ## Implemented capabilities
@@ -895,3 +895,4 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 886. Engine API applies Docker-compatible image prune until label and label-exclusion filters
 887. Engine API protects all aliases sharing image digests used by persisted containers during prune
 888. Engine API removes selected image tags atomically and reports reclaimed content-addressed blob bytes
+889. Engine API pulls accept immutable SHA-256 digest references and map them to deterministic local image aliases

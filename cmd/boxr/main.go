@@ -3669,6 +3669,7 @@ var implementedFeatures = []string{
 	"Engine API inspects verified local OCI images using Docker-compatible image metadata and uncompressed layer DiffIDs",
 	"Engine API removes unused local image tags and rejects removal while containers reference them",
 	"Engine API pulls and verifies OCI/Docker registry images using Docker X-Registry-Auth and Linux platform selection",
+	"Engine API pulls accept immutable SHA-256 digest references and map them to deterministic local image aliases",
 	"Engine API pushes verified local single-layer OCI images using Docker X-Registry-Auth and registry upload verification",
 	"Engine API creates Docker image tag aliases from verified OCI content and protects tags referenced by containers",
 	"top-level pull command reuses verified OCI and Docker registry image downloads",

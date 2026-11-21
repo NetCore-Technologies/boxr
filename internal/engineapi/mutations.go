@@ -173,8 +173,18 @@ func decodeDockerRegistryCredentials(request *http.Request) (registry.Credential
 
 func normalizeDockerLocalImageReference(reference string) (string, error) {
 	reference = strings.TrimSpace(reference)
-	if reference == "" || strings.ContainsAny(reference, "\x00\r\n ") || strings.Contains(reference, "@") {
-		return "", fmt.Errorf("image must be a literal tagged image reference")
+	if reference == "" || strings.ContainsAny(reference, "\x00\r\n ") {
+		return "", fmt.Errorf("image must be a literal tagged or digest-pinned image reference")
+	}
+	if strings.Contains(reference, "@") {
+		parsed, err := registry.ParseReference(reference)
+		if err != nil {
+			return "", err
+		}
+		if parsed.Digest == "" {
+			return "", fmt.Errorf("image digest must be an immutable SHA-256 digest")
+		}
+		return parsed.LocalReference(), nil
 	}
 	if err := imageStore.ValidateReference(reference); err == nil {
 		return reference, nil
@@ -198,8 +208,8 @@ func dockerPullReference(query url.Values) (remoteReference, localReference, pla
 	if strings.TrimSpace(fromImage) == "" {
 		return "", "", "", fmt.Errorf("fromImage query parameter is required")
 	}
-	if strings.ContainsAny(fromImage, "\x00\r\n ") || strings.Contains(fromImage, "@") {
-		return "", "", "", fmt.Errorf("fromImage must be a literal tagged image reference; digest pulls are not supported yet")
+	if strings.ContainsAny(fromImage, "\x00\r\n ") {
+		return "", "", "", fmt.Errorf("fromImage must be a literal image reference")
 	}
 	tag, err := singleQueryValue(query, "tag")
 	if err != nil {
@@ -208,22 +218,55 @@ func dockerPullReference(query url.Values) (remoteReference, localReference, pla
 	if _, present := query["tag"]; present && strings.TrimSpace(tag) == "" {
 		return "", "", "", fmt.Errorf("tag query parameter must not be empty")
 	}
+
 	remoteReference = fromImage
-	if tag != "" {
-		lastSlash := strings.LastIndex(remoteReference, "/")
-		lastColon := strings.LastIndex(remoteReference, ":")
-		if lastColon > lastSlash {
-			remoteReference = remoteReference[:lastColon]
+	switch {
+	case strings.Contains(fromImage, "@"):
+		if tag != "" {
+			return "", "", "", fmt.Errorf("tag cannot be combined with a digest-pinned fromImage reference")
 		}
-		remoteReference += ":" + tag
+		parsed, parseErr := registry.ParseReference(remoteReference)
+		if parseErr != nil {
+			return "", "", "", fmt.Errorf("invalid digest-pinned image reference: %w", parseErr)
+		}
+		if parsed.Digest == "" {
+			return "", "", "", fmt.Errorf("image digest must be an immutable SHA-256 digest")
+		}
+		localReference = parsed.LocalReference()
+	case strings.HasPrefix(tag, "sha256:"):
+		// Docker clients may place an immutable digest in the tag query
+		// parameter instead of appending it to fromImage with '@'.
+		name := fromImage
+		lastSlash := strings.LastIndex(name, "/")
+		lastColon := strings.LastIndex(name, ":")
+		if lastColon > lastSlash {
+			name = name[:lastColon]
+		}
+		remoteReference = name + "@" + tag
+		parsed, parseErr := registry.ParseReference(remoteReference)
+		if parseErr != nil {
+			return "", "", "", fmt.Errorf("invalid digest-pinned image reference: %w", parseErr)
+		}
+		localReference = parsed.LocalReference()
+	default:
+		if tag != "" {
+			lastSlash := strings.LastIndex(remoteReference, "/")
+			lastColon := strings.LastIndex(remoteReference, ":")
+			if lastColon > lastSlash {
+				remoteReference = remoteReference[:lastColon]
+			}
+			remoteReference += ":" + tag
+		}
+		localReference, err = normalizeDockerLocalImageReference(remoteReference)
+		if err != nil {
+			return "", "", "", fmt.Errorf("invalid image reference: %w", err)
+		}
+		if _, err := registry.ParseReference(localReference); err != nil {
+			return "", "", "", err
+		}
+		remoteReference = localReference
 	}
-	localReference, err = normalizeDockerLocalImageReference(remoteReference)
-	if err != nil {
-		return "", "", "", fmt.Errorf("invalid image reference: %w", err)
-	}
-	if _, err := registry.ParseReference(localReference); err != nil {
-		return "", "", "", err
-	}
+
 	platform, err = singleQueryValue(query, "platform")
 	if err != nil {
 		return "", "", "", err
@@ -231,7 +274,7 @@ func dockerPullReference(query url.Values) (remoteReference, localReference, pla
 	if strings.ContainsAny(platform, "\x00\r\n ") {
 		return "", "", "", fmt.Errorf("platform must be linux/ARCH[/VARIANT]")
 	}
-	return localReference, localReference, platform, nil
+	return remoteReference, localReference, platform, nil
 }
 
 func writeImagePullStreamError(encoder *json.Encoder, err error) {
