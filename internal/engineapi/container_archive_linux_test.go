@@ -298,7 +298,7 @@ func TestMergeDockerArchiveTreeRemovesWhiteoutsAndPreservesSafeSymlinks(t *testi
 	if link != "sub/new.txt" {
 		t.Fatalf("copied symlink = %q", link)
 	}
-	if _, err := os.Lstat(filepath.Join(target, ".wh.new.txt")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(filepath.Join(target, "sub", ".wh.new.txt")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("whiteout remains after adding file: %v", err)
 	}
 }
