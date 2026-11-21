@@ -492,7 +492,7 @@ func TestParseComposeExternalVolumesRejectsInvalidBoxrNames(t *testing.T) {
 		t.Fatal("invalid external Boxr volume name was accepted")
 	}
 }
- 
+
 func TestLoadComposeInterpolatesEnvironmentAndDotEnv(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "compose.yaml")
@@ -543,8 +543,8 @@ func TestLoadComposeInterpolatesEnvironmentAndDotEnv(t *testing.T) {
 
 func TestComposeInterpolationOperatorsAndNestedDefaults(t *testing.T) {
 	environment := map[string]string{
-		"SET": "value",
-		"EMPTY": "",
+		"SET":    "value",
+		"EMPTY":  "",
 		"NUMBER": "42",
 	}
 	cases := []struct {
@@ -620,8 +620,8 @@ func TestComposeDotEnvParserBoundsAndQuotedValues(t *testing.T) {
 		{"plain value # comment", "plain value"},
 		{"value#kept", "value#kept"},
 		{"'literal $VALUE # value'", "literal $VALUE # value"},
-		{`"line\\nvalue"`, "line\nvalue"},
-		{`"quote: \\"yes\\""`, `quote: "yes"`},
+		{"\"line\\nvalue\"", "line\nvalue"},
+		{"\"quote: \\\"yes\\\"\"", "quote: \"yes\""},
 	}
 	for _, test := range cases {
 		got, err := parseComposeDotEnvValue(test.input)

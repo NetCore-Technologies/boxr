@@ -99,11 +99,11 @@ func parseComposeDotEnvValue(raw string) (string, error) {
 				escaped = false
 				continue
 			}
-			if raw[index] == '\\\\' {
+			if raw[index] == '\\' {
 				escaped = true
 				continue
 			}
-			if raw[index] == '"' {
+			if raw[index] == '\\' {
 				end = index
 				break
 			}
@@ -130,7 +130,7 @@ func unquoteComposeDotEnv(value string) (string, error) {
 	var out strings.Builder
 	for index := 1; index < len(value)-1; index++ {
 		character := value[index]
-		if character != '\\\\' {
+		if character != '\\' {
 			out.WriteByte(character)
 			continue
 		}
@@ -145,7 +145,7 @@ func unquoteComposeDotEnv(value string) (string, error) {
 			out.WriteByte('\r')
 		case 't':
 			out.WriteByte('\t')
-		case '\\\\', '"', '$':
+		case '\\', '"', '$':
 			out.WriteByte(value[index])
 		default:
 			return "", fmt.Errorf("unsupported escape sequence in double-quoted value")
