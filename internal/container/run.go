@@ -86,7 +86,10 @@ func RunWithHooks(command string, args []string, options Options, hooks Hooks) e
 	helperArgs := []string{"__boxr-init", base64.RawURLEncoding.EncodeToString(encodedOptions), resolvedCommand}
 	helperArgs = append(helperArgs, args...)
 	cmd := exec.Command(executable, helperArgs...)
-	cmd.Stdin = os.Stdin
+	cmd.Stdin = hooks.Stdin
+	if cmd.Stdin == nil {
+		cmd.Stdin = os.Stdin
+	}
 	cmd.Stdout = hooks.Stdout
 	if cmd.Stdout == nil {
 		cmd.Stdout = os.Stdout
