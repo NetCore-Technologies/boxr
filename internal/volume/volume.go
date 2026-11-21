@@ -312,6 +312,161 @@ func ExportArchive(name, archivePath string) (Archive, error) {
 	}, nil
 }
 
+
+ // CopyUpFromRootFS populates an empty managed volume from a directory in a
+ // verified image rootfs. Non-empty volumes are never modified. The source is
+ // archived and safely extracted using the rootfs package's path, symlink and
+ // size checks before any entries are published into the volume.
+func CopyUpFromRootFS(name, rootPath, mountTarget string) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	item, err := GetUnlocked(name)
+	if err != nil {
+		return fmt.Errorf("resolve volume %q: %w", name, err)
+	}
+	destinationEntries, err := os.ReadDir(item.Path)
+	if err != nil {
+		return fmt.Errorf("inspect volume %q before copy-up: %w", name, err)
+	}
+	if len(destinationEntries) != 0 {
+		return nil
+	}
+
+	source, exists, err := resolveCopyUpSource(rootPath, mountTarget)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	manifest, err := rootfs.Inspect(source)
+	if err != nil {
+		return fmt.Errorf("inspect image mount source: %w", err)
+	}
+	entryCount := manifest.Files + manifest.Directories + manifest.Symlinks
+	if entryCount == 0 {
+		return nil
+	}
+	if entryCount > rootfs.DefaultMaxFiles || manifest.Bytes > rootfs.DefaultMaxBytes {
+		return fmt.Errorf("image mount source exceeds copy-up limits (%d entries, %d bytes)", rootfs.DefaultMaxFiles, rootfs.DefaultMaxBytes)
+	}
+
+	staging, err := os.MkdirTemp(filepath.Dir(item.Path), ".boxr-volume-copy-up-*")
+	if err != nil {
+		return fmt.Errorf("create volume copy-up staging directory: %w", err)
+	}
+	defer os.RemoveAll(staging)
+
+	archivePath := filepath.Join(staging, "image-path.tar.gz")
+	if _, err := rootfs.PackTarGz(source, archivePath); err != nil {
+		return fmt.Errorf("archive image mount source: %w", err)
+	}
+	extractedPath := filepath.Join(staging, "contents")
+	if _, err := rootfs.ExtractTarGz(archivePath, extractedPath, rootfs.Limits{}); err != nil {
+		return fmt.Errorf("safely extract image mount source: %w", err)
+	}
+	stagedEntries, err := os.ReadDir(extractedPath)
+	if err != nil {
+		return fmt.Errorf("read staged volume copy-up: %w", err)
+	}
+	if len(stagedEntries) == 0 {
+		return nil
+	}
+
+	// Recheck immediately before publication. Another Boxr operation may have
+	// populated this volume while the image tree was being staged.
+	destinationEntries, err = os.ReadDir(item.Path)
+	if err != nil {
+		return fmt.Errorf("recheck volume %q before copy-up: %w", name, err)
+	}
+	if len(destinationEntries) != 0 {
+		return nil
+	}
+	for _, entry := range stagedEntries {
+		destination := filepath.Join(item.Path, entry.Name())
+		if _, err := os.Lstat(destination); err == nil {
+			return fmt.Errorf("volume %q became non-empty during copy-up", name)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect volume copy-up destination %s: %w", destination, err)
+		}
+	}
+
+	var published []string
+	rollback := func() error {
+		var rollbackErr error
+		for _, path := range published {
+			rollbackErr = errors.Join(rollbackErr, os.RemoveAll(path))
+		}
+		return rollbackErr
+	}
+	for _, entry := range stagedEntries {
+		sourcePath := filepath.Join(extractedPath, entry.Name())
+		destination := filepath.Join(item.Path, entry.Name())
+		if err := os.Rename(sourcePath, destination); err != nil {
+			return errors.Join(
+				fmt.Errorf("publish volume copy-up entry %s: %w", entry.Name(), err),
+				rollback(),
+			)
+		}
+		published = append(published, destination)
+	}
+	directory, err := os.Open(item.Path)
+	if err != nil {
+		return fmt.Errorf("open copied-up volume for sync: %w", err)
+	}
+	syncErr := directory.Sync()
+	closeErr := directory.Close()
+	if syncErr != nil || closeErr != nil {
+		return errors.Join(syncErr, closeErr)
+	}
+	return nil
+}
+
+func resolveCopyUpSource(rootPath, mountTarget string) (string, bool, error) {
+	if !filepath.IsAbs(rootPath) || filepath.Clean(rootPath) != rootPath {
+		return "", false, fmt.Errorf("copy-up rootfs must be a clean absolute path")
+	}
+	rootInfo, err := os.Lstat(rootPath)
+	if err != nil {
+		return "", false, fmt.Errorf("inspect copy-up rootfs: %w", err)
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
+		return "", false, fmt.Errorf("copy-up rootfs must be a real directory")
+	}
+	if !filepath.IsAbs(mountTarget) || filepath.Clean(mountTarget) != mountTarget || mountTarget == string(filepath.Separator) {
+		return "", false, fmt.Errorf("copy-up mount target must be a clean absolute non-root path")
+	}
+	for _, component := range strings.Split(filepath.ToSlash(mountTarget), "/") {
+		if component == ".." {
+			return "", false, fmt.Errorf("copy-up mount target cannot contain '..'")
+		}
+	}
+
+	current := rootPath
+	relative := strings.TrimPrefix(mountTarget, string(filepath.Separator))
+	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		if component == "" || component == "." || component == ".." {
+			return "", false, fmt.Errorf("copy-up mount target contains an invalid path component")
+		}
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		if err != nil {
+			return "", false, fmt.Errorf("inspect image mount target %s: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", false, fmt.Errorf("image mount target contains symlink component %s", current)
+		}
+		if !info.IsDir() {
+			return "", false, fmt.Errorf("image mount target %s is not a directory", current)
+		}
+	}
+	return current, true, nil
+}
+
 func Get(name string) (Volume, error) {
 	mu.Lock()
 	defer mu.Unlock()
