@@ -45,8 +45,8 @@ type Network struct {
 	Name         string                   `json:"name"`
 	Driver       string                   `json:"driver"`
 	Bridge       string                   `json:"bridge"`
-	Subnet       string
-	IPRange      string                   `json:"ipRange,omitempty"`                   `json:"subnet"`
+	Subnet       string                   `json:"subnet"`
+	IPRange      string                   `json:"ipRange,omitempty"`
 	Gateway      string                   `json:"gateway"`
 	NAT          bool                     `json:"nat"`
 	CreatedAt    time.Time                `json:"createdAt"`
