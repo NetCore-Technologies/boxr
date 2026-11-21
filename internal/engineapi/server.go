@@ -155,6 +155,20 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			s.handleContainerUnpause(writer, request, containerID)
 			return
 		}
+		if strings.HasSuffix(remainder, "/archive") {
+			containerID := strings.TrimSuffix(remainder, "/archive")
+			if containerID == "" || strings.Contains(containerID, "/") {
+				writeError(writer, http.StatusNotFound, fmt.Errorf("container archive endpoint not found"))
+				return
+			}
+			switch request.Method {
+			case http.MethodGet, http.MethodHead, http.MethodPut:
+				s.handleContainerArchive(writer, request, containerID)
+			default:
+				writeMethodErrorFor(writer, http.MethodGet+", "+http.MethodHead+", "+http.MethodPut)
+			}
+			return
+		}
 		if strings.HasSuffix(remainder, "/changes") {
 			containerID := strings.TrimSuffix(remainder, "/changes")
 			if containerID == "" || strings.Contains(containerID, "/") {
