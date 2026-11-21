@@ -3088,7 +3088,6 @@ func TestDockerNetworkAttachmentsReturnEmptyMapsForUnattachedContainers(t *testi
 	}
 }
 
-
 func TestDockerContainerFiltersMatchNetworkHealthExitAndLabelExclusion(t *testing.T) {
 	exitCode := 1
 	record := state.Record{
