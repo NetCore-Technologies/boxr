@@ -3716,6 +3716,10 @@ var implementedFeatures = []string{
 	"Engine API Docker builds support platform selection declared build arguments and multiple tags",
 	"Engine API maps Docker default build networking to isolated none and requires explicit host network opt-in",
 	"Engine API refuses to replace image tags referenced by persisted containers during builds",
+	"Engine API prunes dangling images by default and unused tagged images when dangling is false",
+	"Engine API applies Docker-compatible image prune until label and label-exclusion filters",
+	"Engine API protects all aliases sharing image digests used by persisted containers during prune",
+	"Engine API removes selected image tags atomically and reports reclaimed content-addressed blob bytes",
 }
 
 func printFeatures(stdout io.Writer) {
