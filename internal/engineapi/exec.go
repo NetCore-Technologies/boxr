@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os"
 	"os/exec"
 	"path"
 	"strings"
@@ -55,6 +56,7 @@ type dockerExecSession struct {
 	CreatedAt   time.Time
 
 	mu         sync.Mutex
+	terminal   *os.File
 	Started    bool
 	Running    bool
 	StartedAt  *time.Time
@@ -63,13 +65,13 @@ type dockerExecSession struct {
 	PID        int
 }
 
-type dockerExecRunnerFunc func(context.Context, string, dockerExecCreateConfig, io.Writer, io.Writer, func(int)) (int, error)
+type dockerExecRunnerFunc func(context.Context, string, dockerExecCreateConfig, io.Reader, io.Writer, io.Writer, func(int), func(*os.File)) (int, error)
 
 // dockerExecRunner uses Boxr's native exec command so PID-identity checks,
 // namespace entry and cgroup attachment remain part of the execution path.
 var dockerExecRunner dockerExecRunnerFunc = executeDockerExec
 
-func executeDockerExec(ctx context.Context, containerID string, config dockerExecCreateConfig, stdout, stderr io.Writer, onStart func(int)) (int, error) {
+func executeDockerExec(ctx context.Context, containerID string, config dockerExecCreateConfig, stdin io.Reader, stdout, stderr io.Writer, onStart func(int), onTTY func(*os.File)) (int, error) {
 	executable, err := os.Executable()
 	if err != nil {
 		return 125, fmt.Errorf("resolve Boxr executable: %w", err)
@@ -88,6 +90,10 @@ func executeDockerExec(ctx context.Context, containerID string, config dockerExe
 	arguments = append(arguments, config.Cmd...)
 
 	command := exec.CommandContext(ctx, executable, arguments...)
+	if config.Tty {
+		return runDockerExecTTY(command, config, stdin, stdout, onStart, onTTY)
+	}
+	command.Stdin = stdin
 	command.Stdout, command.Stderr = stdout, stderr
 	if err := command.Start(); err != nil {
 		return 125, fmt.Errorf("start Boxr namespace-aware exec: %w", err)
@@ -200,12 +206,7 @@ func validateDockerExecCreateConfig(config dockerExecCreateConfig) error {
 	if commandBytes > 1<<20 {
 		return fmt.Errorf("exec command exceeds 1 MiB")
 	}
-	if config.AttachStdin {
-		return fmt.Errorf("AttachStdin is not supported yet; Docker exec stdin stream hijacking is unavailable")
-	}
-	if config.Tty {
-		return fmt.Errorf("Tty is not supported yet; Docker exec PTY hijacking is unavailable")
-	}
+
 	if config.Privileged {
 		return fmt.Errorf("Privileged exec is not supported")
 	}
@@ -237,7 +238,12 @@ func validateDockerExecCreateConfig(config dockerExecCreateConfig) error {
 		return fmt.Errorf("exec environment exceeds 1 MiB")
 	}
 	if len(config.ConsoleSize) != 0 {
-		return fmt.Errorf("ConsoleSize requires a TTY, which is not supported yet")
+		if !config.Tty || len(config.ConsoleSize) != 2 {
+			return fmt.Errorf("ConsoleSize requires a TTY and exactly [height,width]")
+		}
+		if config.ConsoleSize[0] == 0 || config.ConsoleSize[1] == 0 || config.ConsoleSize[0] > 65535 || config.ConsoleSize[1] > 65535 {
+			return fmt.Errorf("ConsoleSize dimensions must be between 1 and 65535")
+		}
 	}
 	if config.DetachKeys != "" {
 		return fmt.Errorf("DetachKeys requires an attached stdin or TTY stream, which is not supported yet")
@@ -323,11 +329,11 @@ func decodeDockerExecStartConfig(request *http.Request) (dockerExecStartConfig, 
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return config, fmt.Errorf("exec start request must contain one JSON object")
 	}
-	if config.Tty {
-		return config, fmt.Errorf("Tty is not supported yet; Docker exec PTY hijacking is unavailable")
-	}
 	if len(config.ConsoleSize) != 0 {
-		return config, fmt.Errorf("ConsoleSize requires a TTY, which is not supported yet")
+		if !config.Tty || len(config.ConsoleSize) != 2 || config.ConsoleSize[0] == 0 || config.ConsoleSize[1] == 0 ||
+			config.ConsoleSize[0] > 65535 || config.ConsoleSize[1] > 65535 {
+			return config, fmt.Errorf("ConsoleSize requires a TTY and dimensions between 1 and 65535")
+		}
 	}
 	return config, nil
 }
