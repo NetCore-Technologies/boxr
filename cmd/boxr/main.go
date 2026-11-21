@@ -3725,6 +3725,7 @@ var implementedFeatures = []string{
 	"Engine API removes selected image tags atomically and reports reclaimed content-addressed blob bytes",
 	"Dockerfile COPY supports safe octal --chmod modes for copied files",
 	"Dockerfile multi-stage builds support named and numeric earlier-stage COPY --from references",
+	"Dockerfile COPY --from supports verified local image references without implicit network pulls",
 }
 
 func printFeatures(stdout io.Writer) {

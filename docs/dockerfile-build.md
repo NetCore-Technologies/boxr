@@ -4,7 +4,7 @@ Boxr can build a bounded Dockerfile subset, including multi-stage builds and art
 
 - Multiple `FROM` stages using `scratch`, a previously declared stage, or a base image already pulled into Boxr's local image store. Stage aliases are supported.
 - Local-context `COPY` and `ADD` (including JSON form and `COPY .`), with paths kept inside the build context. Local ADD files/directories are copied; plain and gzip tar archives are automatically extracted.
-- `COPY --from=STAGE` from an earlier named or numbered stage, plus `COPY --chmod=MODE` for bounded octal file permissions (000–0777). Setuid, setgid, sticky and symbolic modes are rejected.
+- `COPY --from=SOURCE` from an earlier named or numbered stage, or from a verified external image already present in the local store; external images are never pulled implicitly. `COPY --chmod=MODE` supports bounded octal file permissions (000–0777). Setuid, setgid, sticky and symbolic modes are rejected.
 - `RUN` in shell or exec form, `WORKDIR`, `ENV`, `LABEL`, `USER`, and shell/exec forms of `CMD` and `ENTRYPOINT`.
 - Bounded `.dockerignore` filtering. Negation patterns and advanced Docker ignore semantics are rejected.
 
@@ -32,7 +32,7 @@ boxr image pull alpine:3.22
 boxr image build --tag example/api:dev -f Dockerfile .
 ```
 
-`ADD` supports local files, directories and plain/gzip tar archives only. Remote URL/Git ADD sources, external-image `COPY --from`, build secrets, cache mounts, remote contexts, `RUN --mount`, and advanced Dockerfile frontend features are not implemented. They fail explicitly. Stage bases must be `scratch`, a previously declared stage, or an image already present in the local store. Dockerfile RUN executes in Boxr's namespaces and staged rootfs, but Boxr is not yet a BuildKit replacement. The builder currently flattens the result into Boxr's canonical local image layer, so it does not preserve source layer history or Docker build cache metadata.
+`ADD` supports local files, directories and plain/gzip tar archives only. Remote URL/Git ADD sources, build secrets, cache mounts, remote contexts, `RUN --mount`, and advanced Dockerfile frontend features are not implemented. They fail explicitly. Stage bases must be `scratch`, a previously declared stage, or an image already present in the local store. Dockerfile RUN executes in Boxr's namespaces and staged rootfs, but Boxr is not yet a BuildKit replacement. The builder currently flattens the result into Boxr's canonical local image layer, so it does not preserve source layer history or Docker build cache metadata.
 
 This is a compatibility subset, not a complete Dockerfile frontend or BuildKit replacement.
 
@@ -52,6 +52,17 @@ ENTRYPOINT ["/usr/local/bin/server"]
 ```
 
 Only prior stages can be referenced. Stage filesystems are held in a temporary workspace; intermediate stage tags are not published.
+
+## External image COPY
+
+A Dockerfile can copy files from a separately tagged image without creating another build stage:
+
+```dockerfile
+FROM scratch
+COPY --from=registry.example/tools:1.2 /usr/bin/compiler /usr/local/bin/compiler
+```
+
+The source image must already exist in Boxr's verified local image store. Run `boxr image pull registry.example/tools:1.2` first. Builds never perform an implicit network pull. Boxr checks the source image's integrity and Linux platform, unpacks it into the private build workspace once per reference, and removes that workspace after the build. A missing image, corrupt image, or platform mismatch aborts the build before the final tag is published.
 
 ## COPY permissions
 

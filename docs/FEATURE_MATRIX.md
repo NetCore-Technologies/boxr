@@ -900,3 +900,4 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 891. Engine API removes selected image tags atomically and reports reclaimed content-addressed blob bytes
 892. Dockerfile COPY supports safe octal --chmod modes for copied files
 893. Dockerfile multi-stage builds support named and numeric earlier-stage COPY --from references
+894. Dockerfile COPY --from supports verified local image references without implicit network pulls

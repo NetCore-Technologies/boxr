@@ -184,8 +184,8 @@ func buildDockerfileStages(
 	additionalIgnorePaths []string,
 ) (Image, error) {
 	var empty Image
-	if len(stages) < 2 {
-		return empty, fmt.Errorf("multi-stage build requires at least two stages")
+	if len(stages) < 1 {
+		return empty, fmt.Errorf("Dockerfile stage build requires at least one stage")
 	}
 	ignorePatterns, err := loadIgnorePatternsNamed(contextRoot, ignoreFile)
 	if err != nil {
@@ -205,6 +205,7 @@ func buildDockerfileStages(
 	stageRoots := make([]string, len(stages))
 	stageConfigs := make([]ImageRuntimeConfig, len(stages))
 	stageNames := make(map[string]int, len(stages))
+	externalImageRoots := make(map[string]string)
 
 	for stageIndex, stage := range stages {
 		root := filepath.Join(workspace, fmt.Sprintf("stage-%03d-rootfs", stageIndex))
@@ -264,11 +265,43 @@ func buildDockerfileStages(
 				copyRoot := contextRoot
 				copyIgnore := ignorePatterns
 				if step.copyFrom != "" {
-					fromIndex, ok := dockerfileStageIndex(step.copyFrom, stageNames, stageIndex)
-					if !ok {
-						return empty, fmt.Errorf("Dockerfile stage %d COPY --from=%s does not reference a prior stage", stageIndex+1, step.copyFrom)
+					fromIndex, isStage := dockerfileStageIndex(step.copyFrom, stageNames, stageIndex)
+					if isStage {
+						copyRoot = stageRoots[fromIndex]
+					} else {
+						var cached bool
+						copyRoot, cached = externalImageRoots[step.copyFrom]
+						if !cached {
+							verified, verifyErr := Verify(step.copyFrom)
+							if verifyErr != nil {
+								return empty, fmt.Errorf("COPY --from image %q must already exist in Boxr's verified local image store; pull it first with boxr image pull: %w", step.copyFrom, verifyErr)
+							}
+							if verified.OS != osName || verified.Arch != architecture {
+								return empty, fmt.Errorf("COPY --from image %q platform %s/%s does not match build target %s/%s", step.copyFrom, verified.OS, verified.Arch, osName, architecture)
+							}
+							if variant != "" && verified.Variant != variant {
+								return empty, fmt.Errorf("COPY --from image %q variant %q does not match build target variant %q", step.copyFrom, verified.Variant, variant)
+							}
+							if variant == "" && verified.Variant != "" {
+								if _, _, _, parseErr := parseBuildPlatform(osName + "/" + architecture + "/" + verified.Variant); parseErr != nil {
+									return empty, fmt.Errorf("COPY --from image %q has an unsupported platform variant: %w", step.copyFrom, parseErr)
+								}
+								variant = verified.Variant
+							}
+							copyRoot = filepath.Join(workspace, fmt.Sprintf("external-%03d-rootfs", len(externalImageRoots)))
+						if _, unpackErr := Unpack(step.copyFrom, copyRoot); unpackErr != nil {
+							return empty, fmt.Errorf("unpack verified COPY --from image %q: %w", step.copyFrom, unpackErr)
+						}
+						current, currentErr := Verify(step.copyFrom)
+						if currentErr != nil || current.Digest != verified.Digest {
+							if currentErr != nil {
+								return empty, fmt.Errorf("verify COPY --from image %q after unpack: %w", step.copyFrom, currentErr)
+							}
+							return empty, fmt.Errorf("COPY --from image %q changed while its rootfs was being staged", step.copyFrom)
+						}
+						externalImageRoots[step.copyFrom] = copyRoot
 					}
-					copyRoot = stageRoots[fromIndex]
+					}
 					copyIgnore = nil
 				}
 				instruction := CopyInstruction{Source: step.source, Destination: path.Clean(destination)}

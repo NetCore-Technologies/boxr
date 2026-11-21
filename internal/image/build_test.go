@@ -67,6 +67,105 @@ func TestBuildDockerfileCopyChmodAppliesModesInsideImageRootfs(t *testing.T) {
 	}
 }
 
+func TestBuildDockerfileCopiesFromVerifiedLocalExternalImage(t *testing.T) {
+	useStore(t)
+	externalRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(externalRoot, "usr", "bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(externalRoot, "etc", "toolchain"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	toolPath := filepath.Join(externalRoot, "usr", "bin", "compiler")
+	if err := os.WriteFile(toolPath, []byte("verified toolchain binary\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(externalRoot, "etc", "toolchain", "version")
+	if err := os.WriteFile(configPath, []byte("toolchain-v1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ImportRootFS(externalRoot, "demo:toolchain"); err != nil {
+		t.Fatalf("import external source image: %v", err)
+	}
+
+	contextDir := t.TempDir()
+	dockerfile := filepath.Join(contextDir, "Dockerfile")
+	content := strings.Join([]string{
+		"FROM scratch AS runtime",
+		"COPY --from=demo:toolchain --chmod=0755 /usr/bin/compiler /usr/local/bin/compiler",
+		"COPY --from=demo:toolchain /etc/toolchain/ /opt/toolchain/",
+		"ENTRYPOINT [\"/usr/local/bin/compiler\"]",
+		"",
+	}, "\n")
+	if err := os.WriteFile(dockerfile, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	built, err := BuildDockerfileForPlatform(contextDir, dockerfile, "demo:external-copy", "")
+	if err != nil {
+		t.Fatalf("BuildDockerfileForPlatform: %v", err)
+	}
+	outputRoot := filepath.Join(t.TempDir(), "rootfs")
+	if _, err := Unpack(built.Reference, outputRoot); err != nil {
+		t.Fatalf("unpack final image: %v", err)
+	}
+	outputTool := filepath.Join(outputRoot, "usr", "local", "bin", "compiler")
+	data, err := os.ReadFile(outputTool)
+	if err != nil || string(data) != "verified toolchain binary\n" {
+		t.Fatalf("external compiler contents = %q error=%v", data, err)
+	}
+	if info, err := os.Stat(outputTool); err != nil || info.Mode().Perm() != 0755 {
+		t.Fatalf("external compiler mode = %v error=%v, want 0755", info, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(outputRoot, "opt", "toolchain", "version")); err != nil || string(data) != "toolchain-v1\n" {
+		t.Fatalf("external directory copy = %q error=%v", data, err)
+	}
+	if info, err := os.Stat(toolPath); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("external source image was modified by COPY --chmod: info=%v error=%v", info, err)
+	}
+	images, err := List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(images) != 2 {
+		t.Fatalf("external source image or intermediate stage was unexpectedly changed/published: %#v", images)
+	}
+}
+
+func TestBuildDockerfileExternalCopyFromRejectsMissingAndMismatchedImages(t *testing.T) {
+	useStore(t)
+	contextDir := t.TempDir()
+	dockerfile := filepath.Join(contextDir, "Dockerfile")
+	if err := os.WriteFile(dockerfile, []byte("FROM scratch AS runtime\nCOPY --from=demo:missing /tool /tool\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BuildDockerfileForPlatform(contextDir, dockerfile, "demo:missing-copy", ""); err == nil || !strings.Contains(err.Error(), "must already exist in Boxr's verified local image store") {
+		t.Fatalf("missing external image error = %v", err)
+	}
+	if _, err := Verify("demo:missing-copy"); err == nil {
+		t.Fatal("build published an image after an external source image lookup failed")
+	}
+
+	otherArchitecture := "amd64"
+	if runtimeArchitecture() == "amd64" {
+		otherArchitecture = "arm64"
+	}
+	otherRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(otherRoot, "tool"), []byte("foreign platform\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ImportRootFSWithConfig(otherRoot, "demo:foreign-tool", "linux", otherArchitecture, "", ImageRuntimeConfig{}); err != nil {
+		t.Fatalf("import foreign platform test image: %v", err)
+	}
+	if err := os.WriteFile(dockerfile, []byte("FROM scratch AS runtime\nCOPY --from=demo:foreign-tool /tool /tool\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BuildDockerfileForPlatform(contextDir, dockerfile, "demo:foreign-copy", ""); err == nil || !strings.Contains(err.Error(), "does not match build target") {
+		t.Fatalf("foreign external image platform error = %v", err)
+	}
+	if _, err := Verify("demo:foreign-copy"); err == nil {
+		t.Fatal("build published an image from a platform-mismatched external source")
+	}
+}
 func TestBuildDockerfileMultiStageCopiesArtifactsFromNamedAndIndexedStages(t *testing.T) {
 	useStore(t)
 	baseRoot := t.TempDir()
