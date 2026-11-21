@@ -6,7 +6,9 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -29,7 +31,7 @@ func runDaemon(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("daemon", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	host := defaultDaemonHost()
-	flags.StringVar(&host, "host", host, "listen on a local unix:// socket")
+	flags.StringVar(&host, "host", host, "listen on unix:// or mutually authenticated tcp://")
 	flags.StringVar(&host, "H", host, "alias for --host")
 	tlsVerify := flags.Bool("tlsverify", false, "require TLS and verify every remote client certificate")
 	tlsCACert := flags.String("tlscacert", "", "CA certificate bundle trusted to authenticate remote clients")
@@ -205,6 +207,9 @@ func readDaemonTLSFile(path string, private bool) ([]byte, error) {
 	if !os.SameFile(before, after) {
 		return nil, fmt.Errorf("TLS file %s changed while opening", path)
 	}
+	if private && after.Mode().Perm()&0077 != 0 {
+		return nil, fmt.Errorf("private key %s must not be accessible by group or others (use chmod 0400 or 0600)", path)
+	}
 	data, err := io.ReadAll(io.LimitReader(file, maxDaemonTLSFileBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read TLS file %s: %w", path, err)
@@ -215,14 +220,47 @@ func readDaemonTLSFile(path string, private bool) ([]byte, error) {
 	return data, nil
 }
 
+func loadDaemonClientCAs(data []byte) (*x509.CertPool, error) {
+	pool := x509.NewCertPool()
+	remaining := data
+	count := 0
+	for len(bytes.TrimSpace(remaining)) > 0 {
+		block, rest := pem.Decode(remaining)
+		if block == nil {
+			return nil, fmt.Errorf("CA bundle contains invalid PEM data")
+		}
+		if block.Type != "CERTIFICATE" {
+			return nil, fmt.Errorf("CA bundle contains non-certificate PEM block %q", block.Type)
+		}
+		certificate, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse CA certificate: %w", err)
+		}
+		if !certificate.IsCA || certificate.KeyUsage&x509.KeyUsageCertSign == 0 {
+			return nil, fmt.Errorf("certificate %q is not a CA permitted to sign client certificates", certificate.Subject.String())
+		}
+		now := time.Now()
+		if now.Before(certificate.NotBefore) || now.After(certificate.NotAfter) {
+			return nil, fmt.Errorf("CA certificate %q is outside its validity period", certificate.Subject.String())
+		}
+		pool.AddCert(certificate)
+		count++
+		remaining = rest
+	}
+	if count == 0 {
+		return nil, fmt.Errorf("CA bundle contains no certificates")
+	}
+	return pool, nil
+}
+
 func loadDaemonTLSConfig(caPath, certPath, keyPath string) (*tls.Config, error) {
 	caPEM, err := readDaemonTLSFile(caPath, false)
 	if err != nil {
 		return nil, fmt.Errorf("read client CA certificate: %w", err)
 	}
-	clientCAs := x509.NewCertPool()
-	if !clientCAs.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("client CA file %s contains no valid PEM certificates", caPath)
+	clientCAs, err := loadDaemonClientCAs(caPEM)
+	if err != nil {
+		return nil, fmt.Errorf("load client CA certificate bundle %s: %w", caPath, err)
 	}
 	certPEM, err := readDaemonTLSFile(certPath, false)
 	if err != nil {

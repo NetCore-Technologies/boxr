@@ -378,6 +378,13 @@ func TestReadDaemonTLSFileRejectsSymlinks(t *testing.T) {
 	}
 }
 
+func TestLoadDaemonTLSConfigRejectsNonCATrustCertificate(t *testing.T) {
+	pki := createDaemonTestPKI(t)
+	if _, err := loadDaemonTLSConfig(pki.serverCertPath, pki.serverCertPath, pki.serverKeyPath); err == nil || !strings.Contains(err.Error(), "not a CA") {
+		t.Fatalf("non-CA server certificate was accepted as a trust anchor: %v", err)
+	}
+}
+
 func TestLoadDaemonTLSConfigRejectsInsecurePrivateKeyPermissions(t *testing.T) {
 	pki := createDaemonTestPKI(t)
 	if err := os.Chmod(pki.serverKeyPath, 0644); err != nil {
