@@ -484,7 +484,7 @@ func validateUserSpec(spec string) error {
 	if spec == "" {
 		return nil
 	}
-	if len(spec) > 256 || strings.TrimSpace(spec) != spec || strings.ContainsAny(spec, "\\x00\\r\\n\\t ") {
+	if len(spec) > 256 || strings.TrimSpace(spec) != spec || strings.ContainsAny(spec, "\x00\r\n\t ") {
 		return fmt.Errorf("must be at most 256 bytes and contain no whitespace or control characters")
 	}
 	user, group, hasGroup := strings.Cut(spec, ":")
