@@ -112,6 +112,19 @@ func TestMapContainerUIDUsesTheProcessUserNamespaceMap(t *testing.T) {
 	}
 }
 
+func TestFormatProcessCPUPercentUsesLifetimeAverageAndBoundsOutput(t *testing.T) {
+	now := time.Unix(3, 0)
+	if got := formatProcessCPUPercent(100, 100, 0, now); got != "50" {
+		t.Fatalf("CPU percentage=%q, want 50", got)
+	}
+	if got := formatProcessCPUPercent(100, 300, 0, now); got != "0" {
+		t.Fatalf("CPU percentage for a future start=%q, want 0", got)
+	}
+	if got := formatProcessCPUPercent(^uint64(0), 100, 0, now); got != "999999" {
+		t.Fatalf("large CPU percentage=%q, want bounded 999999", got)
+	}
+}
+
 func TestParseDockerTopProcStatHandlesClosingParenthesisInCommand(t *testing.T) {
 	fields := make([]string, 20)
 	fields[0], fields[1], fields[11], fields[12], fields[19] = "S", "7", "12", "8", "99"

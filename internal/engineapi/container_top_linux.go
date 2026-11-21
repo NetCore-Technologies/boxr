@@ -84,7 +84,7 @@ func (s *Server) handleContainerTop(writer http.ResponseWriter, _ *http.Request,
 			strconv.FormatUint(uint64(process.uid), 10),
 			strconv.Itoa(process.pid),
 			strconv.Itoa(ppid),
-			"0",
+			formatProcessCPUPercent(process.cpuTime, process.start, bootTime, time.Now()),
 			started,
 			process.tty,
 			formatProcessCPUTime(process.cpuTime),
@@ -431,6 +431,27 @@ func readProcTTY(path string) string {
 		return "?"
 	}
 	return strings.TrimPrefix(target, "/dev/")
+}
+
+func formatProcessCPUPercent(cpuTicks, startTicks uint64, bootTime int64, now time.Time) string {
+	elapsedSeconds := now.Unix() - bootTime
+	if elapsedSeconds <= 0 {
+		return "0"
+	}
+	elapsedTicks := uint64(elapsedSeconds) * procClockTicksPerSecond
+	if elapsedTicks <= startTicks {
+		return "0"
+	}
+	elapsedTicks -= startTicks
+	whole := cpuTicks / elapsedTicks
+	if whole > 9999 {
+		return "999999"
+	}
+	percent := whole*100 + (cpuTicks%elapsedTicks)*100/elapsedTicks
+	if percent > 999999 {
+		percent = 999999
+	}
+	return strconv.FormatUint(percent, 10)
 }
 
 func formatProcessCPUTime(ticks uint64) string {
