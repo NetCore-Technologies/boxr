@@ -1,13 +1,17 @@
 package engineapi
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -112,6 +116,157 @@ func TestDockerEngineExecCreateStartStreamAndInspect(t *testing.T) {
 	secondStart := engineAPIRequest(server, http.MethodPost, "/exec/"+created.Id+"/start")
 	if secondStart.Code != http.StatusConflict {
 		t.Fatalf("second exec start status=%d body=%s", secondStart.Code, secondStart.Body.String())
+	}
+}
+
+func TestDockerEngineExecInteractiveTTYUsesHijackedRawStream(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record := execAPITestContainer(t, server)
+	createdResponse := postDockerExecCreate(t, server, record.ID, dockerExecCreateConfig{
+		AttachStdin: true, AttachStdout: true, AttachStderr: true, Tty: true,
+		ConsoleSize: []uint{25, 80}, Cmd: []string{"/bin/cat"},
+	})
+	if createdResponse.Code != http.StatusCreated {
+		t.Fatalf("exec create status=%d body=%s", createdResponse.Code, createdResponse.Body.String())
+	}
+	var created struct{ Id string }
+	if err := json.Unmarshal(createdResponse.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	originalRunner := dockerExecRunner
+	t.Cleanup(func() { dockerExecRunner = originalRunner })
+	dockerExecRunner = func(_ context.Context, containerID string, config dockerExecCreateConfig, stdin io.Reader, stdout, stderr io.Writer, onStart func(int), _ func(*os.File)) (int, error) {
+		if containerID != record.ID || !config.Tty || !config.AttachStdin || len(config.ConsoleSize) != 2 {
+			return 125, fmt.Errorf("interactive exec configuration was not preserved")
+		}
+		onStart(9876)
+		input, err := io.ReadAll(stdin)
+		if err != nil {
+			return 125, err
+		}
+		if _, err := fmt.Fprintf(stdout, "stdout:%s", input); err != nil {
+			return 125, err
+		}
+		if _, err := io.WriteString(stderr, "stderr:combined"); err != nil {
+			return 125, err
+		}
+		return 0, nil
+	}
+
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	target, err := url.Parse(httpServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := net.Dial("tcp", target.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	body, err := json.Marshal(dockerExecStartConfig{Tty: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Fprintf(connection,
+		"POST /v1.45/exec/%s/start HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
+		created.Id, target.Host, len(body), body); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(connection)
+	statusLine, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(statusLine, "101 UPGRADED") {
+		t.Fatalf("exec upgrade response = %q", statusLine)
+	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	if _, err := connection.Write([]byte("interactive input\n")); err != nil {
+		t.Fatal(err)
+	}
+	tcpConnection, ok := connection.(*net.TCPConn)
+	if !ok {
+		t.Fatal("expected TCP connection for half-close")
+	}
+	if err := tcpConnection.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(output), "stdout:interactive input\nstderr:combined"; got != want {
+		t.Fatalf("TTY output = %q, want %q (TTY output must be unframed and merge stdout/stderr)", got, want)
+	}
+
+	inspect := engineAPIRequest(server, http.MethodGet, "/exec/"+created.Id+"/json")
+	var result struct {
+		Running  bool
+		ExitCode *int
+		Pid      int
+		ProcessConfig struct {
+			TTY bool `json:"tty"`
+		}
+		OpenStdin bool
+	}
+	if err := json.Unmarshal(inspect.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Running || result.ExitCode == nil || *result.ExitCode != 0 || result.Pid != 9876 ||
+		!result.ProcessConfig.TTY || !result.OpenStdin {
+		t.Fatalf("interactive exec inspect result = %+v", result)
+	}
+}
+
+func TestDockerEngineExecAttachStdinRequiresHijack(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record := execAPITestContainer(t, server)
+	response := postDockerExecCreate(t, server, record.ID, dockerExecCreateConfig{
+		AttachStdin: true, Cmd: []string{"/bin/cat"},
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("exec create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created struct{ Id string }
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	start := engineAPIRequest(server, http.MethodPost, "/exec/"+created.Id+"/start")
+	if start.Code != http.StatusBadRequest {
+		t.Fatalf("exec start without hijack status=%d body=%s", start.Code, start.Body.String())
+	}
+}
+
+func TestDockerEngineExecResizeValidatesDimensionsAndSessionState(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record := execAPITestContainer(t, server)
+	response := postDockerExecCreate(t, server, record.ID, dockerExecCreateConfig{
+		Tty: true, Cmd: []string{"/bin/sh"},
+	})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("exec create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created struct{ Id string }
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	invalid := engineAPIRequest(server, http.MethodPost, "/exec/"+created.Id+"/resize?h=0&w=80")
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid exec resize status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+	notRunning := engineAPIRequest(server, http.MethodPost, "/exec/"+created.Id+"/resize?h=24&w=80")
+	if notRunning.Code != http.StatusConflict {
+		t.Fatalf("inactive exec resize status=%d body=%s", notRunning.Code, notRunning.Body.String())
 	}
 }
 
