@@ -268,6 +268,15 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case strings.HasPrefix(path, "/exec/"):
 		remainder := strings.TrimPrefix(path, "/exec/")
 		parts := strings.Split(remainder, "/")
+		if len(parts) == 1 && parts[0] != "" && request.Method == http.MethodDelete {
+			execID, err := url.PathUnescape(parts[0])
+			if err != nil || strings.Contains(execID, "/") {
+				writeError(writer, http.StatusBadRequest, fmt.Errorf("invalid exec identifier"))
+				return
+			}
+			s.handleExecDelete(writer, execID)
+			return
+		}
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			writeError(writer, http.StatusNotFound, fmt.Errorf("exec endpoint not found"))
 			return
@@ -278,11 +287,6 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		switch parts[1] {
-		case "":
-			if !requireMethod(writer, request, http.MethodDelete) {
-				return
-			}
-			s.handleExecDelete(writer, execID)
 		case "start":
 			if !requireMethod(writer, request, http.MethodPost) {
 				return
