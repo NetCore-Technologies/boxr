@@ -32,16 +32,17 @@ func TestDockerCreateStopSignalOverridesAndInheritsImageDefault(t *testing.T) {
 	}
 
 	for _, test := range []struct {
-		name     string
-		override string
-		want     string
+		name          string
+		containerName string
+		override      string
+		want          string
 	}{
-		{name: "inherits image default", want: "SIGQUIT"},
-		{name: "overrides image default", override: "SIGINT", want: "SIGINT"},
-		{name: "numeric signal", override: "2", want: "SIGINT"},
+		{name: "inherits image default", containerName: "stopsignal-inherit", want: "SIGQUIT"},
+		{name: "overrides image default", containerName: "stopsignal-override", override: "SIGINT", want: "SIGINT"},
+		{name: "numeric signal", containerName: "stopsignal-numeric", override: "2", want: "SIGINT"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			record, err := createContainerRecord(test.name, dockerCreateRequest{
+			record, err := createContainerRecord(test.containerName, dockerCreateRequest{
 				Image: image.Reference, StopSignal: test.override,
 			})
 			if err != nil {
