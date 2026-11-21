@@ -250,7 +250,9 @@ func (s *Server) handleNetworkCreate(writer http.ResponseWriter, request *http.R
 func dockerNetworkWithContainers(item boxrnetwork.Network, records []state.Record) dockerNetworkResponse {
 	summary := boxrnetwork.Summary{
 		ID: item.ID, Name: item.Name, Driver: item.Driver, Bridge: item.Bridge,
-		Subnet: item.Subnet, Gateway: item.Gateway, NAT: item.NAT,
+		Subnet: item.Subnet, IPRange: item.IPRange,
+		AuxiliaryAddresses: item.AuxiliaryAddresses,
+		Gateway: item.Gateway, NAT: item.NAT,
 		ContainerCount: len(item.Allocations), CreatedAt: item.CreatedAt,
 		Labels: item.Labels,
 	}
