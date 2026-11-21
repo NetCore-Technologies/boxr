@@ -248,8 +248,9 @@ func convertComposeService(name string, source composeService, networkNames map[
 	if source.Entrypoint.Kind != 0 {
 		return result, fmt.Errorf("entrypoint overrides are not supported yet")
 	}
-	if source.Healthcheck.Kind != 0 {
-		return result, fmt.Errorf("Compose healthcheck commands are not supported; Boxr deployment healthchecks currently require explicit loopback TCP/HTTP probes in JSON")
+	healthcheck, err := parseComposeHealthcheck(&source.Healthcheck)
+	if err != nil {
+		return result, err
 	}
 	if source.TTY || source.StdinOpen {
 		return result, fmt.Errorf("interactive tty/stdin services are not supported yet")
@@ -312,6 +313,7 @@ func convertComposeService(name string, source composeService, networkNames map[
 		TmpfsMounts:      tmpfsMounts,
 		ReadOnlyRootFS:   source.ReadOnly,
 		DropCapabilities: capabilityDrops,
+		Healthcheck:       healthcheck,
 	}
 	return Service{
 		Image:     source.Image,

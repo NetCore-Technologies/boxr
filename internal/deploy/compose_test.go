@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/manit6752025/boxr/internal/container"
 	"gopkg.in/yaml.v3"
@@ -135,7 +136,6 @@ func TestLoadComposeRejectsSemanticsBoxrCannotRepresent(t *testing.T) {
 		"named volumes":                    "services:\n  api:\n    image: alpine\n    network_mode: none\n    volumes: [data:/data]\n",
 		"top-level volumes":                "services:\n  api:\n    image: alpine\n    network_mode: none\nvolumes:\n  data: {}\n",
 		"entrypoint override":              "services:\n  api:\n    image: alpine\n    network_mode: none\n    entrypoint: [/bin/sh]\n",
-		"healthcheck command":              "services:\n  api:\n    image: alpine\n    network_mode: host\n    healthcheck:\n      test: [CMD, /bin/check]\n",
 		"interactive tty":                  "services:\n  api:\n    image: alpine\n    network_mode: none\n    tty: true\n",
 		"privileged":                       "services:\n  api:\n    image: alpine\n    network_mode: none\n    privileged: true\n",
 		"restart policy":                   "services:\n  api:\n    image: alpine\n    network_mode: none\n    restart: always\n",
@@ -649,5 +649,104 @@ func TestLoadComposeInterpolationRejectsSymlinkedDotEnv(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "regular non-symlink") {
 		t.Fatalf("Load with symlinked .env error = %v", err)
+	}
+}
+
+
+func TestLoadComposeTranslatesDockerHealthchecks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "compose.yaml")
+	contents := strings.Join([]string{
+		"services:",
+		"  api:",
+		"    image: alpine:3.21",
+		"    network_mode: none",
+		"    healthcheck:",
+		"      test: [\"CMD\", \"/usr/local/bin/health\", \"--ready\"]",
+		"      interval: 45s",
+		"      timeout: 3s",
+		"      start_period: 20s",
+		"      start_interval: 2s",
+		"      retries: 5",
+		"  worker:",
+		"    image: busybox:1.36",
+		"    network_mode: none",
+		"    healthcheck:",
+		"      test: \"test -f /run/ready\"",
+		"      retries: 2",
+		"  inherited:",
+		"    image: alpine:3.21",
+		"    network_mode: none",
+		"    healthcheck:",
+		"      test: [\"NONE\"]",
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load Compose healthchecks: %v", err)
+	}
+	api := file.Services["api"].Options.Healthcheck
+	if api == nil || !reflect.DeepEqual(api.Test, []string{"CMD", "/usr/local/bin/health", "--ready"}) ||
+		api.Interval != 45*time.Second || api.Timeout != 3*time.Second ||
+		api.StartPeriod != 20*time.Second || api.StartInterval != 2*time.Second || api.Retries != 5 {
+		t.Fatalf("api healthcheck = %#v", api)
+	}
+	worker := file.Services["worker"].Options.Healthcheck
+	if worker == nil || !reflect.DeepEqual(worker.Test, []string{"CMD-SHELL", "test -f /run/ready"}) ||
+		worker.Retries != 2 || worker.Interval != container.DefaultHealthcheckInterval {
+		t.Fatalf("worker healthcheck = %#v", worker)
+	}
+	inherited := file.Services["inherited"].Options.Healthcheck
+	if inherited == nil || !reflect.DeepEqual(inherited.Test, []string{"NONE"}) {
+		t.Fatalf("inherited healthcheck override = %#v", inherited)
+	}
+	if _, err := BuildPlan(file); err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+}
+
+func TestComposeHealthcheckRejectsInvalidOrUnsupportedOptions(t *testing.T) {
+	cases := map[string]string{
+		"unknown field": "    healthcheck:\n      test: [CMD, /bin/check]\n      retries: 3\n      shell: /bin/sh\n",
+		"missing test": "    healthcheck:\n      retries: 3\n",
+		"invalid retries": "    healthcheck:\n      test: [CMD, /bin/check]\n      retries: 0\n",
+		"invalid interval": "    healthcheck:\n      test: [CMD, /bin/check]\n      interval: 0s\n",
+		"invalid timeout": "    healthcheck:\n      test: [CMD, /bin/check]\n      timeout: invalid\n",
+		"empty command": "    healthcheck:\n      test: [CMD, '']\n",
+		"too many command args": "    healthcheck:\n      test: [CMD, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]\n",
+		"disable with test": "    healthcheck:\n      disable: true\n      test: [CMD, /bin/check]\n",
+		"disable with timing": "    healthcheck:\n      disable: true\n      interval: 10s\n",
+		"malformed test": "    healthcheck:\n      test: [SHELL, /bin/check]\n",
+	}
+	for name, healthcheck := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "compose.yaml")
+			contents := "services:\n  api:\n    image: alpine:3.21\n    network_mode: none\n" + healthcheck
+			if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatal("invalid healthcheck configuration was accepted")
+			}
+		})
+	}
+}
+
+func TestComposeHealthcheckDisableFlag(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "compose.yaml")
+	contents := "services:\n  api:\n    image: alpine:3.21\n    network_mode: none\n    healthcheck:\n      disable: true\n"
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := file.Services["api"].Options.Healthcheck
+	if got == nil || !reflect.DeepEqual(got.Test, []string{"NONE"}) {
+		t.Fatalf("healthcheck disable = %#v", got)
 	}
 }
