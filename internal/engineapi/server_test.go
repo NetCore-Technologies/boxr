@@ -3028,6 +3028,8 @@ func TestDockerNetworkAttachmentsExposeVerifiedIPv4Leases(t *testing.T) {
 			ID: "network-frontend-id", Name: "frontend", Driver: "bridge",
 			Bridge: "br-boxr0", Subnet: "10.24.0.0/24", Gateway: "10.24.0.1",
 			Allocations: map[string]string{record.ID: "10.24.0.5", "stale-container": "10.24.0.6"},
+			MACAddresses: map[string]string{record.ID: "02:11:22:33:44:55"},
+			EndpointIDs: map[string]string{record.ID: strings.Repeat("ab", 32)},
 		},
 		{
 			ID: "network-backend-id", Name: "backend", Driver: "bridge",
@@ -3046,7 +3048,9 @@ func TestDockerNetworkAttachmentsExposeVerifiedIPv4Leases(t *testing.T) {
 	if frontend["NetworkID"] != "network-frontend-id" ||
 		frontend["Gateway"] != "10.24.0.1" ||
 		frontend["IPAddress"] != "10.24.0.5" ||
-		frontend["IPPrefixLen"] != 24 {
+		frontend["IPPrefixLen"] != 24 ||
+		frontend["MacAddress"] != "02:11:22:33:44:55" ||
+		frontend["EndpointID"] != strings.Repeat("ab", 32) {
 		t.Fatalf("Docker frontend network metadata = %#v", frontend)
 	}
 	if _, exists := attachments["stale-container"]; exists {
@@ -3119,5 +3123,25 @@ func TestDockerContainerFiltersMatchNetworkHealthExitAndLabelExclusion(t *testin
 				t.Fatalf("matchesContainerFilters()=%t, want %t", got, filter.want)
 			}
 		})
+	}
+}
+
+
+func TestDockerNetworkInspectIncludesEndpointIdentity(t *testing.T) {
+	record := state.Record{ID: "container-endpoint", Name: "gateway"}
+	network := boxrnetwork.Network{
+		ID: "network-endpoint", Name: "frontend", Driver: "bridge",
+		Bridge: "brxendpoint", Subnet: "10.40.0.0/24", Gateway: "10.40.0.1",
+		Allocations: map[string]string{record.ID: "10.40.0.4"},
+		MACAddresses: map[string]string{record.ID: "02:aa:bb:cc:dd:ee"},
+		EndpointIDs: map[string]string{record.ID: strings.Repeat("cd", 32)},
+	}
+	response := dockerNetworkWithContainers(network, []state.Record{record})
+	endpoint := response.Containers[record.ID]
+	if endpoint["EndpointID"] != strings.Repeat("cd", 32) ||
+		endpoint["MacAddress"] != "02:aa:bb:cc:dd:ee" ||
+		endpoint["IPv4Address"] != "10.40.0.4/24" ||
+		endpoint["Name"] != "/gateway" {
+		t.Fatalf("Docker network inspect endpoint = %#v", endpoint)
 	}
 }
