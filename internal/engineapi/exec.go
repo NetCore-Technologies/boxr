@@ -476,7 +476,7 @@ func (s *Server) handleExecStart(writer http.ResponseWriter, request *http.Reque
 	var stderr io.Writer = io.Discard
 	if tty {
 		if attachStdout || attachStderr {
-			combined := &dockerExecTTYWriter{writer: writer, mu: &outputMu}
+			combined := &dockerExecTTYWriter{writer: writer, flusher: writerFlusher(writer), mu: &outputMu}
 			stdout, stderr = combined, combined
 		}
 	} else {
@@ -517,6 +517,7 @@ func (s *Server) runDockerExecSession(ctx context.Context, session *dockerExecSe
 	finished := time.Now().UTC()
 	session.mu.Lock()
 	session.Running = false
+	session.terminal = nil
 	session.ExitCode = &exitCode
 	session.FinishedAt = &finished
 	session.mu.Unlock()
@@ -603,8 +604,9 @@ func (s *Server) handleExecInspect(writer http.ResponseWriter, id string) {
 }
 
 type dockerExecTTYWriter struct {
-	writer io.Writer
-	mu     *sync.Mutex
+	writer  io.Writer
+	flusher http.Flusher
+	mu      *sync.Mutex
 }
 
 func (writer *dockerExecTTYWriter) Write(data []byte) (int, error) {
@@ -612,6 +614,9 @@ func (writer *dockerExecTTYWriter) Write(data []byte) (int, error) {
 	defer writer.mu.Unlock()
 	if err := writeDockerExecBytes(writer.writer, data); err != nil {
 		return 0, err
+	}
+	if writer.flusher != nil {
+		writer.flusher.Flush()
 	}
 	return len(data), nil
 }
