@@ -315,6 +315,143 @@ func TestContainerAttachSupportsDockerTCPUpgrade(t *testing.T) {
 	}
 }
 
+func TestDockerContainerCreatePersistsOpenStdinSettings(t *testing.T) {
+	server := setupEngineAPITest(t)
+	importEngineAPITestImage(t, "stdin-create-test:latest")
+	payload := bytes.NewBufferString(`{"Image":"stdin-create-test:latest","OpenStdin":true,"StdinOnce":true,"AttachStdin":true}`)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1.45/containers/create", payload))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("container create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created struct {
+		ID string `json:"Id"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	record, err := state.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !record.Options.OpenStdin || !record.Options.StdinOnce {
+		t.Fatalf("created container stdin settings = open:%t once:%t", record.Options.OpenStdin, record.Options.StdinOnce)
+	}
+}
+
+func TestContainerAttachForwardsDockerUpgradedStdin(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("attach-stdin-test", []string{"/bin/cat"}, container.Options{OpenStdin: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := state.OpenLog(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+
+	socketPath, err := state.EngineStdinSocketPath(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if err := os.Chmod(socketPath, 0600); err != nil {
+		t.Fatal(err)
+	}
+	received := make(chan string, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		accepted, err := listener.Accept()
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		defer accepted.Close()
+		data, err := io.ReadAll(accepted)
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		received <- string(data)
+	}()
+
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	target, err := url.Parse(httpServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := net.Dial("tcp", target.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestPath := "/v1.45/containers/" + record.ID + "/attach?stdin=1&stream=1"
+	if _, err := fmt.Fprintf(connection,
+		"POST %s HTTP/1.1
+Host: %s
+Connection: Upgrade
+Upgrade: tcp
+Content-Length: 0
+
+",
+		requestPath, target.Host); err != nil {
+		_ = connection.Close()
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(connection)
+	statusLine, err := reader.ReadString('
+')
+	if err != nil {
+		_ = connection.Close()
+		t.Fatal(err)
+	}
+	if !strings.Contains(statusLine, "101 UPGRADED") {
+		_ = connection.Close()
+		t.Fatalf("Docker stdin attach upgrade response = %q", statusLine)
+	}
+	for {
+		line, err := reader.ReadString('
+')
+		if err != nil {
+			_ = connection.Close()
+			t.Fatal(err)
+		}
+		if line == "
+" {
+			break
+		}
+	}
+	payload := "attached stdin payload
+"
+	if _, err := io.WriteString(connection, payload); err != nil {
+		_ = connection.Close()
+		t.Fatal(err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-received:
+		if got != payload {
+			t.Fatalf("container stdin received %q, want %q", got, payload)
+		}
+	case err := <-acceptErr:
+		t.Fatalf("container stdin connection: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for upgraded Docker stdin payload")
+	}
+}
+
 func TestContainerAttachRejectsUnsupportedStdinAndMethods(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record, err := state.Create("attach-stdin-test", []string{"/bin/sleep", "1"}, container.Options{}, nil)
