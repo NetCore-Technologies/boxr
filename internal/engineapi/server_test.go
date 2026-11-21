@@ -1,11 +1,11 @@
 package engineapi
 
 import (
-	"context"
 	"archive/tar"
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
@@ -26,8 +26,8 @@ import (
 	"time"
 
 	"github.com/manit6752025/boxr/internal/container"
-	boxrnetwork "github.com/manit6752025/boxr/internal/network"
 	imageStore "github.com/manit6752025/boxr/internal/image"
+	boxrnetwork "github.com/manit6752025/boxr/internal/network"
 	"github.com/manit6752025/boxr/internal/state"
 	"github.com/manit6752025/boxr/internal/volume"
 )
@@ -1550,7 +1550,6 @@ func TestDockerContainerInspectReportsNamedVolumeMount(t *testing.T) {
 		t.Fatalf("Docker HostConfig.Binds = %#v", binds)
 	}
 }
-
 
 func TestDockerNetworkCreateListInspectAndDelete(t *testing.T) {
 	server := setupEngineAPITest(t)
