@@ -922,10 +922,6 @@ func matchesContainerFilters(record state.Record, filters map[string][]string, n
 }
 
 func matchesContainerFiltersWithTimes(record state.Record, filters map[string][]string, attachedNetworks map[string]any, referenceTimes dockerContainerFilterTimes) bool {
-	var attachedNetworks map[string]any
-	if len(networkAttachments) > 0 {
-		attachedNetworks = networkAttachments[0]
-	}
 	for key, values := range filters {
 		switch key {
 		case "status":
