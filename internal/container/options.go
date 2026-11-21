@@ -90,9 +90,11 @@ func portMappingsConflict(left, right PortMapping) bool {
 
 // BindMount describes a host path mounted at an absolute path inside RootFS.
 type BindMount struct {
-	Source   string `json:"source"`
-	Target   string `json:"target"`
-	ReadOnly bool   `json:"readOnly,omitempty"`
+	Source     string `json:"source"`
+	Target     string `json:"target"`
+	ReadOnly   bool   `json:"readOnly,omitempty"`
+	VolumeName string `json:"volumeName,omitempty"`
+	CopyUp     bool   `json:"copyUp,omitempty"`
 }
 
 // TmpfsMount describes a bounded tmpfs mount inside RootFS.
