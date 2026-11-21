@@ -1630,6 +1630,36 @@ func TestDockerNetworkCreateListInspectAndDelete(t *testing.T) {
 	}
 }
 
+type engineAPINetworkRunner struct {
+	aliases map[string]string
+}
+
+func (runner *engineAPINetworkRunner) Run(_ context.Context, executable string, args ...string) error {
+	if executable == "ip" && len(args) >= 6 &&
+		args[0] == "link" && args[1] == "set" && args[2] == "dev" && args[4] == "alias" {
+		if runner.aliases == nil {
+			runner.aliases = make(map[string]string)
+		}
+		runner.aliases[args[3]] = args[5]
+	}
+	if executable == "ip" && len(args) >= 4 && args[0] == "link" && args[1] == "del" && args[2] == "dev" {
+		delete(runner.aliases, args[3])
+	}
+	return nil
+}
+
+func (runner *engineAPINetworkRunner) Output(_ context.Context, executable string, args ...string) ([]byte, error) {
+	if executable != "ip" || len(args) == 0 {
+		return nil, fmt.Errorf("unexpected output command %q %v", executable, args)
+	}
+	device := args[len(args)-1]
+	alias, ok := runner.aliases[device]
+	if !ok {
+		return nil, fmt.Errorf("Cannot find device %s", device)
+	}
+	return []byte(fmt.Sprintf("7: %s: <BROADCAST,UP> alias %s\n", device, alias)), nil
+}
+
 func TestDockerNetworkCreateRejectsUnsupportedModesAndOptions(t *testing.T) {
 	for name, body := range map[string]string{
 		"non bridge driver": `{"Name":"unsupported","Driver":"overlay","IPAM":{"Config":[{"Subnet":"172.28.40.0/24"}]}}`,
@@ -1644,5 +1674,116 @@ func TestDockerNetworkCreateRejectsUnsupportedModesAndOptions(t *testing.T) {
 				t.Fatalf("unsupported network request was accepted: %s", body)
 			}
 		})
+	}
+}
+
+
+func TestDockerNetworkConnectDisconnectAndInspectEndpoint(t *testing.T) {
+	server := setupEngineAPITest(t)
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	runner := &engineAPINetworkRunner{aliases: make(map[string]string)}
+	server.createNetwork = func(name string, options boxrnetwork.CreateOptions) (boxrnetwork.Network, error) {
+		return boxrnetwork.CreateWithRunner(context.Background(), name, options, runner)
+	}
+	server.removeNetwork = func(name string) error {
+		return boxrnetwork.RemoveWithRunner(context.Background(), name, runner)
+	}
+	server.joinNetwork = func(name string, pid int, id string, ports ...boxrnetwork.PortMapping) (string, error) {
+		return boxrnetwork.JoinWithRunner(context.Background(), name, pid, id, runner, ports...)
+	}
+	server.leaveNetwork = func(name, id string) error {
+		return boxrnetwork.LeaveWithRunner(context.Background(), name, id, runner)
+	}
+	// The test runner substitutes the host namespace command path; the
+	// production handler still validates the process through its identity hook.
+	server.verifyNetworkPID = func(state.Record) error { return nil }
+
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1.45/networks/create", strings.NewReader(
+		`{"Name":"connect-test","Driver":"bridge","IPAM":{"Config":[{"Subnet":"172.29.41.0/24","Gateway":"172.29.41.1"}]},"Options":{"com.docker.network.bridge.enable_ip_masquerade":"false"}}`,
+	))
+	createResponse := httptest.NewRecorder()
+	server.ServeHTTP(createResponse, createRequest)
+	if createResponse.Code != http.StatusCreated {
+		t.Fatalf("network create status=%d body=%s", createResponse.Code, createResponse.Body.String())
+	}
+	var networkCreated dockerNetworkCreateResponse
+	if err := json.Unmarshal(createResponse.Body.Bytes(), &networkCreated); err != nil {
+		t.Fatal(err)
+	}
+
+	record, err := state.Create("network-client", []string{"/bin/sleep", "30"}, container.Options{NetworkMode: "none"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if current, getErr := state.Get(record.ID); getErr == nil {
+			if current.Status == "running" {
+				_ = state.Finish(record.ID, nil)
+			}
+			_ = state.Remove(record.ID)
+		}
+	}()
+
+	connectRequest := httptest.NewRequest(http.MethodPost, "/v1.45/networks/"+networkCreated.ID+"/connect",
+		strings.NewReader(`{"Container":"`+record.ID+`","EndpointConfig":{}}`))
+	connectResponse := httptest.NewRecorder()
+	server.ServeHTTP(connectResponse, connectRequest)
+	if connectResponse.Code != http.StatusOK {
+		t.Fatalf("network connect status=%d body=%s", connectResponse.Code, connectResponse.Body.String())
+	}
+
+	inspectResponse := engineAPIRequest(server, http.MethodGet, "/v1.45/networks/"+networkCreated.ID)
+	if inspectResponse.Code != http.StatusOK {
+		t.Fatalf("network inspect status=%d body=%s", inspectResponse.Code, inspectResponse.Body.String())
+	}
+	var inspected dockerNetworkResponse
+	if err := json.Unmarshal(inspectResponse.Body.Bytes(), &inspected); err != nil {
+		t.Fatal(err)
+	}
+	endpoint, ok := inspected.Containers[record.ID]
+	if !ok || endpoint["Name"] != "/network-client" || endpoint["IPv4Address"] != "172.29.41.2/24" {
+		t.Fatalf("network inspect endpoint = %#v", inspected.Containers)
+	}
+
+	disconnectRequest := httptest.NewRequest(http.MethodPost, "/v1.45/networks/"+networkCreated.ID+"/disconnect",
+		strings.NewReader(`{"Container":"`+record.ID+`","Force":false}`))
+	disconnectResponse := httptest.NewRecorder()
+	server.ServeHTTP(disconnectResponse, disconnectRequest)
+	if disconnectResponse.Code != http.StatusOK {
+		t.Fatalf("network disconnect status=%d body=%s", disconnectResponse.Code, disconnectResponse.Body.String())
+	}
+	inspectResponse = engineAPIRequest(server, http.MethodGet, "/v1.45/networks/"+networkCreated.ID)
+	if inspectResponse.Code != http.StatusOK {
+		t.Fatalf("network inspect after disconnect status=%d body=%s", inspectResponse.Code, inspectResponse.Body.String())
+	}
+	if err := json.Unmarshal(inspectResponse.Body.Bytes(), &inspected); err != nil {
+		t.Fatal(err)
+	}
+	if len(inspected.Containers) != 0 {
+		t.Fatalf("network retained endpoint after disconnect: %#v", inspected.Containers)
+	}
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Remove(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	deleteResponse := engineAPIRequest(server, http.MethodDelete, "/v1.45/networks/"+networkCreated.ID)
+	if deleteResponse.Code != http.StatusNoContent {
+		t.Fatalf("network delete status=%d body=%s", deleteResponse.Code, deleteResponse.Body.String())
+	}
+}
+
+func TestVerifyDockerContainerPIDRejectsNonBoxrProcess(t *testing.T) {
+	startTicks, err := state.ReadProcessStartTicks(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := state.Record{ID: "not-a-boxr-helper", PID: os.Getpid(), ProcessStartTicks: startTicks}
+	if err := verifyDockerContainerPID(record); err == nil {
+		t.Fatal("current Go test process was accepted as a Boxr namespace helper")
 	}
 }
