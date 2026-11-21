@@ -473,6 +473,9 @@ func dockerTarget(root *os.Root, name string, createParents bool) (string, error
 		return ".", nil
 	}
 	relative := filepath.FromSlash(clean)
+	if clean != "." && !filepath.IsLocal(relative) {
+		return "", fmt.Errorf("Docker archive path is not local to the extraction root")
+	}
 	parts := strings.Split(relative, string(filepath.Separator))
 	for index := 1; index < len(parts); index++ {
 		parent := strings.Join(parts[:index], string(filepath.Separator))
