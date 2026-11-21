@@ -292,6 +292,34 @@ func TestApplyLayerArchiveDoesNotFollowExistingSymlinkParents(t *testing.T) {
 	}
 }
 
+func TestApplyLayerArchivePreservesContainerAbsoluteSymlinks(t *testing.T) {
+	root := t.TempDir()
+	layer, _ := dockerTestLayer(t,
+		dockerTestEntry{name: "usr/bin/", kind: tar.TypeDir},
+		dockerTestEntry{name: "bin", kind: tar.TypeSymlink, link: "/usr/bin"},
+		dockerTestEntry{name: "bin/tool", data: []byte("container path resolved safely")},
+	)
+	archive := filepath.Join(t.TempDir(), "absolute-symlink.tar")
+	if err := os.WriteFile(archive, layer, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyLayerArchive(root, archive); err != nil {
+		t.Fatalf("apply layer containing an absolute container symlink: %v", err)
+	}
+	info, err := os.Lstat(filepath.Join(root, "bin"))
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("container symlink was not preserved: info=%v err=%v", info, err)
+	}
+	target, err := os.Readlink(filepath.Join(root, "bin"))
+	if err != nil || target != "usr/bin" {
+		t.Fatalf("absolute container symlink target = %q, %v", target, err)
+	}
+	payload, err := os.ReadFile(filepath.Join(root, "usr", "bin", "tool"))
+	if err != nil || string(payload) != "container path resolved safely" {
+		t.Fatalf("layer file was not written to the resolved in-root target: %q, %v", payload, err)
+	}
+}
+
 func TestExtractDockerArchiveRejectsSymlinksAndTraversal(t *testing.T) {
 	for _, entry := range []dockerTestEntry{
 		{name: "../escape", data: []byte("no")},
