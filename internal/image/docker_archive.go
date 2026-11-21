@@ -487,9 +487,26 @@ func dockerTarget(root *os.Root, name string, createParents bool) (string, error
 			}
 		case statErr != nil:
 			return "", statErr
-		case info.Mode()&os.ModeSymlink != 0 || !info.IsDir():
+		case info.Mode()&os.ModeSymlink != 0:
+			// Preserve safe container symlinks that resolve to directories
+			// inside this root. If the link is broken, escaping or points to
+			// a non-directory, replace the link itself, never its target.
+			resolved, resolveErr := root.Stat(parent)
+			if resolveErr == nil && resolved.IsDir() {
+				continue
+			}
 			if !createParents {
-				return "", fmt.Errorf("path parent %q is not a real directory", parent)
+				return "", fmt.Errorf("path parent %q is not a safe directory", parent)
+			}
+			if err := root.RemoveAll(parent); err != nil {
+				return "", err
+			}
+			if err := root.Mkdir(parent, 0755); err != nil {
+				return "", err
+			}
+		case !info.IsDir():
+			if !createParents {
+				return "", fmt.Errorf("path parent %q is not a directory", parent)
 			}
 			if err := root.RemoveAll(parent); err != nil {
 				return "", err
@@ -601,18 +618,49 @@ func dockerLayerDiffID(file *os.File) (string, error) {
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-func validateDockerSymlink(name, target string) error {
+func safeDockerSymlinkTarget(name, target string) (string, error) {
 	if target == "" || strings.ContainsAny(target, "\\\x00") {
-		return fmt.Errorf("empty or invalid symlink target")
+		return "", fmt.Errorf("empty or invalid symlink target")
 	}
 	if path.IsAbs(target) {
-		return nil // absolute paths are interpreted inside the container root
+		// An absolute symlink in an image is rooted at the container's /.
+		// Store it as a relative link so os.Root can safely follow it while
+		// merging later entries without ever traversing a host-absolute path.
+		containerTarget := strings.TrimPrefix(path.Clean(target), "/")
+		base := path.Dir(name)
+		if base == "." {
+			base = ""
+		}
+		return dockerRelativePath(base, containerTarget), nil
 	}
 	resolved := path.Clean(path.Join(path.Dir(name), target))
 	if resolved == ".." || strings.HasPrefix(resolved, "../") {
-		return fmt.Errorf("symlink target escapes root filesystem")
+		return "", fmt.Errorf("symlink target escapes root filesystem")
 	}
-	return nil
+	return target, nil
+}
+
+func dockerRelativePath(from, to string) string {
+	split := func(value string) []string {
+		value = path.Clean(value)
+		if value == "." || value == "" {
+			return nil
+		}
+		return strings.Split(value, "/")
+	}
+	fromParts, toParts := split(from), split(to)
+	for len(fromParts) > 0 && len(toParts) > 0 && fromParts[0] == toParts[0] {
+		fromParts, toParts = fromParts[1:], toParts[1:]
+	}
+	parts := make([]string, 0, len(fromParts)+len(toParts))
+	for range fromParts {
+		parts = append(parts, "..")
+	}
+	parts = append(parts, toParts...)
+	if len(parts) == 0 {
+		return "."
+	}
+	return strings.Join(parts, "/")
 }
 
 func safeDockerMode(mode int64, directory bool) os.FileMode {
@@ -795,7 +843,8 @@ func applyDockerLayer(rootPath, layerPath string) error {
 				return fmt.Errorf("layer contains duplicate path %q", name)
 			}
 			seen[name] = tar.TypeSymlink
-			if err := validateDockerSymlink(name, header.Linkname); err != nil {
+			linkTarget, err := safeDockerSymlinkTarget(name, header.Linkname)
+			if err != nil {
 				return fmt.Errorf("unsafe layer symlink %q: %w", name, err)
 			}
 			target, err := dockerTarget(root, name, true)
@@ -805,7 +854,7 @@ func applyDockerLayer(rootPath, layerPath string) error {
 			if err := root.RemoveAll(target); err != nil {
 				return err
 			}
-			if err := root.Symlink(header.Linkname, target); err != nil {
+			if err := root.Symlink(linkTarget, target); err != nil {
 				return fmt.Errorf("create layer symlink %q: %w", name, err)
 			}
 		case tar.TypeLink:
