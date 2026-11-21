@@ -412,6 +412,10 @@ func (s *Server) handleDockerArchiveGet(writer http.ResponseWriter, request *htt
 }
 
 func addDockerArchiveDirectoryContents(lowerPath, upperPath, archiveName string, tarWriter *tar.Writer, visited *int, depth int, limiter *dockerArchiveLimitWriter) error {
+	return addDockerArchiveDirectoryContentsExcluding(lowerPath, upperPath, archiveName, tarWriter, visited, depth, limiter, nil)
+}
+
+func addDockerArchiveDirectoryContentsExcluding(lowerPath, upperPath, archiveName string, tarWriter *tar.Writer, visited *int, depth int, limiter *dockerArchiveLimitWriter, excluded map[string]struct{}) error {
 	if depth > maxDockerArchiveDepth {
 		return fmt.Errorf("container path exceeds maximum archive depth %d", maxDockerArchiveDepth)
 	}
@@ -426,7 +430,11 @@ func addDockerArchiveDirectoryContents(lowerPath, upperPath, archiveName string,
 	sort.Strings(names)
 	for _, name := range names {
 		child := children[name]
-		if err := addDockerArchiveNode(child.lowerPath, child.upperPath, path.Join(archiveName, name), tarWriter, visited, depth+1, limiter); err != nil {
+		archiveName := path.Join(archiveName, name)
+		if _, skip := excludedDockerArchivePath(archiveName, excluded); skip {
+			continue
+		}
+		if err := addDockerArchiveNodeExcluding(child.lowerPath, child.upperPath, archiveName, tarWriter, visited, depth+1, limiter, excluded); err != nil {
 			return err
 		}
 	}
@@ -434,6 +442,13 @@ func addDockerArchiveDirectoryContents(lowerPath, upperPath, archiveName string,
 }
 
 func addDockerArchiveNode(lowerPath, upperPath, archiveName string, tarWriter *tar.Writer, visited *int, depth int, limiter *dockerArchiveLimitWriter) error {
+	return addDockerArchiveNodeExcluding(lowerPath, upperPath, archiveName, tarWriter, visited, depth, limiter, nil)
+}
+
+func addDockerArchiveNodeExcluding(lowerPath, upperPath, archiveName string, tarWriter *tar.Writer, visited *int, depth int, limiter *dockerArchiveLimitWriter, excluded map[string]struct{}) error {
+	if _, skip := excludedDockerArchivePath(archiveName, excluded); skip {
+		return nil
+	}
 	if depth > maxDockerArchiveDepth {
 		return fmt.Errorf("container path exceeds maximum archive depth %d", maxDockerArchiveDepth)
 	}
@@ -485,20 +500,8 @@ func addDockerArchiveNode(lowerPath, upperPath, archiveName string, tarWriter *t
 	}
 	switch {
 	case info.IsDir():
-		children, err := dockerOverlayChildren(lowerPath, upperPath)
-		if err != nil {
+		if err := addDockerArchiveDirectoryContentsExcluding(lowerPath, upperPath, archiveName, tarWriter, visited, depth, limiter, excluded); err != nil {
 			return fmt.Errorf("list container directory %q: %w", archiveName, err)
-		}
-		names := make([]string, 0, len(children))
-		for name := range children {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			child := children[name]
-			if err := addDockerArchiveNode(child.lowerPath, child.upperPath, path.Join(archiveName, name), tarWriter, visited, depth+1, limiter); err != nil {
-				return err
-			}
 		}
 	case info.Mode().IsRegular():
 		if info.Size() < 0 || info.Size() > limiter.remaining {
@@ -527,6 +530,18 @@ func addDockerArchiveNode(lowerPath, upperPath, archiveName string, tarWriter *t
 		return fmt.Errorf("refuse to archive special file %q", archiveName)
 	}
 	return nil
+}
+
+func excludedDockerArchivePath(archiveName string, excluded map[string]struct{}) (string, bool) {
+	if len(excluded) == 0 {
+		return "", false
+	}
+	cleaned := strings.TrimPrefix(path.Clean(archiveName), "./")
+	if cleaned == "." {
+		cleaned = ""
+	}
+	_, skip := excluded[cleaned]
+	return cleaned, skip
 }
 
 func dockerOverlayChildren(lowerDir, upperDir string) (map[string]dockerArchiveChild, error) {
