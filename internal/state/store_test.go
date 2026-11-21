@@ -99,6 +99,46 @@ func TestManagedOverlayIsPrivateAndRemovedWithContainer(t *testing.T) {
 	}
 }
 
+func TestContainerRemovalRejectsSymlinkedManagedOverlayParent(t *testing.T) {
+	stateDir := useTempState(t)
+	record, err := Create("symlinked-managed-parent", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured, err := ConfigureManagedOverlay(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedParent := filepath.Dir(configured.Options.OverlayDir)
+	targetParent := filepath.Join(t.TempDir(), "outside-writable")
+	targetLayer := filepath.Join(targetParent, record.ID)
+	if err := os.MkdirAll(filepath.Join(targetLayer, "upper"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	markerPath := filepath.Join(targetLayer, "upper", "must-survive")
+	if err := os.WriteFile(markerPath, []byte("outside"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(expectedParent); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(targetParent, expectedParent); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveCreated(record.ID); err == nil || !strings.Contains(err.Error(), "parent") {
+		t.Fatalf("removal accepted a symlinked writable-layer parent: %v", err)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("symlink target was touched during removal: %v", err)
+	}
+	if _, err := Get(record.ID); err != nil {
+		t.Fatalf("container record was removed after unsafe overlay path: %v", err)
+	}
+	_ = os.Remove(expectedParent)
+	_ = os.RemoveAll(targetParent)
+	_ = os.RemoveAll(filepath.Join(stateDir, "writable"))
+}
+
 func TestContainerRemovalNeverDeletesUserManagedOverlay(t *testing.T) {
 	useTempState(t)
 	userOverlay := filepath.Join(t.TempDir(), "user-overlay")

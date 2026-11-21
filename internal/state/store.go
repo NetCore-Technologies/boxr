@@ -178,6 +178,17 @@ func removeManagedOverlay(record Record) error {
 		// Never recursively remove storage that Boxr does not own.
 		return nil
 	}
+	parent := filepath.Dir(expected)
+	parentInfo, err := os.Lstat(parent)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() {
+		return fmt.Errorf("managed writable-layer parent %s must be a real directory", parent)
+	}
 	info, err := os.Lstat(expected)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
