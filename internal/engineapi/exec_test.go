@@ -548,3 +548,121 @@ func TestDockerEngineExecInheritsContainerUser(t *testing.T) {
 		t.Fatalf("inherited exec user=%q, want 1001:100", session.Config.User)
 	}
 }
+
+
+func TestDockerEngineExecUpgradeStreamsStdinWithAndWithoutTTY(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		tty  bool
+	}{
+		{name: "multiplexed non-TTY", tty: false},
+		{name: "raw PTY", tty: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := setupEngineAPITest(t)
+			record := execAPITestContainer(t, server)
+			create := postDockerExecCreate(t, server, record.ID, dockerExecCreateConfig{
+				AttachStdin: true, AttachStdout: true, AttachStderr: true,
+				Tty: test.tty, Cmd: []string{"/bin/cat"},
+			})
+			if create.Code != http.StatusCreated {
+				t.Fatalf("exec create status=%d body=%s", create.Code, create.Body.String())
+			}
+			var created struct{ ID string }
+			if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+				t.Fatal(err)
+			}
+
+			originalRunner := dockerExecRunner
+			t.Cleanup(func() { dockerExecRunner = originalRunner })
+			var received string
+			dockerExecRunner = func(_ context.Context, _ string, _ dockerExecCreateConfig, stdin io.Reader, stdout, stderr io.Writer, _ func(int), _ func(*os.File)) (int, error) {
+				payload, err := io.ReadAll(stdin)
+				if err != nil {
+					return 125, err
+				}
+				received = string(payload)
+				if _, err := io.WriteString(stdout, "stdout:"+received); err != nil {
+					return 125, err
+				}
+				if _, err := io.WriteString(stderr, "stderr"); err != nil {
+					return 125, err
+				}
+				return 0, nil
+			}
+
+			httpServer := httptest.NewServer(server)
+			defer httpServer.Close()
+			target, err := url.Parse(httpServer.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			connection, err := net.DialTimeout("tcp", target.Host, 2*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tcpConnection := connection.(*net.TCPConn)
+			defer connection.Close()
+			body := `{"Tty":` + strconv.FormatBool(test.tty) + `}`
+			requestPath := "/v1.45/exec/" + created.ID + "/start"
+			if _, err := fmt.Fprintf(connection,
+				"POST %s HTTP/1.1
+Host: %s
+Connection: Upgrade
+Upgrade: tcp
+Content-Type: application/json
+Content-Length: %d
+
+%s",
+				requestPath, target.Host, len(body), body); err != nil {
+				t.Fatal(err)
+			}
+			reader := bufio.NewReader(connection)
+			statusLine, err := reader.ReadString('
+')
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(statusLine, "101 UPGRADED") {
+				t.Fatalf("Docker exec upgrade status = %q", statusLine)
+			}
+			for {
+				line, err := reader.ReadString('
+')
+				if err != nil {
+					t.Fatal(err)
+				}
+				if line == "
+" || line == "
+" {
+					break
+				}
+			}
+			payload := "interactive input
+"
+			if _, err := io.WriteString(connection, payload); err != nil {
+				t.Fatal(err)
+			}
+			if err := tcpConnection.CloseWrite(); err != nil {
+				t.Fatal(err)
+			}
+			output, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if received != payload {
+				t.Fatalf("exec received stdin %q, want %q", received, payload)
+			}
+			if test.tty {
+				if string(output) != "stdout:"+payload+"stderr" {
+					t.Fatalf("TTY exec raw output = %q", output)
+				}
+			} else {
+				stdout, stderr := decodeDockerExecFrames(t, output)
+				if stdout != "stdout:"+payload || stderr != "stderr" {
+					t.Fatalf("exec streams stdout=%q stderr=%q", stdout, stderr)
+				}
+			}
+		})
+	}
+}
