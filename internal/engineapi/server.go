@@ -5,6 +5,7 @@ package engineapi
 
 import (
 	"encoding/base64"
+	"errors"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -769,13 +770,13 @@ func (s *Server) handleContainerDelete(writer http.ResponseWriter, request *http
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
+	if removeVolumes {
+		s.volumeMu.Lock()
+		defer s.volumeMu.Unlock()
+	}
 	record, err := state.Get(query)
 	if err != nil {
 		writeError(writer, http.StatusNotFound, err)
-		return
-	}
-	if removeVolumes {
-		writeError(writer, http.StatusNotImplemented, fmt.Errorf("anonymous volume removal is not implemented"))
 		return
 	}
 	if record.Status == "running" || record.Status == "restarting" {
@@ -807,6 +808,12 @@ func (s *Server) handleContainerDelete(writer http.ResponseWriter, request *http
 			writeError(writer, http.StatusInternalServerError, fmt.Errorf("verify forced container removal: %w", verifyErr))
 			return
 		}
+		if removeVolumes {
+			if err := removeAnonymousVolumesForContainer(record); err != nil {
+				writeError(writer, http.StatusInternalServerError, fmt.Errorf("remove unused anonymous container volumes: %w", err))
+				return
+			}
+		}
 		writer.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -819,7 +826,64 @@ func (s *Server) handleContainerDelete(writer http.ResponseWriter, request *http
 		writeError(writer, http.StatusConflict, err)
 		return
 	}
+	if removeVolumes {
+		if err := removeAnonymousVolumesForContainer(record); err != nil {
+			writeError(writer, http.StatusInternalServerError, fmt.Errorf("remove unused anonymous container volumes: %w", err))
+			return
+		}
+	}
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+// removeAnonymousVolumesForContainer removes only anonymous volumes attached to
+// this container, and only after the final persisted container reference is gone.
+// Named volumes and volumes shared with another container are always retained.
+func removeAnonymousVolumesForContainer(record state.Record) error {
+	candidates := make(map[string]string)
+	for _, mount := range record.Options.BindMounts {
+		if mount.VolumeName == "" {
+			continue
+		}
+		item, err := volume.Get(mount.VolumeName)
+		if err != nil {
+			return fmt.Errorf("inspect volume %q: %w", mount.VolumeName, err)
+		}
+		if item.Anonymous && item.Path == mount.Source {
+			candidates[item.Name] = item.Path
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	records, err := state.List(true)
+	if err != nil {
+		return fmt.Errorf("inspect remaining volume users: %w", err)
+	}
+	var cleanupErr error
+	for name, path := range candidates {
+		inUse := false
+		for _, candidate := range records {
+			if candidate.ID == record.ID {
+				continue
+			}
+			for _, mount := range candidate.Options.BindMounts {
+				if mount.VolumeName == name || mount.Source == path {
+					inUse = true
+					break
+				}
+			}
+			if inUse {
+				break
+			}
+		}
+		if inUse {
+			continue
+		}
+		if err := volume.Remove(name); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove anonymous volume %q: %w", name, err))
+		}
+	}
+	return cleanupErr
 }
 
 func decodeContainerID(rawID string) (string, error) {
