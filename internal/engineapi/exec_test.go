@@ -605,21 +605,22 @@ func TestDockerEngineExecUpgradeStreamsStdinWithAndWithoutTTY(t *testing.T) {
 			defer connection.Close()
 			body := `{"Tty":` + strconv.FormatBool(test.tty) + `}`
 			requestPath := "/v1.45/exec/" + created.ID + "/start"
-			if _, err := fmt.Fprintf(connection,
-				"POST %s HTTP/1.1
-Host: %s
-Connection: Upgrade
-Upgrade: tcp
-Content-Type: application/json
-Content-Length: %d
-
-%s",
-				requestPath, target.Host, len(body), body); err != nil {
+			newline := string([]byte{13, 10})
+			request := strings.Join([]string{
+				"POST " + requestPath + " HTTP/1.1",
+				"Host: " + target.Host,
+				"Connection: Upgrade",
+				"Upgrade: tcp",
+				"Content-Type: application/json",
+				"Content-Length: " + strconv.Itoa(len(body)),
+				"",
+				body,
+			}, newline)
+			if _, err := io.WriteString(connection, request); err != nil {
 				t.Fatal(err)
 			}
 			reader := bufio.NewReader(connection)
-			statusLine, err := reader.ReadString('
-')
+			statusLine, err := reader.ReadString(10)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -627,19 +628,15 @@ Content-Length: %d
 				t.Fatalf("Docker exec upgrade status = %q", statusLine)
 			}
 			for {
-				line, err := reader.ReadString('
-')
+				line, err := reader.ReadString(10)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if line == "
-" || line == "
-" {
+				if line == newline || line == string([]byte{10}) {
 					break
 				}
 			}
-			payload := "interactive input
-"
+			payload := "interactive input" + string([]byte{10})
 			if _, err := io.WriteString(connection, payload); err != nil {
 				t.Fatal(err)
 			}
