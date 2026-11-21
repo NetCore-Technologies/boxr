@@ -58,7 +58,8 @@ type ImageRuntimeConfig struct {
 	Labels       map[string]string   `json:"Labels,omitempty"`
 	Volumes      map[string]struct{} `json:"Volumes,omitempty"`
 	ExposedPorts map[string]struct{} `json:"ExposedPorts,omitempty"`
-	StopSignal   string              `json:"StopSignal,omitempty"`
+	StopSignal   string                       `json:"StopSignal,omitempty"`
+	Healthcheck  *container.HealthcheckConfig `json:"Healthcheck,omitempty"`
 }
 
 // LoadBuildSpec reads a bounded strict JSON recipe. Unknown fields and trailing
@@ -149,6 +150,9 @@ func ValidateBuildSpec(spec BuildSpec) error {
 		if err != nil || normalized != spec.Config.StopSignal {
 			return fmt.Errorf("image StopSignal %q must be a canonical supported signal", spec.Config.StopSignal)
 		}
+	}
+	if _, err := container.NormalizeHealthcheck(spec.Config.Healthcheck); err != nil {
+		return fmt.Errorf("image Healthcheck: %w", err)
 	}
 	if strings.ContainsAny(spec.Config.User, "\x00\r\n") || len(spec.Config.User) > 256 {
 		return fmt.Errorf("invalid image User value")
@@ -603,6 +607,7 @@ func inheritBuildRuntimeConfig(base, overrides ImageRuntimeConfig) ImageRuntimeC
 		Volumes:      cloneBuildVolumes(base.Volumes),
 		ExposedPorts: cloneBuildExposedPorts(base.ExposedPorts),
 		StopSignal:   base.StopSignal,
+		Healthcheck:  cloneBuildHealthcheck(base.Healthcheck),
 	}
 	if overrides.Entrypoint != nil {
 		result.Entrypoint = cloneBuildStrings(overrides.Entrypoint)
@@ -646,7 +651,19 @@ func inheritBuildRuntimeConfig(base, overrides ImageRuntimeConfig) ImageRuntimeC
 	if overrides.StopSignal != "" {
 		result.StopSignal = overrides.StopSignal
 	}
+	if overrides.Healthcheck != nil {
+		result.Healthcheck = cloneBuildHealthcheck(overrides.Healthcheck)
+	}
 	return result
+}
+
+func cloneBuildHealthcheck(value *container.HealthcheckConfig) *container.HealthcheckConfig {
+	if value == nil {
+		return nil
+	}
+	result := *value
+	result.Test = cloneBuildStrings(value.Test)
+	return &result
 }
 
 func cloneBuildExposedPorts(values map[string]struct{}) map[string]struct{} {

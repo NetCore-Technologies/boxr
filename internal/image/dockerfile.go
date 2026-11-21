@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/manit6752025/boxr/internal/container"
@@ -467,7 +468,14 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 			}
 			spec.Config.StopSignal = signal
 
-		case "ONBUILD", "HEALTHCHECK", "SHELL":
+		case "HEALTHCHECK":
+			healthcheck, err := parseDockerfileHealthcheck(expanded)
+			if err != nil {
+				return fmt.Errorf("line %d: invalid HEALTHCHECK: %w", lineNumber, err)
+			}
+			spec.Config.Healthcheck = healthcheck
+
+		case "ONBUILD", "SHELL":
 			return fmt.Errorf("line %d: Dockerfile instruction %s is not supported yet", lineNumber, instruction)
 		default:
 			return fmt.Errorf("line %d: unknown Dockerfile instruction %s", lineNumber, instruction)
@@ -625,6 +633,79 @@ func validateDockerfileStages(stages []dockerfileStage) error {
 		}
 	}
 	return nil
+}
+
+func parseDockerfileHealthcheck(value string) (*container.HealthcheckConfig, error) {
+	remaining := strings.TrimSpace(value)
+	config := &container.HealthcheckConfig{}
+	for strings.HasPrefix(remaining, "--") {
+		words, err := dockerfileWords(remaining)
+		if err != nil || len(words) == 0 {
+			return nil, fmt.Errorf("invalid healthcheck option list")
+		}
+		option := words[0]
+		name, raw, ok := strings.Cut(option, "=")
+		if !ok || raw == "" {
+			return nil, fmt.Errorf("healthcheck option %q must use --name=value", option)
+		}
+		switch name {
+		case "--interval", "--timeout", "--start-period", "--start-interval":
+			duration, err := time.ParseDuration(raw)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", name, err)
+			}
+			switch name {
+			case "--interval":
+				config.Interval = duration
+			case "--timeout":
+				config.Timeout = duration
+			case "--start-period":
+				config.StartPeriod = duration
+			case "--start-interval":
+				config.StartInterval = duration
+			}
+		case "--retries":
+			retries, err := strconv.Atoi(raw)
+			if err != nil || retries < 1 || retries > 1000 {
+				return nil, fmt.Errorf("--retries must be between 1 and 1000")
+			}
+			config.Retries = retries
+		default:
+			return nil, fmt.Errorf("unsupported healthcheck option %q", name)
+		}
+		remaining = strings.TrimSpace(strings.TrimPrefix(remaining, option))
+	}
+	if strings.EqualFold(remaining, "NONE") {
+		if config.Interval != 0 || config.Timeout != 0 || config.StartPeriod != 0 || config.StartInterval != 0 || config.Retries != 0 {
+			return nil, fmt.Errorf("HEALTHCHECK NONE cannot specify options")
+		}
+		return &container.HealthcheckConfig{Test: []string{"NONE"}}, nil
+	}
+	command, rest, ok := strings.Cut(remaining, " ")
+	if !ok {
+		return nil, fmt.Errorf("expected CMD followed by a healthcheck command")
+	}
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return nil, fmt.Errorf("healthcheck command cannot be empty")
+	}
+	switch strings.ToUpper(command) {
+	case "CMD":
+		if strings.HasPrefix(rest, "[") {
+			var arguments []string
+			if err := json.Unmarshal([]byte(rest), &arguments); err != nil {
+				return nil, fmt.Errorf("parse exec-form command: %w", err)
+			}
+			config.Test = append([]string{"CMD"}, arguments...)
+		} else {
+			config.Test = []string{"CMD-SHELL", rest}
+		}
+	case "CMD-SHELL":
+		config.Test = []string{"CMD-SHELL", rest}
+	default:
+		return nil, fmt.Errorf("expected CMD, CMD-SHELL, or NONE")
+	}
+	return container.NormalizeHealthcheck(config)
 }
 
 func dockerfileWords(value string) ([]string, error) {

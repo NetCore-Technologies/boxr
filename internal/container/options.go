@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Options configures a container process. Resource limits are opt-in. The
@@ -47,11 +48,102 @@ type Options struct {
 	NetworkName        string            `json:"networkName,omitempty"`
 	PublishedPorts     []PortMapping     `json:"publishedPorts,omitempty"`
 	ExposedPorts       []string          `json:"exposedPorts,omitempty"`
-	StopSignal         string            `json:"stopSignal,omitempty"`
+	StopSignal         string               `json:"stopSignal,omitempty"`
+	Healthcheck        *HealthcheckConfig   `json:"healthcheck,omitempty"`
 	UserNamespace      bool              `json:"userNamespace,omitempty"`
 	NoNewPrivileges    bool              `json:"noNewPrivileges,omitempty"`
 	SeccompProfile     string            `json:"seccompProfile,omitempty"`
 	DropCapabilities   []string          `json:"dropCapabilities,omitempty"`
+}
+
+// HealthcheckConfig is Docker-compatible health probe metadata. Durations use
+// nanoseconds in the Engine API representation, as required by Docker's schema.
+type HealthcheckConfig struct {
+	Test          []string      `json:"Test,omitempty"`
+	Interval      time.Duration `json:"Interval,omitempty"`
+	Timeout       time.Duration `json:"Timeout,omitempty"`
+	StartPeriod   time.Duration `json:"StartPeriod,omitempty"`
+	StartInterval time.Duration `json:"StartInterval,omitempty"`
+	Retries       int           `json:"Retries,omitempty"`
+}
+
+const (
+	DefaultHealthcheckInterval      = 30 * time.Second
+	DefaultHealthcheckTimeout       = 30 * time.Second
+	DefaultHealthcheckStartInterval = 5 * time.Second
+	DefaultHealthcheckRetries       = 3
+	MaxHealthcheckOutputBytes       = 4096
+	MaxHealthcheckCommandBytes      = 8192
+)
+
+func NormalizeHealthcheck(input *HealthcheckConfig) (*HealthcheckConfig, error) {
+	if input == nil {
+		return nil, nil
+	}
+	result := *input
+	result.Test = append([]string(nil), input.Test...)
+	if len(result.Test) == 1 && strings.EqualFold(result.Test[0], "NONE") {
+		result.Test[0] = "NONE"
+		if result.Interval != 0 || result.Timeout != 0 || result.StartPeriod != 0 || result.StartInterval != 0 || result.Retries != 0 {
+			return nil, fmt.Errorf("HEALTHCHECK NONE cannot specify timing or retry options")
+		}
+		return &result, nil
+	}
+	if len(result.Test) < 2 || len(result.Test) > 17 {
+		return nil, fmt.Errorf("healthcheck Test must contain CMD/CMD-SHELL and a command")
+	}
+	switch strings.ToUpper(result.Test[0]) {
+	case "CMD":
+		result.Test[0] = "CMD"
+	case "CMD-SHELL":
+		result.Test[0] = "CMD-SHELL"
+		if len(result.Test) != 2 || strings.TrimSpace(result.Test[1]) == "" {
+			return nil, fmt.Errorf("healthcheck CMD-SHELL requires exactly one non-empty command string")
+		}
+	default:
+		return nil, fmt.Errorf("healthcheck Test must start with CMD, CMD-SHELL, or NONE")
+	}
+	totalBytes := 0
+	for index, argument := range result.Test[1:] {
+		if argument == "" || strings.ContainsRune(argument, '\x00') || strings.ContainsAny(argument, "\r\n") {
+			return nil, fmt.Errorf("healthcheck command argument %d is empty or contains a control character", index+1)
+		}
+		totalBytes += len(argument)
+	}
+	if totalBytes > MaxHealthcheckCommandBytes {
+		return nil, fmt.Errorf("healthcheck command exceeds %d bytes", MaxHealthcheckCommandBytes)
+	}
+	if result.Interval == 0 {
+		result.Interval = DefaultHealthcheckInterval
+	}
+	if result.Timeout == 0 {
+		result.Timeout = DefaultHealthcheckTimeout
+	}
+	if result.StartInterval == 0 {
+		result.StartInterval = DefaultHealthcheckStartInterval
+	}
+	for name, duration := range map[string]time.Duration{
+		"interval": result.Interval, "timeout": result.Timeout,
+		"start-period": result.StartPeriod, "start-interval": result.StartInterval,
+	} {
+		if duration < 0 || duration > 24*time.Hour {
+			return nil, fmt.Errorf("healthcheck %s must be between 0 and 24 hours", name)
+		}
+		if (name == "interval" || name == "timeout" || name == "start-interval") && duration < time.Millisecond {
+			return nil, fmt.Errorf("healthcheck %s must be at least 1ms", name)
+		}
+	}
+	if result.Retries == 0 {
+		result.Retries = DefaultHealthcheckRetries
+	}
+	if result.Retries < 1 || result.Retries > 1000 {
+		return nil, fmt.Errorf("healthcheck retries must be between 1 and 1000")
+	}
+	return &result, nil
+}
+
+func HealthcheckEnabled(config *HealthcheckConfig) bool {
+	return config != nil && len(config.Test) > 0 && !(len(config.Test) == 1 && strings.EqualFold(config.Test[0], "NONE"))
 }
 
 // PortMapping publishes a host IPv4 address and port to a container TCP or UDP port.
@@ -296,6 +388,9 @@ func (o Options) Validate() error {
 	}
 	if _, err := NormalizeStopSignal(o.StopSignal); err != nil {
 		return fmt.Errorf("stop signal: %w", err)
+	}
+	if _, err := NormalizeHealthcheck(o.Healthcheck); err != nil {
+		return fmt.Errorf("healthcheck: %w", err)
 	}
 	if len(o.PublishedPorts) > 128 {
 		return fmt.Errorf("at most 128 published port mappings are supported")

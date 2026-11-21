@@ -38,6 +38,7 @@ type Record struct {
 	Error             string            `json:"error,omitempty"`
 	Labels            map[string]string `json:"labels,omitempty"`
 	Options           container.Options `json:"options"`
+	Health            *HealthState      `json:"health,omitempty"`
 	CreatedAt         time.Time         `json:"createdAt"`
 	StartedAt         *time.Time        `json:"startedAt,omitempty"`
 	FinishedAt        *time.Time        `json:"finishedAt,omitempty"`
@@ -415,6 +416,50 @@ func Rename(query, newName string) (Record, error) {
 	return record, nil
 }
 
+type HealthLog struct {
+	Start    time.Time `json:"Start"`
+	End      time.Time `json:"End"`
+	ExitCode int       `json:"ExitCode"`
+	Output   string    `json:"Output,omitempty"`
+}
+
+type HealthState struct {
+	Status        string      `json:"Status"`
+	FailingStreak int         `json:"FailingStreak"`
+	Log           []HealthLog `json:"Log"`
+}
+
+func SetHealth(id string, health HealthState) error {
+	switch health.Status {
+	case "starting", "healthy", "unhealthy":
+	default:
+		return fmt.Errorf("invalid container health status %q", health.Status)
+	}
+	if health.FailingStreak < 0 || health.FailingStreak > 1000000 {
+		return fmt.Errorf("healthcheck failing streak is out of range")
+	}
+	if len(health.Log) > 5 {
+		health.Log = append([]HealthLog(nil), health.Log[len(health.Log)-5:]...)
+	}
+	for index := range health.Log {
+		if len(health.Log[index].Output) > container.MaxHealthcheckOutputBytes {
+			health.Log[index].Output = health.Log[index].Output[:container.MaxHealthcheckOutputBytes]
+		}
+	}
+	return update(id, func(record *Record) error {
+		if record.Status != "running" {
+			return fmt.Errorf("container %s is no longer running", record.ID)
+		}
+		if !container.HealthcheckEnabled(record.Options.Healthcheck) {
+			return fmt.Errorf("container %s has no active healthcheck", record.ID)
+		}
+		copy := health
+		copy.Log = append([]HealthLog(nil), health.Log...)
+		record.Health = &copy
+		return nil
+	})
+}
+
 func Start(id string, pid int) error {
 	if pid <= 0 {
 		return fmt.Errorf("host PID must be positive")
@@ -443,6 +488,11 @@ func Start(id string, pid int) error {
 		record.LastExitCode = nil
 		record.Error = ""
 		record.FinishedAt = nil
+		if container.HealthcheckEnabled(record.Options.Healthcheck) {
+			record.Health = &HealthState{Status: "starting", Log: []HealthLog{}}
+		} else {
+			record.Health = nil
+		}
 		if err := appendEvent(Event{Time: now, Action: "start", ID: record.ID, Name: record.Name, PID: pid}); err != nil {
 			return err
 		}

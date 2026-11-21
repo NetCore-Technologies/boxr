@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	boxrcontainer "github.com/manit6752025/boxr/internal/container"
 )
@@ -526,5 +527,39 @@ func writeDockerfileADDArchive(t *testing.T, filename string, compressed bool, e
 	}
 	if err := os.WriteFile(filename, data, 0600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDockerfileHealthcheckCommandsAndOptions(t *testing.T) {
+	spec, err := ParseDockerfile([]byte("FROM scratch\nHEALTHCHECK --interval=10s --timeout=2s --start-period=20s --start-interval=1s --retries=5 CMD [\"/usr/bin/check\", \"--ready\"]\n"))
+	if err != nil {
+		t.Fatalf("parse HEALTHCHECK: %v", err)
+	}
+	got := spec.Config.Healthcheck
+	if got == nil || len(got.Test) != 3 || got.Test[0] != "CMD" || got.Test[1] != "/usr/bin/check" ||
+		got.Interval != 10*time.Second || got.Timeout != 2*time.Second ||
+		got.StartPeriod != 20*time.Second || got.StartInterval != time.Second || got.Retries != 5 {
+		t.Fatalf("parsed HEALTHCHECK = %+v", got)
+	}
+	shell, err := ParseDockerfile([]byte("FROM scratch\nHEALTHCHECK CMD curl -f http://localhost || exit 1\n"))
+	if err != nil || shell.Config.Healthcheck == nil || shell.Config.Healthcheck.Test[0] != "CMD-SHELL" {
+		t.Fatalf("parse shell healthcheck = %+v, %v", shell.Config.Healthcheck, err)
+	}
+	disabled, err := ParseDockerfile([]byte("FROM scratch\nHEALTHCHECK NONE\n"))
+	if err != nil || boxrcontainer.HealthcheckEnabled(disabled.Config.Healthcheck) {
+		t.Fatalf("parse disabled healthcheck = %+v, %v", disabled.Config.Healthcheck, err)
+	}
+}
+
+func TestDockerfileHealthcheckRejectsUnknownOptionsAndUnboundedCommands(t *testing.T) {
+	for _, dockerfile := range []string{
+		"FROM scratch\nHEALTHCHECK --unknown=1 CMD true\n",
+		"FROM scratch\nHEALTHCHECK --interval=-1s CMD true\n",
+		"FROM scratch\nHEALTHCHECK --retries=0 CMD true\n",
+		"FROM scratch\nHEALTHCHECK CMD []\n",
+	} {
+		if _, err := ParseDockerfile([]byte(dockerfile)); err == nil {
+			t.Errorf("invalid healthcheck accepted: %q", dockerfile)
+		}
 	}
 }

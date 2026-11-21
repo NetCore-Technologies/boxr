@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizeExposedPortsExpandsAndCanonicalizes(t *testing.T) {
@@ -486,5 +487,48 @@ func TestNormalizeStopSignalRejectsUnsupportedAndUnsafeValues(t *testing.T) {
 	}
 	if err := (Options{StopSignal: "SIGFOO"}).Validate(); err == nil {
 		t.Fatal("Options.Validate accepted an unsupported stop signal")
+	}
+}
+
+func TestNormalizeHealthcheckAppliesDockerDefaults(t *testing.T) {
+	config, err := NormalizeHealthcheck(&HealthcheckConfig{Test: []string{"CMD", "curl", "-f", "http://localhost"}})
+	if err != nil {
+		t.Fatalf("NormalizeHealthcheck(): %v", err)
+	}
+	if config.Interval != 30*time.Second || config.Timeout != 30*time.Second ||
+		config.StartInterval != 5*time.Second || config.Retries != 3 || config.StartPeriod != 0 {
+		t.Fatalf("healthcheck defaults = %+v", config)
+	}
+}
+
+func TestNormalizeHealthcheckSupportsShellAndDisable(t *testing.T) {
+	shell, err := NormalizeHealthcheck(&HealthcheckConfig{Test: []string{"cmd-shell", "curl -f localhost"}})
+	if err != nil || shell.Test[0] != "CMD-SHELL" || shell.Test[1] != "curl -f localhost" {
+		t.Fatalf("CMD-SHELL normalization = %+v, %v", shell, err)
+	}
+	disabled, err := NormalizeHealthcheck(&HealthcheckConfig{Test: []string{"NONE"}})
+	if err != nil || HealthcheckEnabled(disabled) {
+		t.Fatalf("NONE healthcheck = %+v, %v", disabled, err)
+	}
+	if config, err := NormalizeHealthcheck(nil); err != nil || config != nil {
+		t.Fatalf("nil healthcheck = %+v, %v", config, err)
+	}
+}
+
+func TestNormalizeHealthcheckRejectsInvalidAndUnboundedConfig(t *testing.T) {
+	for _, config := range []*HealthcheckConfig{
+		{Test: []string{"CMD"}},
+		{Test: []string{"CMD-SHELL", ""}},
+		{Test: []string{"CMD", "echo", "bad\ncommand"}},
+		{Test: []string{"SHELL", "echo ok"}},
+		{Test: []string{"NONE"}, Retries: 2},
+		{Test: []string{"CMD", "echo ok"}, Interval: -time.Second},
+		{Test: []string{"CMD", "echo ok"}, Timeout: 25 * time.Hour},
+		{Test: []string{"CMD", "echo ok"}, Retries: 1001},
+		{Test: []string{"CMD", strings.Repeat("x", MaxHealthcheckCommandBytes+1)}},
+	} {
+		if _, err := NormalizeHealthcheck(config); err == nil {
+			t.Errorf("NormalizeHealthcheck(%+v) unexpectedly succeeded", config)
+		}
 	}
 }
