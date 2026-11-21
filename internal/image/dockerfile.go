@@ -436,8 +436,26 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 				}
 			}
 
-		case "ONBUILD", "HEALTHCHECK", "EXPOSE", "STOPSIGNAL", "SHELL":
-			return fmt.Errorf("line %d: Dockerfile instruction %s is not supported yet", lineNumber, instruction)
+		case "EXPOSE":
+			words, err := dockerfileWords(expanded)
+			if err != nil || len(words) == 0 {
+				return fmt.Errorf("line %d: EXPOSE expects one or more ports", lineNumber)
+			}
+			ports, err := normalizeImageExposedPorts(words)
+			if err != nil {
+				return fmt.Errorf("line %d: invalid EXPOSE declaration: %w", lineNumber, err)
+			}
+			if spec.Config.ExposedPorts == nil {
+				spec.Config.ExposedPorts = make(map[string]struct{})
+			}
+			for _, port := range ports {
+				spec.Config.ExposedPorts[port] = struct{}{}
+			}
+			if len(spec.Config.ExposedPorts) > 256 {
+				return fmt.Errorf("line %d: Dockerfile declares more than 256 exposed ports", lineNumber)
+			}
+
+		case "ONBUILD", "HEALTHCHECK", "STOPSIGNAL", "SHELL":
 		default:
 			return fmt.Errorf("line %d: unknown Dockerfile instruction %s", lineNumber, instruction)
 		}

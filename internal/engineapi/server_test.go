@@ -121,6 +121,7 @@ func TestContainerListInspectFiltersAndDockerFields(t *testing.T) {
 		NetworkMode: "bridge", NetworkName: "boxr-test",
 		Hostname: "api", Workdir: "/srv/app", MemoryLimitBytes: 64 << 20,
 		PublishedPorts: []container.PortMapping{{HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 80, Protocol: "tcp"}},
+		ExposedPorts:   []string{"80/tcp", "443/tcp"},
 		BindMounts:     []container.BindMount{{Source: "/srv/data", Target: "/data", ReadOnly: true}},
 	})
 	filters, err := json.Marshal(map[string][]string{"name": {"api-test"}, "status": {"running"}})
@@ -161,6 +162,10 @@ func TestContainerListInspectFiltersAndDockerFields(t *testing.T) {
 	}
 	if hostConfig["NetworkMode"] != "boxr-test" || hostConfig["Memory"] != float64(64<<20) {
 		t.Fatalf("HostConfig = %#v", hostConfig)
+	}
+	exposedPorts, ok := config["ExposedPorts"].(map[string]any)
+	if !ok || len(exposedPorts) != 2 || exposedPorts["80/tcp"] == nil || exposedPorts["443/tcp"] == nil {
+		t.Fatalf("container inspect ExposedPorts = %#v", config["ExposedPorts"])
 	}
 	if len(mounts) != 1 || network["Ports"] == nil {
 		t.Fatalf("mounts or ports missing: mounts=%#v networks=%#v", mounts, network)

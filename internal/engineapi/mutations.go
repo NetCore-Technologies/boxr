@@ -682,6 +682,11 @@ func createContainerRecord(name string, input dockerCreateRequest) (result state
 	}
 	options.Hostname = input.Hostname
 	options.Env = container.MergeEnvironment(image.RuntimeConfig.Env, input.Env)
+	exposedPorts, err := dockerConfigExposedPorts(input.ExposedPorts, image.RuntimeConfig.ExposedPorts)
+	if err != nil {
+		return empty, fmt.Errorf("validate Docker Config.ExposedPorts: %w", err)
+	}
+	options.ExposedPorts = exposedPorts
 	options.Labels = mergeDockerLabels(image.RuntimeConfig.Labels, input.Labels)
 	if _, exists := options.Labels["io.boxr.image"]; exists {
 		return empty, fmt.Errorf("label io.boxr.image is reserved by Boxr")
@@ -780,6 +785,27 @@ func createContainerRecord(name string, input dockerCreateRequest) (result state
 	}
 	anonymousVolumesCommitted = true
 	return record, nil
+}
+
+// dockerConfigExposedPorts merges image defaults and create-request metadata.
+// Docker represents each Config.ExposedPorts entry as an empty JSON object.
+func dockerConfigExposedPorts(requested map[string]json.RawMessage, imagePorts map[string]struct{}) ([]string, error) {
+	values := make([]string, 0, len(requested)+len(imagePorts))
+	for target, raw := range requested {
+		value := bytes.TrimSpace(raw)
+		if !bytes.Equal(value, []byte("{}")) && !bytes.Equal(value, []byte("null")) {
+			return nil, fmt.Errorf("Config.ExposedPorts entry %q must be an empty object", target)
+		}
+		values = append(values, target)
+	}
+	for target := range imagePorts {
+		values = append(values, target)
+	}
+	ports, err := container.NormalizeExposedPorts(values)
+	if err != nil {
+		return nil, err
+	}
+	return ports, nil
 }
 
 // dockerConfigVolumeTargets merges image-declared and create-request volumes.

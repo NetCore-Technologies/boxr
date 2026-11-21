@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -45,6 +46,7 @@ type Options struct {
 	NetworkMode        string            `json:"networkMode,omitempty"`
 	NetworkName        string            `json:"networkName,omitempty"`
 	PublishedPorts     []PortMapping     `json:"publishedPorts,omitempty"`
+	ExposedPorts       []string          `json:"exposedPorts,omitempty"`
 	UserNamespace      bool              `json:"userNamespace,omitempty"`
 	NoNewPrivileges    bool              `json:"noNewPrivileges,omitempty"`
 	SeccompProfile     string            `json:"seccompProfile,omitempty"`
@@ -79,6 +81,51 @@ func (mapping PortMapping) Normalize() (PortMapping, error) {
 		return PortMapping{}, fmt.Errorf("published port protocol must be tcp or udp")
 	}
 	return mapping, nil
+}
+
+// NormalizeExposedPorts expands Docker-style ranges, applies the default TCP
+// protocol and returns a sorted, duplicate-free set. It never publishes ports.
+func NormalizeExposedPorts(values []string) ([]string, error) {
+	const maxExposedPorts = 256
+	set := make(map[string]struct{})
+	for index, value := range values {
+		if value == "" || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\x00\r\n") {
+			return nil, fmt.Errorf("exposed port %d is empty or contains whitespace/control characters", index+1)
+		}
+		portRange, protocol, hasProtocol := strings.Cut(value, "/")
+		if !hasProtocol {
+			protocol = "tcp"
+		}
+		protocol = strings.ToLower(protocol)
+		if strings.Contains(protocol, "/") || (protocol != "tcp" && protocol != "udp" && protocol != "sctp") {
+			return nil, fmt.Errorf("exposed port %q has an unsupported protocol", value)
+		}
+		first, last := portRange, portRange
+		if strings.Contains(portRange, "-") {
+			var ok bool
+			first, last, ok = strings.Cut(portRange, "-")
+			if !ok || first == "" || last == "" || strings.Contains(last, "-") {
+				return nil, fmt.Errorf("exposed port %q has an invalid range", value)
+			}
+		}
+		start, startErr := strconv.ParseUint(first, 10, 16)
+		end, endErr := strconv.ParseUint(last, 10, 16)
+		if startErr != nil || endErr != nil || start == 0 || end == 0 || end < start || end-start+1 > maxExposedPorts {
+			return nil, fmt.Errorf("exposed port %q must be between 1 and 65535 with a range of at most %d ports", value, maxExposedPorts)
+		}
+		for port := start; port <= end; port++ {
+			set[strconv.FormatUint(port, 10)+"/"+protocol] = struct{}{}
+			if len(set) > maxExposedPorts {
+				return nil, fmt.Errorf("at most %d unique exposed ports are supported", maxExposedPorts)
+			}
+		}
+	}
+	result := make([]string, 0, len(set))
+	for value := range set {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 func portMappingsConflict(left, right PortMapping) bool {
@@ -213,6 +260,9 @@ func (o Options) Validate() error {
 		}
 	default:
 		return fmt.Errorf("network mode must be host, none, or bridge")
+	}
+	if _, err := NormalizeExposedPorts(o.ExposedPorts); err != nil {
+		return fmt.Errorf("exposed ports: %w", err)
 	}
 	if len(o.PublishedPorts) > 128 {
 		return fmt.Errorf("at most 128 published port mappings are supported")

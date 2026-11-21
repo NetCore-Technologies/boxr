@@ -1021,6 +1021,7 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 	configObject := map[string]any{
 		"Hostname": record.Options.Hostname, "Cmd": record.Command,
 		"Image": image, "WorkingDir": record.Options.Workdir, "Labels": record.Labels,
+		"ExposedPorts": dockerContainerExposedPorts(record.Options.ExposedPorts),
 		"OpenStdin": false, "StdinOnce": false, "Tty": false,
 	}
 	hostConfig := map[string]any{
@@ -1062,6 +1063,18 @@ func dockerRestartPolicy(value string) string {
 		return "no"
 	}
 	return value
+}
+
+func dockerContainerExposedPorts(values []string) map[string]struct{} {
+	normalized, err := container.NormalizeExposedPorts(values)
+	if err != nil {
+		return map[string]struct{}{}
+	}
+	result := make(map[string]struct{}, len(normalized))
+	for _, value := range normalized {
+		result[value] = struct{}{}
+	}
+	return result
 }
 
 func dockerPortBindings(options container.Options) map[string][]map[string]string {
@@ -1340,10 +1353,14 @@ func dockerImageConfig(config imageStore.ImageRuntimeConfig) map[string]any {
 	for target := range config.Volumes {
 		volumes[target] = struct{}{}
 	}
+	exposedPorts := make(map[string]struct{}, len(config.ExposedPorts))
+	for target := range config.ExposedPorts {
+		exposedPorts[target] = struct{}{}
+	}
 	return map[string]any{
 		"Env": env, "Cmd": command, "Entrypoint": entrypoint,
 		"WorkingDir": config.WorkingDir, "User": config.User, "Labels": labels,
-		"Volumes": volumes,
+		"Volumes": volumes, "ExposedPorts": exposedPorts,
 	}
 }
 

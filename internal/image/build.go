@@ -55,8 +55,9 @@ type ImageRuntimeConfig struct {
 	Cmd        []string            `json:"Cmd,omitempty"`
 	WorkingDir string              `json:"WorkingDir,omitempty"`
 	User       string              `json:"User,omitempty"`
-	Labels     map[string]string   `json:"Labels,omitempty"`
-	Volumes    map[string]struct{} `json:"Volumes,omitempty"`
+	Labels       map[string]string   `json:"Labels,omitempty"`
+	Volumes      map[string]struct{} `json:"Volumes,omitempty"`
+	ExposedPorts map[string]struct{} `json:"ExposedPorts,omitempty"`
 }
 
 // LoadBuildSpec reads a bounded strict JSON recipe. Unknown fields and trailing
@@ -131,6 +132,15 @@ func ValidateBuildSpec(spec BuildSpec) error {
 	for target := range spec.Config.Volumes {
 		if !path.IsAbs(target) || target == "/" || path.Clean(target) != target || strings.ContainsAny(target, "\x00\r\n") {
 			return fmt.Errorf("image volume target %q must be a clean absolute non-root path", target)
+		}
+	}
+	if len(spec.Config.ExposedPorts) > 256 {
+		return fmt.Errorf("image config supports at most 256 exposed ports")
+	}
+	for target := range spec.Config.ExposedPorts {
+		normalized, err := container.NormalizeExposedPorts([]string{target})
+		if err != nil || len(normalized) != 1 || normalized[0] != target {
+			return fmt.Errorf("image exposed port %q must be a canonical port/protocol key", target)
 		}
 	}
 	if strings.ContainsAny(spec.Config.User, "\x00\r\n") || len(spec.Config.User) > 256 {
@@ -582,8 +592,9 @@ func inheritBuildRuntimeConfig(base, overrides ImageRuntimeConfig) ImageRuntimeC
 		Cmd:        cloneBuildStrings(base.Cmd),
 		WorkingDir: base.WorkingDir,
 		User:       base.User,
-		Labels:     make(map[string]string, len(base.Labels)+len(overrides.Labels)),
-		Volumes:    cloneBuildVolumes(base.Volumes),
+		Labels:       make(map[string]string, len(base.Labels)+len(overrides.Labels)),
+		Volumes:      cloneBuildVolumes(base.Volumes),
+		ExposedPorts: cloneBuildExposedPorts(base.ExposedPorts),
 	}
 	if overrides.Entrypoint != nil {
 		result.Entrypoint = cloneBuildStrings(overrides.Entrypoint)
@@ -614,6 +625,26 @@ func inheritBuildRuntimeConfig(base, overrides ImageRuntimeConfig) ImageRuntimeC
 	}
 	if len(result.Volumes) == 0 {
 		result.Volumes = nil
+	}
+	for target := range overrides.ExposedPorts {
+		if result.ExposedPorts == nil {
+			result.ExposedPorts = make(map[string]struct{})
+		}
+		result.ExposedPorts[target] = struct{}{}
+	}
+	if len(result.ExposedPorts) == 0 {
+		result.ExposedPorts = nil
+	}
+	return result
+}
+
+func cloneBuildExposedPorts(values map[string]struct{}) map[string]struct{} {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]struct{}, len(values))
+	for target := range values {
+		result[target] = struct{}{}
 	}
 	return result
 }
@@ -686,6 +717,10 @@ func parseBuildPlatform(value string) (osName, architecture, variant string, err
 		return "", "", "", fmt.Errorf("unsupported Linux build platform %q", value)
 	}
 	return osName, architecture, variant, nil
+}
+
+func normalizeImageExposedPorts(values []string) ([]string, error) {
+	return container.NormalizeExposedPorts(values)
 }
 
 // EnsureVolumeMountpoints creates declared volume directories without following
