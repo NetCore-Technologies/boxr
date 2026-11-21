@@ -548,7 +548,22 @@ func dockerOverlayChildren(lowerDir, upperDir string) (map[string]dockerArchiveC
 	return children, nil
 }
 
+const maxDockerArchiveSymlinks = 40
+
 func resolveDockerOverlayPath(lowerRoot, upperRoot, relative string) (string, string, os.FileInfo, error) {
+	return resolveDockerOverlayPathWithSymlinks(lowerRoot, upperRoot, relative, 0)
+}
+
+func resolveDockerOverlayPathWithSymlinks(lowerRoot, upperRoot, relative string, symlinkDepth int) (string, string, os.FileInfo, error) {
+	if symlinkDepth > maxDockerArchiveSymlinks {
+		return "", "", nil, fmt.Errorf("container path exceeds %d symlink traversals", maxDockerArchiveSymlinks)
+	}
+	if relative == ".." || strings.HasPrefix(relative, "../") || strings.ContainsRune(relative, '\\') || strings.ContainsRune(relative, '\x00') {
+		return "", "", nil, fmt.Errorf("invalid resolved container path")
+	}
+	if len(relative) > maxDockerArchivePath {
+		return "", "", nil, fmt.Errorf("resolved container path exceeds %d bytes", maxDockerArchivePath)
+	}
 	lowerInfo, err := os.Stat(lowerRoot)
 	if err != nil || !lowerInfo.IsDir() {
 		return "", "", nil, fmt.Errorf("invalid lower-layer root")
@@ -607,8 +622,40 @@ func resolveDockerOverlayPath(lowerRoot, upperRoot, relative string) (string, st
 			return "", "", nil, os.ErrNotExist
 		}
 		chosenInfo := upperEntryInfo
+		chosenPath := upperChild
 		if chosenInfo == nil {
 			chosenInfo = lowerEntryInfo
+			chosenPath = lowerChild
+		}
+		if chosenInfo != nil && chosenInfo.Mode()&os.ModeSymlink != 0 {
+			if symlinkDepth >= maxDockerArchiveSymlinks {
+				return "", "", nil, fmt.Errorf("container path exceeds %d symlink traversals", maxDockerArchiveSymlinks)
+			}
+			linkTarget, linkErr := os.Readlink(chosenPath)
+			if linkErr != nil {
+				return "", "", nil, fmt.Errorf("read container symlink %q: %w", name, linkErr)
+			}
+			if linkTarget == "" || strings.ContainsRune(linkTarget, '\\x00') {
+				return "", "", nil, fmt.Errorf("container symlink %q has an invalid target", name)
+			}
+			parent := strings.Join(parts[:index], "/")
+			var target string
+			if path.IsAbs(linkTarget) {
+				target = strings.TrimPrefix(path.Clean(linkTarget), "/")
+			} else {
+				target = path.Clean(path.Join(parent, linkTarget))
+			}
+			remaining := strings.Join(parts[index+1:], "/")
+			if remaining != "" {
+				target = path.Join(target, remaining)
+			}
+			if target == "." {
+				target = ""
+			}
+			if target == ".." || strings.HasPrefix(target, "../") {
+				return "", "", nil, fmt.Errorf("container symlink %q escapes the container root", name)
+			}
+			return resolveDockerOverlayPathWithSymlinks(lowerRoot, upperRoot, target, symlinkDepth+1)
 		}
 		if index != len(parts)-1 {
 			if chosenInfo == nil || !chosenInfo.IsDir() || chosenInfo.Mode()&os.ModeSymlink != 0 {
