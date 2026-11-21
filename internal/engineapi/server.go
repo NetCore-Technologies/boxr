@@ -21,6 +21,7 @@ import (
 	"github.com/manit6752025/boxr/internal/container"
 	imageStore "github.com/manit6752025/boxr/internal/image"
 	"github.com/manit6752025/boxr/internal/state"
+	"github.com/manit6752025/boxr/internal/volume"
 )
 
 const (
@@ -180,6 +181,35 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		writeMethodErrorFor(writer, http.MethodDelete)
+	case path == "/volumes":
+		if !requireMethod(writer, request, http.MethodGet) {
+			return
+		}
+		s.handleVolumes(writer, request)
+	case path == "/volumes/create":
+		if !requireMethod(writer, request, http.MethodPost) {
+			return
+		}
+		s.handleVolumeCreate(writer, request)
+	case strings.HasPrefix(path, "/volumes/"):
+		remainder := strings.TrimPrefix(path, "/volumes/")
+		if strings.Contains(remainder, "/") || remainder == "" {
+			writeError(writer, http.StatusNotFound, fmt.Errorf("volume endpoint not found"))
+			return
+		}
+		name, err := url.PathUnescape(remainder)
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, fmt.Errorf("invalid volume name"))
+			return
+		}
+		switch request.Method {
+		case http.MethodGet:
+			s.handleVolumeInspect(writer, name)
+		case http.MethodDelete:
+			s.handleVolumeDelete(writer, name)
+		default:
+			writeMethodErrorFor(writer, http.MethodGet+", "+http.MethodDelete)
+		}
 	case path == "/events":
 		if !requireMethod(writer, request, http.MethodGet) {
 			return
