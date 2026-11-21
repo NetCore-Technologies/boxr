@@ -294,11 +294,13 @@ func validateStoredNetworks(networks []Network) error {
 		if err != nil || prefix.String() != network.Subnet || gateway.String() != network.Gateway {
 			return fmt.Errorf("network store contains invalid subnet or gateway for %q", network.Name)
 		}
+		allocationPool := prefix
 		if network.IPRange != "" {
 			pool, err := parseIPv4IPRange(prefix, network.IPRange)
 			if err != nil || pool.String() != network.IPRange {
 				return fmt.Errorf("network store contains an invalid IPAM allocation range for %q", network.Name)
 			}
+			allocationPool = pool
 		}
 		for _, previous := range prefixes {
 			if prefixesOverlap(prefix, previous) {
@@ -315,7 +317,9 @@ func validateStoredNetworks(networks []Network) error {
 			containerNetworks[containerID] = network.Name
 			address, err := netip.ParseAddr(addressText)
 			if containerID == "" || strings.ContainsAny(containerID, "/\\\x00") ||
-				err != nil || !address.Is4() || !prefix.Contains(address) || address == gateway || address == prefix.Addr() || address == broadcastAddress(prefix) {
+				err != nil || !address.Is4() || !prefix.Contains(address) || !allocationPool.Contains(address) ||
+				address == gateway || address == prefix.Addr() || address == broadcastAddress(prefix) ||
+				address == allocationPool.Addr() || address == broadcastAddress(allocationPool) {
 				return fmt.Errorf("network store contains an invalid IPAM allocation for %q", network.Name)
 			}
 			if _, exists := allocated[addressText]; exists {
@@ -1281,7 +1285,7 @@ func prefixesOverlap(left, right netip.Prefix) bool {
 
 func parseIPv4IPRange(subnet netip.Prefix, value string) (netip.Prefix, error) {
 	pool, err := netip.ParsePrefix(value)
-	if err != nil || !pool.Addr().Is4() || pool != pool.Masked() || pool.Bits() < subnet.Bits() ||
+	if err != nil || !pool.Addr().Is4() || pool != pool.Masked() || pool.Bits() < subnet.Bits() || pool.Bits() > 30 ||
 		!subnet.Contains(pool.Addr()) || !subnet.Contains(broadcastAddress(pool)) {
 		return netip.Prefix{}, fmt.Errorf("IPAM IPRange %q must be a canonical IPv4 range contained by subnet %s", value, subnet)
 	}
