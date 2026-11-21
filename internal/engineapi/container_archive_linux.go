@@ -213,25 +213,30 @@ func (s *Server) handleContainerArchive(writer http.ResponseWriter, request *htt
 	}
 
 	live := record.Status == "running" || record.Status == "paused"
-	if live && dockerArchivePathUsesRestrictedMount(containerPath) {
-		writeError(writer, http.StatusBadRequest, fmt.Errorf("copying through /proc, /sys or /dev is not supported"))
-		return
-	}
-	if live {
+	verifyLive := func() error {
 		if record.PID <= 1 || !state.ProcessAlive(record.PID) {
-			writeError(writer, http.StatusConflict, fmt.Errorf("container process is no longer running"))
-			return
+			return fmt.Errorf("container process is no longer running")
 		}
 		if err := state.VerifyProcessIdentity(record); err != nil {
-			writeError(writer, http.StatusConflict, fmt.Errorf("refuse archive access to an unverified container process: %w", err))
-			return
+			return fmt.Errorf("container process identity changed: %w", err)
 		}
 		if s.verifyExecPID == nil {
-			writeError(writer, http.StatusServiceUnavailable, fmt.Errorf("container process verification is unavailable"))
-			return
+			return fmt.Errorf("container process verification is unavailable")
 		}
 		if err := s.verifyExecPID(record); err != nil {
-			writeError(writer, http.StatusConflict, fmt.Errorf("refuse archive access to an unverified Boxr process: %w", err))
+			return fmt.Errorf("Boxr process identity verification failed: %w", err)
+		}
+		return nil
+	}
+	var verifyLiveRoot func() error
+	if live {
+		if dockerArchivePathUsesRestrictedMount(containerPath) {
+			writeError(writer, http.StatusBadRequest, fmt.Errorf("copying through /proc, /sys or /dev is not supported"))
+			return
+		}
+		verifyLiveRoot = verifyLive
+		if err := verifyLiveRoot(); err != nil {
+			writeError(writer, http.StatusConflict, fmt.Errorf("refuse archive access to an unverified container process: %w", err))
 			return
 		}
 	}
@@ -245,7 +250,7 @@ func (s *Server) handleContainerArchive(writer http.ResponseWriter, request *htt
 			readLower = filepath.Join("/proc", strconv.Itoa(record.PID), "root", ".")
 			readUpper = ""
 		}
-		s.handleDockerArchiveGet(writer, request, readLower, readUpper, containerPath, contentsOnly, directoryExpected, live)
+		s.handleDockerArchiveGet(writer, request, readLower, readUpper, containerPath, contentsOnly, directoryExpected, live, verifyLiveRoot)
 	case http.MethodPut:
 		if upperInfo, statErr := os.Lstat(upperRoot); errors.Is(statErr, os.ErrNotExist) {
 			if err := os.MkdirAll(upperRoot, 0700); err != nil {
@@ -265,13 +270,13 @@ func (s *Server) handleContainerArchive(writer http.ResponseWriter, request *htt
 			// upperdir behind a live mount.
 			writeRoot = filepath.Join("/proc", strconv.Itoa(record.PID), "root", ".")
 		}
-		s.handleDockerArchivePut(writer, request, writeRoot, writeRoot, containerPath, noOverwrite, live)
+		s.handleDockerArchivePut(writer, request, writeRoot, writeRoot, containerPath, noOverwrite, live, verifyLiveRoot)
 	default:
 		writeMethodErrorFor(writer, http.MethodGet+", "+http.MethodHead+", "+http.MethodPut)
 	}
 }
 
-func (s *Server) handleDockerArchiveGet(writer http.ResponseWriter, request *http.Request, lowerRoot, upperRoot, containerPath string, contentsOnly, directoryExpected, denyRestrictedMount bool) {
+func (s *Server) handleDockerArchiveGet(writer http.ResponseWriter, request *http.Request, lowerRoot, upperRoot, containerPath string, contentsOnly, directoryExpected, denyRestrictedMount bool, verifyLiveRoot func() error) {
 	lowerPath, upperPath, info, err := resolveDockerOverlayPath(lowerRoot, upperRoot, containerPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
@@ -323,6 +328,12 @@ func (s *Server) handleDockerArchiveGet(writer http.ResponseWriter, request *htt
 		writeError(writer, http.StatusInternalServerError, fmt.Errorf("encode container path metadata: %w", err))
 		return
 	}
+	if verifyLiveRoot != nil {
+		if err := verifyLiveRoot(); err != nil {
+			writeError(writer, http.StatusConflict, fmt.Errorf("container process changed during archive inspection: %w", err))
+			return
+		}
+	}
 	writer.Header().Set("X-Docker-Container-Path-Stat", base64.StdEncoding.EncodeToString(statJSON))
 	if request.Method == http.MethodHead {
 		writer.Header().Set("Content-Type", "application/x-tar")
@@ -371,6 +382,13 @@ func (s *Server) handleDockerArchiveGet(writer http.ResponseWriter, request *htt
 		_ = temporary.Close()
 		writeError(writer, http.StatusInternalServerError, fmt.Errorf("sync container archive: %w", err))
 		return
+	}
+	if verifyLiveRoot != nil {
+		if err := verifyLiveRoot(); err != nil {
+			_ = temporary.Close()
+			writeError(writer, http.StatusConflict, fmt.Errorf("container process changed during archive creation: %w", err))
+			return
+		}
 	}
 	size, err := temporary.Seek(0, io.SeekEnd)
 	if err != nil {
@@ -709,7 +727,7 @@ func dockerOverlayWhiteouts(upperDir, name string) (bool, error) {
 	return false, nil
 }
 
-func (s *Server) handleDockerArchivePut(writer http.ResponseWriter, request *http.Request, lowerRoot, upperRoot, containerPath string, noOverwrite, denyRestrictedMount bool) {
+func (s *Server) handleDockerArchivePut(writer http.ResponseWriter, request *http.Request, lowerRoot, upperRoot, containerPath string, noOverwrite, denyRestrictedMount bool, verifyLiveRoot func() error) {
 	lowerDestination, upperDestination, destinationInfo, err := resolveDockerOverlayPath(lowerRoot, upperRoot, containerPath)
 	if err != nil {
 		writeError(writer, http.StatusNotFound, fmt.Errorf("container destination does not exist"))
@@ -787,7 +805,7 @@ func (s *Server) handleDockerArchivePut(writer http.ResponseWriter, request *htt
 			return
 		}
 	}
-	if err := mergeDockerArchiveTree(extractedPath, upperRoot, resolvedDestination); err != nil {
+	if err := mergeDockerArchiveTreeVerified(extractedPath, upperRoot, resolvedDestination, verifyLiveRoot); err != nil {
 		writeError(writer, http.StatusConflict, fmt.Errorf("apply container archive: %w", err))
 		return
 	}
@@ -873,6 +891,10 @@ func validateDockerArchiveUploadTree(root string) error {
 }
 
 func mergeDockerArchiveTree(sourceRoot, upperRoot, destination string) error {
+	return mergeDockerArchiveTreeVerified(sourceRoot, upperRoot, destination, nil)
+}
+
+func mergeDockerArchiveTreeVerified(sourceRoot, upperRoot, destination string, verifyRoot func() error) error {
 	upperInfo, err := os.Lstat(upperRoot)
 	if err != nil || upperInfo.Mode()&os.ModeSymlink != 0 || !upperInfo.IsDir() {
 		return fmt.Errorf("writable layer must be a real directory")
@@ -882,6 +904,11 @@ func mergeDockerArchiveTree(sourceRoot, upperRoot, destination string) error {
 		return fmt.Errorf("open writable layer: %w", err)
 	}
 	defer root.Close()
+	if verifyRoot != nil {
+		if err := verifyRoot(); err != nil {
+			return fmt.Errorf("container process changed before archive write: %w", err)
+		}
+	}
 	destination = filepath.ToSlash(destination)
 	if destination != "" {
 		if err := ensureDockerArchiveUpperParents(root, destination); err != nil {
