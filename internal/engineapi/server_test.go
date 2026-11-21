@@ -19,8 +19,8 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"sort"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -2303,7 +2303,7 @@ func TestEngineAPIDockerBuildRejectsInvalidQueriesAndUnsafeContexts(t *testing.T
 	}
 
 	unsafeContext := dockerBuildTestContext(t, map[string][]byte{
-		"../escape": []byte("outside"),
+		"../escape":  []byte("outside"),
 		"Dockerfile": []byte("FROM scratch\n"),
 	})
 	request := httptest.NewRequest(http.MethodPost, "/v1.45/build?t=demo%3Alatest", bytes.NewReader(unsafeContext))
