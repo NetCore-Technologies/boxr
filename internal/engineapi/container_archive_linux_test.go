@@ -300,6 +300,22 @@ func TestMergeDockerArchiveTreeRemovesWhiteoutsAndPreservesSafeSymlinks(t *testi
 	}
 }
 
+func TestMergeDockerArchiveTreeVerifiesProcessAfterOpeningRoot(t *testing.T) {
+	stage := t.TempDir()
+	upper := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stage, "payload"), []byte("must not be written"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	verifyErr := errors.New("container PID identity changed")
+	err := mergeDockerArchiveTreeVerified(stage, upper, "", func() error { return verifyErr })
+	if !errors.Is(err, verifyErr) {
+		t.Fatalf("merge error = %v, want process verification error", err)
+	}
+	if _, err := os.Stat(filepath.Join(upper, "payload")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("write happened before process identity verification: %v", err)
+	}
+}
+
 func TestMergeDockerArchiveTreeRejectsSymlinkParents(t *testing.T) {
 	stage := t.TempDir()
 	upper := t.TempDir()
