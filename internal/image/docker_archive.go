@@ -43,6 +43,10 @@ func openDockerArchive(pathname string) (*dockerArchiveReader, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open Docker archive: %w", err)
 	}
+	return openDockerArchiveFile(file)
+}
+
+func openDockerArchiveFile(file *os.File) (*dockerArchiveReader, error) {
 	buffered := bufio.NewReader(file)
 	magic, peekErr := buffered.Peek(2)
 	if peekErr == nil && magic[0] == 0x1f && magic[1] == 0x8b {
@@ -153,8 +157,12 @@ func LoadDockerArchive(archivePath string) ([]Image, error) {
 		return nil, err
 	}
 
-	manifestPath := filepath.Join(stage, "manifest.json")
-	manifestData, err := readDockerJSON(manifestPath)
+	stageRoot, err := os.OpenRoot(stage)
+	if err != nil {
+		return nil, fmt.Errorf("open Docker archive staging root: %w", err)
+	}
+	defer stageRoot.Close()
+	manifestData, err := readDockerJSON(stageRoot, "manifest.json")
 	if err != nil {
 		return nil, fmt.Errorf("read Docker manifest: %w", err)
 	}
@@ -201,7 +209,7 @@ func LoadDockerArchive(archivePath string) ([]Image, error) {
 		if err != nil {
 			return nil, fmt.Errorf("Docker image %d config path: %w", imageIndex+1, err)
 		}
-		configData, err := readDockerJSON(filepath.Join(stage, filepath.FromSlash(configName)))
+		configData, err := readDockerJSON(stageRoot, configName)
 		if err != nil {
 			return nil, fmt.Errorf("Docker image %d config: %w", imageIndex+1, err)
 		}
@@ -229,8 +237,8 @@ func LoadDockerArchive(archivePath string) ([]Image, error) {
 			if err != nil {
 				return nil, fmt.Errorf("Docker image %d layer %d path: %w", imageIndex+1, layerIndex+1, err)
 			}
-			layerPath := filepath.Join(stage, filepath.FromSlash(cleanLayer))
-			info, err := os.Lstat(layerPath)
+			layerPath := filepath.FromSlash(cleanLayer)
+			info, err := stageRoot.Lstat(layerPath)
 			if err != nil {
 				return nil, fmt.Errorf("Docker image %d layer %d: %w", imageIndex+1, layerIndex+1, err)
 			}
@@ -241,7 +249,11 @@ func LoadDockerArchive(archivePath string) ([]Image, error) {
 			if !validDockerDiffID(expected) {
 				return nil, fmt.Errorf("Docker image %d layer %d has an invalid diff_id", imageIndex+1, layerIndex+1)
 			}
-			actual, err := dockerLayerDiffID(layerPath)
+			layerFile, err := stageRoot.Open(layerPath)
+			if err != nil {
+				return nil, fmt.Errorf("Docker image %d layer %d open: %w", imageIndex+1, layerIndex+1, err)
+			}
+			actual, err := dockerLayerDiffID(layerFile)
 			if err != nil {
 				return nil, fmt.Errorf("Docker image %d layer %d digest: %w", imageIndex+1, layerIndex+1, err)
 			}
@@ -317,6 +329,12 @@ func extractDockerArchive(archivePath, destination string) error {
 	}
 	defer input.Close()
 
+	archiveRoot, err := os.OpenRoot(destination)
+	if err != nil {
+		return fmt.Errorf("open Docker archive extraction root: %w", err)
+	}
+	defer archiveRoot.Close()
+
 	reader := tar.NewReader(input)
 	seen := make(map[string]byte)
 	var entries, totalBytes int64
@@ -356,16 +374,16 @@ func extractDockerArchive(archivePath, destination string) error {
 				return fmt.Errorf("Docker archive path %q has conflicting entries", name)
 			}
 			seen[name] = tar.TypeDir
-			target, err := dockerTarget(destination, name, true)
+			target, err := dockerTarget(archiveRoot, name, true)
 			if err != nil {
 				return err
 			}
-			if info, statErr := os.Lstat(target); statErr == nil {
+			if info, statErr := archiveRoot.Lstat(target); statErr == nil {
 				if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 					return fmt.Errorf("Docker archive directory %q conflicts with an existing entry", name)
 				}
 			} else if errors.Is(statErr, os.ErrNotExist) {
-				if err := os.Mkdir(target, 0700); err != nil {
+				if err := archiveRoot.Mkdir(target, 0700); err != nil {
 					return err
 				}
 			} else {
@@ -379,11 +397,11 @@ func extractDockerArchive(archivePath, destination string) error {
 				return fmt.Errorf("Docker archive contains duplicate path %q", name)
 			}
 			seen[name] = tar.TypeReg
-			target, err := dockerTarget(destination, name, true)
+			target, err := dockerTarget(archiveRoot, name, true)
 			if err != nil {
 				return err
 			}
-			file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			file, err := archiveRoot.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 			if err != nil {
 				return fmt.Errorf("create Docker archive entry %q: %w", name, err)
 			}
@@ -446,49 +464,45 @@ func checkDockerEntryCollision(seen map[string]byte, name string, directory bool
 	return nil
 }
 
-func dockerTarget(root, name string, createParents bool) (string, error) {
+func dockerTarget(root *os.Root, name string, createParents bool) (string, error) {
 	clean, err := cleanDockerArchivePath(name)
 	if err != nil {
 		return "", err
 	}
 	if clean == "." {
-		return root, nil
+		return ".", nil
 	}
-	parts := strings.Split(clean, "/")
-	current := root
-	for index, part := range parts {
-		next := filepath.Join(current, filepath.FromSlash(part))
-		if index == len(parts)-1 {
-			return next, nil
-		}
-		info, statErr := os.Lstat(next)
+	relative := filepath.FromSlash(clean)
+	parts := strings.Split(relative, string(filepath.Separator))
+	for index := 1; index < len(parts); index++ {
+		parent := strings.Join(parts[:index], string(filepath.Separator))
+		info, statErr := root.Lstat(parent)
 		switch {
 		case errors.Is(statErr, os.ErrNotExist):
 			if !createParents {
-				return filepath.Join(next, filepath.Join(parts[index+1:]...)), nil
+				return relative, nil
 			}
-			if err := os.Mkdir(next, 0755); err != nil && !errors.Is(err, os.ErrExist) {
+			if err := root.Mkdir(parent, 0755); err != nil && !errors.Is(err, os.ErrExist) {
 				return "", err
 			}
 		case statErr != nil:
 			return "", statErr
 		case info.Mode()&os.ModeSymlink != 0 || !info.IsDir():
 			if !createParents {
-				return "", fmt.Errorf("path parent %q is not a real directory", next)
+				return "", fmt.Errorf("path parent %q is not a real directory", parent)
 			}
-			if err := os.RemoveAll(next); err != nil {
+			if err := root.RemoveAll(parent); err != nil {
 				return "", err
 			}
-			if err := os.Mkdir(next, 0755); err != nil {
+			if err := root.Mkdir(parent, 0755); err != nil {
 				return "", err
 			}
 		}
-		current = next
 	}
-	return current, nil
+	return relative, nil
 }
 
-func dockerEnsureDirectory(root, name string, mode int64) error {
+func dockerEnsureDirectory(root *os.Root, name string, mode int64) error {
 	if name == "." {
 		return nil
 	}
@@ -496,24 +510,24 @@ func dockerEnsureDirectory(root, name string, mode int64) error {
 	if err != nil {
 		return err
 	}
-	info, err := os.Lstat(target)
+	info, err := root.Lstat(target)
 	if err == nil && (info.Mode()&os.ModeSymlink != 0 || !info.IsDir()) {
-		if err := os.RemoveAll(target); err != nil {
+		if err := root.RemoveAll(target); err != nil {
 			return err
 		}
 		err = os.ErrNotExist
 	}
 	if errors.Is(err, os.ErrNotExist) {
-		if err := os.Mkdir(target, safeDockerMode(mode, true)); err != nil {
+		if err := root.Mkdir(target, safeDockerMode(mode, true)); err != nil {
 			return err
 		}
 	} else if err != nil {
 		return err
 	}
-	return os.Chmod(target, safeDockerMode(mode, true))
+	return root.Chmod(target, safeDockerMode(mode, true))
 }
 
-func dockerRemovePath(root, name string) error {
+func dockerRemovePath(root *os.Root, name string) error {
 	if name == "." {
 		return fmt.Errorf("refusing to whiteout the root filesystem")
 	}
@@ -521,30 +535,44 @@ func dockerRemovePath(root, name string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.RemoveAll(target); err != nil {
+	if err := root.RemoveAll(target); err != nil {
 		return fmt.Errorf("apply Docker whiteout %q: %w", name, err)
 	}
 	return nil
 }
 
-func dockerClearDirectory(root, name string) error {
+func dockerClearDirectory(root *os.Root, name string) error {
 	if err := dockerEnsureDirectory(root, name, 0755); err != nil {
 		return err
 	}
-	target := root
-	if name != "." {
+	target := filepath.FromSlash(name)
+	if name == "." {
+		target = "."
+	} else {
 		var targetErr error
 		target, targetErr = dockerTarget(root, name, true)
 		if targetErr != nil {
 			return targetErr
 		}
 	}
-	children, err := os.ReadDir(target)
+	directory, err := root.Open(target)
 	if err != nil {
 		return err
 	}
+	children, readErr := directory.ReadDir(-1)
+	closeErr := directory.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
 	for _, child := range children {
-		if err := os.RemoveAll(filepath.Join(target, child.Name())); err != nil {
+		childPath := child.Name()
+		if target != "." {
+			childPath = target + string(filepath.Separator) + child.Name()
+		}
+		if err := root.RemoveAll(childPath); err != nil {
 			return err
 		}
 	}
@@ -556,8 +584,8 @@ func validDockerDiffID(value string) bool {
 	return ok && algorithm == "sha256" && hexRE.MatchString(digest)
 }
 
-func dockerLayerDiffID(layerPath string) (string, error) {
-	input, err := openDockerArchive(layerPath)
+func dockerLayerDiffID(file *os.File) (string, error) {
+	input, err := openDockerArchiveFile(file)
 	if err != nil {
 		return "", err
 	}
@@ -643,7 +671,10 @@ func scanDockerWhiteouts(layerPath string) (map[string]bool, map[string]bool, er
 		if targetName == "" {
 			return nil, nil, fmt.Errorf("invalid Docker whiteout %q", name)
 		}
-		target := path.Join(path.Dir(name), targetName)
+		target := targetName
+		if directory := path.Dir(name); directory != "." {
+			target = directory + "/" + targetName
+		}
 		target, err = cleanDockerArchivePath(target)
 		if err != nil || target == "." {
 			return nil, nil, fmt.Errorf("invalid Docker whiteout target for %q", name)
@@ -653,7 +684,13 @@ func scanDockerWhiteouts(layerPath string) (map[string]bool, map[string]bool, er
 	return whiteouts, opaque, nil
 }
 
-func applyDockerLayer(root, layerPath string) error {
+func applyDockerLayer(rootPath, layerPath string) error {
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return fmt.Errorf("open layer rootfs: %w", err)
+	}
+	defer root.Close()
+
 	whiteouts, opaque, err := scanDockerWhiteouts(layerPath)
 	if err != nil {
 		return fmt.Errorf("scan layer whiteouts: %w", err)
@@ -732,10 +769,10 @@ func applyDockerLayer(root, layerPath string) error {
 			if err != nil {
 				return err
 			}
-			if err := os.RemoveAll(target); err != nil {
+			if err := root.RemoveAll(target); err != nil {
 				return err
 			}
-			file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, safeDockerMode(header.Mode, false))
+			file, err := root.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, safeDockerMode(header.Mode, false))
 			if err != nil {
 				return fmt.Errorf("create layer file %q: %w", name, err)
 			}
@@ -747,7 +784,7 @@ func applyDockerLayer(root, layerPath string) error {
 			if closeErr != nil {
 				return closeErr
 			}
-			if err := os.Chmod(target, safeDockerMode(header.Mode, false)); err != nil {
+			if err := root.Chmod(target, safeDockerMode(header.Mode, false)); err != nil {
 				return err
 			}
 		case tar.TypeSymlink:
@@ -765,10 +802,10 @@ func applyDockerLayer(root, layerPath string) error {
 			if err != nil {
 				return err
 			}
-			if err := os.RemoveAll(target); err != nil {
+			if err := root.RemoveAll(target); err != nil {
 				return err
 			}
-			if err := os.Symlink(header.Linkname, target); err != nil {
+			if err := root.Symlink(header.Linkname, target); err != nil {
 				return fmt.Errorf("create layer symlink %q: %w", name, err)
 			}
 		case tar.TypeLink:
@@ -787,7 +824,7 @@ func applyDockerLayer(root, layerPath string) error {
 			if err != nil {
 				return err
 			}
-			info, err := os.Lstat(source)
+			info, err := root.Lstat(source)
 			if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 				return fmt.Errorf("hard link target %q must be an existing regular file", linkName)
 			}
@@ -795,10 +832,10 @@ func applyDockerLayer(root, layerPath string) error {
 			if err != nil {
 				return err
 			}
-			if err := os.RemoveAll(target); err != nil {
+			if err := root.RemoveAll(target); err != nil {
 				return err
 			}
-			if err := os.Link(source, target); err != nil {
+			if err := root.Link(source, target); err != nil {
 				return fmt.Errorf("create layer hard link %q: %w", name, err)
 			}
 		default:
@@ -830,7 +867,35 @@ func ApplyLayerArchive(root, archivePath string) error {
 	return applyDockerLayer(root, archivePath)
 }
 
-func readDockerJSON(pathname string) ([]byte, error) {
+func readDockerJSON(root *os.Root, name string) ([]byte, error) {
+	clean, err := cleanDockerArchivePath(name)
+	if err != nil {
+		return nil, err
+	}
+	relative := filepath.FromSlash(clean)
+	info, err := root.Lstat(relative)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maxJSONBytes {
+		return nil, fmt.Errorf("JSON file must be a regular non-symlink file no larger than %d bytes", maxJSONBytes)
+	}
+	file, err := root.Open(relative)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxJSONBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxJSONBytes {
+		return nil, fmt.Errorf("JSON file exceeds %d bytes", maxJSONBytes)
+	}
+	return data, nil
+}
+
+
 	info, err := os.Lstat(pathname)
 	if err != nil {
 		return nil, err
