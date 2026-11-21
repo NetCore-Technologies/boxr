@@ -274,9 +274,29 @@ func Init(args []string) error {
 			return fmt.Errorf("configure loopback in private network namespace: %w", err)
 		}
 	}
+	var finishUserSwitch func() error
+	preserveSetUID := false
+	if options.User != "" {
+		var err error
+		finishUserSwitch, preserveSetUID, err = prepareContainerUser(options.User, options.UserNamespace)
+		if err != nil {
+			return fmt.Errorf("configure container user %q: %w", options.User, err)
+		}
+	}
 	if len(options.DropCapabilities) > 0 {
-		if err := dropLinuxCapabilities(options.DropCapabilities); err != nil {
+		var err error
+		if preserveSetUID {
+			err = dropLinuxCapabilitiesPreservingSetUID(options.DropCapabilities)
+		} else {
+			err = dropLinuxCapabilities(options.DropCapabilities)
+		}
+		if err != nil {
 			return fmt.Errorf("drop capabilities: %w", err)
+		}
+	}
+	if finishUserSwitch != nil {
+		if err := finishUserSwitch(); err != nil {
+			return fmt.Errorf("switch to container user %q: %w", options.User, err)
 		}
 	}
 	if options.NoNewPrivileges || len(options.DropCapabilities) > 0 || options.SeccompProfile != "" {
@@ -541,6 +561,14 @@ func setNoNewPrivileges() error {
 }
 
 func dropLinuxCapabilities(values []string) error {
+	return dropLinuxCapabilitiesWithSetUID(values, false)
+}
+
+func dropLinuxCapabilitiesPreservingSetUID(values []string) error {
+	return dropLinuxCapabilitiesWithSetUID(values, true)
+}
+
+func dropLinuxCapabilitiesWithSetUID(values []string, preserveSetUID bool) error {
 	numbers, _ := normalizedCapabilities(values)
 	// Drop the bounding set while CAP_SETPCAP is still present in the effective set.
 	for _, number := range numbers {
@@ -555,6 +583,9 @@ func dropLinuxCapabilities(values []string) error {
 		return fmt.Errorf("read process capabilities: %w", errno)
 	}
 	for _, number := range numbers {
+		if preserveSetUID && number == 7 { // CAP_SETUID
+			continue
+		}
 		word, bit := number/32, uint(number%32)
 		mask := ^(uint32(1) << bit)
 		data[word].Effective &= mask

@@ -19,6 +19,7 @@ type Options struct {
 	SecurityProfile     string             `json:"securityProfile,omitempty"`
 	ResourceProfile     string             `json:"resourceProfile,omitempty"`
 	Name                string             `json:"name,omitempty"`
+	User                string             `json:"user,omitempty"`
 	Labels              map[string]string  `json:"labels,omitempty"`
 	AutoRemove          bool               `json:"autoRemove,omitempty"`
 	RestartPolicy       string             `json:"restartPolicy,omitempty"`
@@ -299,6 +300,12 @@ func (e *ExitError) Error() string {
 // Validate rejects configurations that cannot be represented safely by the
 // runtime. It does not check privileges or mutate the host.
 func (o Options) Validate() error {
+	if err := validateUserSpec(o.User); err != nil {
+		return fmt.Errorf("user: %w", err)
+	}
+	if o.UserNamespace && !userSpecIsRoot(o.User) {
+		return fmt.Errorf("non-root container users are not supported with the current single-ID user namespace mapping")
+	}
 	policy := o.RestartPolicy
 	if policy == "" {
 		policy = "no"
@@ -470,6 +477,36 @@ func (o Options) Validate() error {
 		}
 	}
 	return nil
+}
+
+
+func validateUserSpec(spec string) error {
+	if spec == "" {
+		return nil
+	}
+	if len(spec) > 256 || strings.TrimSpace(spec) != spec || strings.ContainsAny(spec, "\\x00\\r\\n\\t ") {
+		return fmt.Errorf("must be at most 256 bytes and contain no whitespace or control characters")
+	}
+	user, group, hasGroup := strings.Cut(spec, ":")
+	if strings.Contains(group, ":") {
+		return fmt.Errorf("must use USER or USER:GROUP")
+	}
+	if user == "" && (!hasGroup || group == "") {
+		return fmt.Errorf("must specify a user or group")
+	}
+	if strings.ContainsAny(user+group, "/\\\\") {
+		return fmt.Errorf("user and group names cannot contain path separators")
+	}
+	return nil
+}
+
+func userSpecIsRoot(spec string) bool {
+	if spec == "" {
+		return true
+	}
+	user, group, _ := strings.Cut(spec, ":")
+	isRoot := user == "" || user == "root" || user == "0"
+	return isRoot && (group == "" || group == "root" || group == "0")
 }
 
 func pathWithin(parent, child string) bool {

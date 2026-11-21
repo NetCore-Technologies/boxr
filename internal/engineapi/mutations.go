@@ -646,9 +646,6 @@ func createContainerRecord(name string, input dockerCreateRequest) (result state
 		}
 		return empty, err
 	}
-	if input.User != "" {
-		return empty, fmt.Errorf("Config.User is unsupported because image user switching is not implemented")
-	}
 	if input.Tty || input.OpenStdin || input.StdinOnce || input.AttachStdin || input.AttachStdout || input.AttachStderr {
 		return empty, fmt.Errorf("interactive create/attach settings are not supported; use boxr exec -it after the container starts")
 	}
@@ -663,12 +660,13 @@ func createContainerRecord(name string, input dockerCreateRequest) (result state
 	if _, err := imageStore.Verify(imageReference); err != nil {
 		return empty, fmt.Errorf("verify local image %q: %w", imageReference, err)
 	}
-	if image.RuntimeConfig.User != "" {
-		return empty, fmt.Errorf("image declares User=%q, but Boxr image user switching is not implemented", image.RuntimeConfig.User)
-	}
 	options, err := dockerOptions(input.HostConfig)
 	if err != nil {
 		return empty, err
+	}
+	options.User = input.User
+	if options.User == "" {
+		options.User = image.RuntimeConfig.User
 	}
 	options.Name = name
 	options.Workdir = input.WorkingDir

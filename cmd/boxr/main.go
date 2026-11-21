@@ -462,6 +462,7 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 	flags.IntVar(&opts.IOWeight, "io-weight", opts.IOWeight, "relative block I/O weight from 1 to 10000")
 	flags.Int64Var(&opts.PidsLimit, "pids-limit", opts.PidsLimit, "maximum number of tasks in the container cgroup")
 	flags.BoolVar(&opts.MemoryOOMGroup, "oom-group", opts.MemoryOOMGroup, "kill the container cgroup as a unit on memory OOM")
+	flags.StringVar(&opts.User, "user", opts.User, "run as USER[:GROUP] inside the container")
 	flags.StringVar(&opts.Workdir, "workdir", opts.Workdir, "working directory for the command inside the container")
 	flags.StringVar(&opts.RootFS, "rootfs", opts.RootFS, "directory to use as the container root filesystem")
 	flags.StringVar(&opts.OverlayDir, "overlay-dir", opts.OverlayDir, "persistent OverlayFS upper/work storage (requires --rootfs)")
@@ -574,9 +575,8 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 			return 1
 		}
 		imageRuntimeConfig = imageInfo.RuntimeConfig
-		if imageRuntimeConfig.User != "" {
-			fmt.Fprintf(stderr, "boxr run: image %s declares User=%q, but image user switching is not supported yet; use a rootfs/configuration without User metadata\n", imageReference, imageRuntimeConfig.User)
-			return 2
+		if opts.User == "" {
+			opts.User = imageRuntimeConfig.User
 		}
 		if opts.Workdir == "" {
 			opts.Workdir = imageRuntimeConfig.WorkingDir
