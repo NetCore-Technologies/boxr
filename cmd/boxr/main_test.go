@@ -4215,3 +4215,21 @@ func TestWaitForDeploymentHealthySurfacesUnexpectedServiceExit(t *testing.T) {
 		t.Fatalf("unexpected exit = %#v, %v", unexpected, err)
 	}
 }
+
+
+func TestDeploymentHealthyDependencyTimeoutUsesHealthcheckBudget(t *testing.T) {
+	dependent := deploy.Service{StartTimeoutMS: 30000}
+	dependency := deploy.Service{Options: container.Options{Healthcheck: &container.HealthcheckConfig{
+		Test:          []string{"CMD", "/bin/health"},
+		Interval:      45 * time.Second,
+		Timeout:       3 * time.Second,
+		StartPeriod:   20 * time.Second,
+		StartInterval: 2 * time.Second,
+		Retries:       5,
+	}}}
+	got := deploymentHealthyDependencyTimeout(dependent, dependency, 30*time.Second)
+	want := 20*time.Second + 2*time.Second + 5*(45*time.Second+3*time.Second)
+	if got != want {
+		t.Fatalf("healthy dependency timeout = %s, want %s", got, want)
+	}
+}

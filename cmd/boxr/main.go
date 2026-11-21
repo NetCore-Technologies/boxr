@@ -3686,7 +3686,7 @@ var implementedFeatures = []string{
 	"Compose profiles labels working directories and hostnames map to Boxr deployment options",
 	"Compose short-form IPv4 TCP and UDP port mappings map to Boxr published bridge ports",
 	"Compose services attach only to explicit pre-created external Boxr bridge networks or explicit host/none modes",
-	"unsupported Compose builds implicit volume creation implicit networks health-based dependency gates TTY privileged mode and restart policies fail explicitly",
+	"unsupported Compose builds implicit volume creation implicit networks service_completed_successfully dependency gates TTY privileged mode and restart policies fail explicitly",
 	"exec supports explicit -i stdin forwarding and closes stdin by default",
 	"exec -t allocates a pseudo-terminal with a controlling session and combines terminal output",
 	"exec TTY mode propagates SIGWINCH terminal size changes and restores host terminal settings on exit",
@@ -4276,6 +4276,54 @@ type deploymentStatus struct {
 	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
 }
 
+const maxDeploymentHealthyWait = 24 * time.Hour
+
+// deploymentHealthyDependencyTimeout gives health monitors enough time to
+// execute their configured start period, interval, timeout and retry budget.
+// The global cap keeps a malformed or extreme configuration from blocking
+// attached deployment startup indefinitely.
+func deploymentHealthyDependencyTimeout(dependent, dependency deploy.Service, fallback time.Duration) time.Duration {
+	wait := deploymentServiceStartTimeout(dependent, fallback)
+	config := dependency.Options.Healthcheck
+	if !container.HealthcheckEnabled(config) {
+		return wait
+	}
+	normalized, err := container.NormalizeHealthcheck(config)
+	if err != nil {
+		return wait
+	}
+	retries := normalized.Retries
+	if retries <= 0 {
+		retries = container.DefaultHealthcheckRetries
+	}
+	interval := normalized.Interval
+	if interval <= 0 {
+		interval = container.DefaultHealthcheckInterval
+	}
+	timeout := normalized.Timeout
+	if timeout <= 0 {
+		timeout = container.DefaultHealthcheckTimeout
+	}
+	initialInterval := interval
+	if normalized.StartPeriod > 0 {
+		initialInterval = normalized.StartInterval
+		if initialInterval <= 0 {
+			initialInterval = container.DefaultHealthcheckStartInterval
+		}
+	}
+	budget := normalized.StartPeriod + initialInterval + time.Duration(retries)*(interval+timeout)
+	if budget < fallback {
+		budget = fallback
+	}
+	if budget < wait {
+		budget = wait
+	}
+	if budget > maxDeploymentHealthyWait {
+		budget = maxDeploymentHealthyWait
+	}
+	return budget
+}
+
 func deploymentServiceStartTimeout(service deploy.Service, fallback time.Duration) time.Duration {
 	if service.StartTimeoutMS > 0 {
 		return time.Duration(service.StartTimeoutMS) * time.Millisecond
@@ -4695,7 +4743,7 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 			service := file.Services[serviceName]
 			for _, dependency := range service.DependsOnHealthy {
 				dependencyContainer := deploy.ContainerName(file.Name, dependency)
-				dependencyTimeout := deploymentServiceStartTimeout(service, startTimeout)
+				dependencyTimeout := deploymentHealthyDependencyTimeout(service, file.Services[dependency], startTimeout)
 				unexpectedExit, waitErr := waitForDeploymentHealthy(ctx, serviceName, dependency, dependencyContainer, dependencyTimeout, exits)
 				if unexpectedExit != nil {
 					exited[unexpectedExit.service] = *unexpectedExit
