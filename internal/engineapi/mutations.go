@@ -22,6 +22,7 @@ import (
 	boxrnetwork "github.com/manit6752025/boxr/internal/network"
 	"github.com/manit6752025/boxr/internal/registry"
 	"github.com/manit6752025/boxr/internal/state"
+	"github.com/manit6752025/boxr/internal/volume"
 )
 
 const maxCreateBodyBytes = 1 << 20
@@ -711,12 +712,11 @@ func parseDockerBind(value string) (container.BindMount, error) {
 	var result container.BindMount
 	parts := strings.Split(value, ":")
 	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[1] == "" {
-		return result, fmt.Errorf("expected HOST_PATH:CONTAINER_PATH[:ro|rw]")
+		return result, fmt.Errorf("expected HOST_PATH_OR_VOLUME:CONTAINER_PATH[:ro|rw]")
 	}
-	if !filepath.IsAbs(parts[0]) || !filepath.IsAbs(parts[1]) || filepath.Clean(parts[1]) == "/" {
-		return result, fmt.Errorf("source and target must be absolute paths, and target cannot be /")
+	if !filepath.IsAbs(parts[1]) || filepath.Clean(parts[1]) == "/" {
+		return result, fmt.Errorf("container target must be an absolute non-root path")
 	}
-	result.Source = filepath.Clean(parts[0])
 	result.Target = filepath.Clean(parts[1])
 	if len(parts) == 3 {
 		switch parts[2] {
@@ -727,8 +727,20 @@ func parseDockerBind(value string) (container.BindMount, error) {
 			return result, fmt.Errorf("mount mode must be ro or rw")
 		}
 	}
-	if err := validateDockerBindSource(result.Source); err != nil {
-		return result, err
+	if filepath.IsAbs(parts[0]) {
+		result.Source = filepath.Clean(parts[0])
+		if err := validateDockerBindSource(result.Source); err != nil {
+			return result, err
+		}
+	} else {
+		if err := volume.ValidateName(parts[0]); err != nil {
+			return result, fmt.Errorf("source must be an absolute host path or a pre-created Boxr volume name: %w", err)
+		}
+		item, err := volume.Get(parts[0])
+		if err != nil {
+			return result, fmt.Errorf("resolve named volume %q: %w", parts[0], err)
+		}
+		result.Source = item.Path
 	}
 	for _, part := range strings.Split(filepath.ToSlash(result.Target), "/") {
 		if part == ".." {
@@ -737,7 +749,6 @@ func parseDockerBind(value string) (container.BindMount, error) {
 	}
 	return result, nil
 }
-
 func validateDockerBindSource(path string) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return fmt.Errorf("bind source must be a clean absolute path")
