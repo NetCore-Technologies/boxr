@@ -245,7 +245,7 @@ func (s *Server) handleContainerArchive(writer http.ResponseWriter, request *htt
 			readLower = filepath.Join("/proc", strconv.Itoa(record.PID), "root", ".")
 			readUpper = ""
 		}
-		s.handleDockerArchiveGet(writer, request, readLower, readUpper, containerPath, contentsOnly, directoryExpected)
+		s.handleDockerArchiveGet(writer, request, readLower, readUpper, containerPath, contentsOnly, directoryExpected, live)
 	case http.MethodPut:
 		if upperInfo, statErr := os.Lstat(upperRoot); errors.Is(statErr, os.ErrNotExist) {
 			if err := os.MkdirAll(upperRoot, 0700); err != nil {
@@ -265,13 +265,13 @@ func (s *Server) handleContainerArchive(writer http.ResponseWriter, request *htt
 			// upperdir behind a live mount.
 			writeRoot = filepath.Join("/proc", strconv.Itoa(record.PID), "root", ".")
 		}
-		s.handleDockerArchivePut(writer, request, writeRoot, writeRoot, containerPath, noOverwrite)
+		s.handleDockerArchivePut(writer, request, writeRoot, writeRoot, containerPath, noOverwrite, live)
 	default:
 		writeMethodErrorFor(writer, http.MethodGet+", "+http.MethodHead+", "+http.MethodPut)
 	}
 }
 
-func (s *Server) handleDockerArchiveGet(writer http.ResponseWriter, request *http.Request, lowerRoot, upperRoot, containerPath string, contentsOnly, directoryExpected bool) {
+func (s *Server) handleDockerArchiveGet(writer http.ResponseWriter, request *http.Request, lowerRoot, upperRoot, containerPath string, contentsOnly, directoryExpected, denyRestrictedMount bool) {
 	lowerPath, upperPath, info, err := resolveDockerOverlayPath(lowerRoot, upperRoot, containerPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
@@ -284,6 +284,19 @@ func (s *Server) handleDockerArchiveGet(writer http.ResponseWriter, request *htt
 	if directoryExpected && !info.IsDir() {
 		writeError(writer, http.StatusBadRequest, fmt.Errorf("container path was required to be a directory"))
 		return
+	}
+	if denyRestrictedMount {
+		resolvedPath, resolvedRoot := upperPath, upperRoot
+		if resolvedPath == "" {
+			resolvedPath, resolvedRoot = lowerPath, lowerRoot
+		}
+		if resolvedPath != "" {
+			relative, relErr := filepath.Rel(resolvedRoot, resolvedPath)
+			if relErr != nil || dockerArchivePathUsesRestrictedMount(filepath.ToSlash(relative)) {
+				writeError(writer, http.StatusBadRequest, fmt.Errorf("copying through /proc, /sys or /dev is not supported"))
+				return
+			}
+		}
 	}
 	linkTarget := ""
 	if info.Mode()&os.ModeSymlink != 0 {
@@ -696,7 +709,7 @@ func dockerOverlayWhiteouts(upperDir, name string) (bool, error) {
 	return false, nil
 }
 
-func (s *Server) handleDockerArchivePut(writer http.ResponseWriter, request *http.Request, lowerRoot, upperRoot, containerPath string, noOverwrite bool) {
+func (s *Server) handleDockerArchivePut(writer http.ResponseWriter, request *http.Request, lowerRoot, upperRoot, containerPath string, noOverwrite, denyRestrictedMount bool) {
 	lowerDestination, upperDestination, destinationInfo, err := resolveDockerOverlayPath(lowerRoot, upperRoot, containerPath)
 	if err != nil {
 		writeError(writer, http.StatusNotFound, fmt.Errorf("container destination does not exist"))
@@ -721,6 +734,10 @@ func (s *Server) handleDockerArchivePut(writer http.ResponseWriter, request *htt
 		if resolvedDestination == "." {
 			resolvedDestination = ""
 		}
+	}
+	if denyRestrictedMount && dockerArchivePathUsesRestrictedMount(resolvedDestination) {
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("copying through /proc, /sys or /dev is not supported"))
+		return
 	}
 	if request.ContentLength > maxDockerArchiveUploadBytes {
 		writeError(writer, http.StatusRequestEntityTooLarge, fmt.Errorf("archive upload exceeds %d bytes", maxDockerArchiveUploadBytes))
