@@ -1277,10 +1277,8 @@ func TestDockerCreatePersistsVerifiedImageRootFSForContainerLifetime(t *testing.
 	const reference = "registry.example/team/persistent-rootfs:v1"
 	importEngineAPITestImage(t, reference)
 
-	response := engineAPIRequest(server, http.MethodPost, "/v1.45/containers/create?name=persistent-rootfs")
-	// Create requires the JSON image payload, so use a request recorder with body.
 	request := httptest.NewRequest(http.MethodPost, "/v1.45/containers/create?name=persistent-rootfs", strings.NewReader(`{"Image":"`+reference+`"}`))
-	response = httptest.NewRecorder()
+	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
@@ -1305,7 +1303,7 @@ func TestDockerCreatePersistsVerifiedImageRootFSForContainerLifetime(t *testing.
 	if info, err := os.Lstat(expected); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		t.Fatalf("managed image rootfs is not a real directory: info=%v err=%v", info, err)
 	}
-	if _, err := os.Stat(filepath.Join(expected, "etc", "os-release")); err != nil {
+	if _, err := os.Stat(filepath.Join(expected, "bin", "app")); err != nil {
 		t.Fatalf("unpacked image rootfs is incomplete: %v", err)
 	}
 	configPath, err := state.EngineConfigPath(record.ID)
