@@ -63,6 +63,7 @@ type dockerExecSession struct {
 	FinishedAt *time.Time
 	ExitCode   *int
 	PID        int
+	Removed    bool
 }
 
 type dockerExecRunnerFunc func(context.Context, string, dockerExecCreateConfig, io.Reader, io.Writer, io.Writer, func(int), func(*os.File)) (int, error)
@@ -308,6 +309,43 @@ func (s *Server) dockerExecSession(id string) (*dockerExecSession, bool) {
 	return session, ok
 }
 
+func (s *Server) removeDockerExecSession(id string) error {
+	if len(id) != 64 {
+		return fmt.Errorf("invalid exec identifier")
+	}
+	if _, err := hex.DecodeString(id); err != nil {
+		return fmt.Errorf("invalid exec identifier")
+	}
+	s.execMu.Lock()
+	defer s.execMu.Unlock()
+	session, ok := s.execSessions[id]
+	if !ok {
+		return fmt.Errorf("exec session %q not found", id)
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.Running {
+		return fmt.Errorf("exec session %q is running", id)
+	}
+	session.Removed = true
+	delete(s.execSessions, id)
+	return nil
+}
+
+func (s *Server) handleExecDelete(writer http.ResponseWriter, id string) {
+	if err := s.removeDockerExecSession(id); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(writer, http.StatusNotFound, err)
+		} else if strings.Contains(err.Error(), "running") {
+			writeError(writer, http.StatusConflict, err)
+		} else {
+			writeError(writer, http.StatusBadRequest, err)
+		}
+		return
+	}
+	writer.WriteHeader(http.StatusOK)
+}
+
 func decodeDockerExecStartConfig(request *http.Request) (dockerExecStartConfig, error) {
 	var config dockerExecStartConfig
 	data, err := io.ReadAll(io.LimitReader(request.Body, maxDockerExecBodyBytes+1))
@@ -368,6 +406,11 @@ func (s *Server) handleExecStart(writer http.ResponseWriter, request *http.Reque
 	upgrade := dockerExecUpgradeRequested(request) && !startConfig.Detach
 
 	session.mu.Lock()
+	if session.Removed {
+		session.mu.Unlock()
+		writeError(writer, http.StatusNotFound, fmt.Errorf("exec session %q not found", id))
+		return
+	}
 	if session.Started {
 		session.mu.Unlock()
 		writeError(writer, http.StatusConflict, fmt.Errorf("exec session %q has already been started", id))
@@ -548,6 +591,11 @@ func (s *Server) handleExecResize(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	session.mu.Lock()
+	if session.Removed {
+		session.mu.Unlock()
+		writeError(writer, http.StatusNotFound, fmt.Errorf("exec session %q not found", id))
+		return
+	}
 	if !session.Config.Tty {
 		session.mu.Unlock()
 		writeError(writer, http.StatusBadRequest, fmt.Errorf("exec session was not created with a TTY"))
@@ -575,6 +623,10 @@ func (s *Server) handleExecInspect(writer http.ResponseWriter, id string) {
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if session.Removed {
+		writeError(writer, http.StatusNotFound, fmt.Errorf("exec session %q not found", id))
+		return
+	}
 	entrypoint, arguments := "", []string{}
 	if len(session.Config.Cmd) > 0 {
 		entrypoint = session.Config.Cmd[0]
