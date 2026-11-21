@@ -50,8 +50,8 @@ var (
 )
 
 var (
-	detachedReadyWriter *os.File
-	detachedReadySent   bool
+	detachedReadyWriter    *os.File
+	detachedReadySent      bool
 	launchCreatedContainer = func(executable string, args []string, stdout, stderr io.Writer) error {
 		command := exec.Command(executable, args...)
 		command.Stdout, command.Stderr = stdout, stderr
