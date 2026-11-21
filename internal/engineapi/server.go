@@ -456,11 +456,14 @@ func (s *Server) handleInfo(writer http.ResponseWriter) {
 		writeError(writer, http.StatusInternalServerError, err)
 		return
 	}
-	running, stopped := 0, 0
+	running, paused, stopped := 0, 0, 0
 	for _, record := range records {
-		if record.Status == "running" || record.Status == "restarting" {
+		switch record.Status {
+		case "running", "restarting":
 			running++
-		} else {
+		case "paused":
+			paused++
+		default:
 			stopped++
 		}
 	}
@@ -472,7 +475,7 @@ func (s *Server) handleInfo(writer http.ResponseWriter) {
 	kernelVersion, _ := os.ReadFile("/proc/sys/kernel/osrelease")
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"ID": hostname, "Containers": len(records), "ContainersRunning": running,
-		"ContainersPaused": 0, "ContainersStopped": stopped, "Images": len(images),
+		"ContainersPaused": paused, "ContainersStopped": stopped, "Images": len(images),
 		"Driver": "boxr-rootfs", "DriverStatus": [][]string{}, "BoxrStateDir": stateDir,
 		"OperatingSystem": "Boxr", "OSType": "linux", "Architecture": runtime.GOARCH,
 		"KernelVersion": strings.TrimSpace(string(kernelVersion)), "NCPU": runtime.NumCPU(),
