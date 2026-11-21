@@ -370,6 +370,13 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			s.handleImagePush(writer, request, strings.TrimSuffix(remainder, "/push"))
 			return
 		}
+		if strings.HasSuffix(remainder, "/history") {
+			if !requireMethod(writer, request, http.MethodGet) {
+				return
+			}
+			s.handleImageHistory(writer, strings.TrimSuffix(remainder, "/history"))
+			return
+		}
 		if strings.HasSuffix(remainder, "/json") {
 			if !requireMethod(writer, request, http.MethodGet) {
 				return
