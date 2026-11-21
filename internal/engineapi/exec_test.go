@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -60,7 +61,7 @@ func TestDockerEngineExecCreateStartStreamAndInspect(t *testing.T) {
 	originalRunner := dockerExecRunner
 	t.Cleanup(func() { dockerExecRunner = originalRunner })
 	var sawConfig bool
-	dockerExecRunner = func(_ context.Context, containerID string, config dockerExecCreateConfig, stdout, stderr io.Writer, onStart func(int)) (int, error) {
+	dockerExecRunner = func(_ context.Context, containerID string, config dockerExecCreateConfig, _ io.Reader, stdout, stderr io.Writer, onStart func(int), _ func(*os.File)) (int, error) {
 		sawConfig = containerID == record.ID && strings.Join(config.Cmd, "|") == "/bin/example|hello" &&
 			config.WorkingDir == "/srv/app" && config.User == "root" && len(config.Env) == 1 && config.Env[0] == "APP_MODE=test"
 		onStart(4321)
@@ -129,7 +130,7 @@ func TestDockerEngineExecDetachedSessionCanBeInspectedWhileRunning(t *testing.T)
 	t.Cleanup(func() { dockerExecRunner = originalRunner })
 	started := make(chan struct{})
 	release := make(chan struct{})
-	dockerExecRunner = func(_ context.Context, _ string, _ dockerExecCreateConfig, _, _ io.Writer, onStart func(int)) (int, error) {
+	dockerExecRunner = func(_ context.Context, _ string, _ dockerExecCreateConfig, _ io.Reader, _, _ io.Writer, onStart func(int), _ func(*os.File)) (int, error) {
 		onStart(7654)
 		close(started)
 		<-release
@@ -183,14 +184,14 @@ func TestDockerEngineExecRejectsUnsupportedOrUnsafeCreateOptions(t *testing.T) {
 		name   string
 		config dockerExecCreateConfig
 	}{
-		{name: "stdin", config: dockerExecCreateConfig{AttachStdin: true, Cmd: []string{"/bin/true"}}},
-		{name: "tty", config: dockerExecCreateConfig{Tty: true, Cmd: []string{"/bin/true"}}},
+
 		{name: "privileged", config: dockerExecCreateConfig{Privileged: true, Cmd: []string{"/bin/true"}}},
 		{name: "invalid user", config: dockerExecCreateConfig{User: "bad user", Cmd: []string{"/bin/true"}}},
 		{name: "empty command", config: dockerExecCreateConfig{}},
 		{name: "invalid environment", config: dockerExecCreateConfig{Env: []string{"BAD-KEY=value"}, Cmd: []string{"/bin/true"}}},
 		{name: "relative working directory", config: dockerExecCreateConfig{WorkingDir: "relative", Cmd: []string{"/bin/true"}}},
-		{name: "TTY console size", config: dockerExecCreateConfig{ConsoleSize: []uint{24, 80}, Cmd: []string{"/bin/true"}}},
+		{name: "console size without TTY", config: dockerExecCreateConfig{ConsoleSize: []uint{24, 80}, Cmd: []string{"/bin/true"}}},
+		{name: "invalid TTY console size", config: dockerExecCreateConfig{Tty: true, ConsoleSize: []uint{24}, Cmd: []string{"/bin/true"}}},
 		{name: "TTY detach keys", config: dockerExecCreateConfig{DetachKeys: "ctrl-p,ctrl-q", Cmd: []string{"/bin/true"}}},
 	}
 	for _, test := range cases {
