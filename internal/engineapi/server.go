@@ -518,6 +518,20 @@ func containerStatus(record state.Record) string {
 	}
 }
 
+func dockerStatusWithHealth(status string, health *state.HealthState) string {
+	if health == nil || !strings.HasPrefix(status, "Up ") {
+		return status
+	}
+	switch health.Status {
+	case "healthy", "unhealthy":
+		return status + " (" + health.Status + ")"
+	case "starting":
+		return status + " (health: starting)"
+	default:
+		return status
+	}
+}
+
 func displayName(record state.Record) string {
 	if record.Name != "" {
 		return "/" + record.Name
@@ -561,7 +575,7 @@ func (s *Server) handleContainers(writer http.ResponseWriter, request *http.Requ
 			"Id": record.ID, "Names": []string{displayName(record)}, "Image": image,
 			"ImageID": imageID, "Command": command, "Created": record.CreatedAt.Unix(),
 			"Ports": portsForOptions(record.Options), "Labels": record.Labels,
-			"State": containerState(record), "Status": containerStatus(record),
+			"State": containerState(record), "Status": dockerStatusWithHealth(containerStatus(record), record.Health),
 			"HostConfig":      map[string]any{"NetworkMode": dockerNetworkMode(record.Options)},
 			"NetworkSettings": map[string]any{"Networks": map[string]any{}},
 		}
