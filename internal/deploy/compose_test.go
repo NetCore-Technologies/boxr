@@ -283,6 +283,148 @@ volumes:
 	}
 }
 
+func TestLoadComposeTranslatesLongFormBindVolumeAndTmpfsMounts(t *testing.T) {
+	dir := t.TempDir()
+	bindDir := filepath.Join(dir, "config")
+	if err := os.Mkdir(bindDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "compose.yaml")
+	contents := strings.Join([]string{
+		"services:",
+		"  api:",
+		"    image: alpine:3.21",
+		"    network_mode: none",
+		"    volumes:",
+		"      - type: bind",
+		"        source: ./config",
+		"        target: /etc/app",
+		"        read_only: true",
+		"        bind:",
+		"          propagation: rprivate",
+		"          create_host_path: false",
+		"      - type: volume",
+		"        source: data",
+		"        target: /var/lib/data",
+		"        read_only: true",
+		"        volume:",
+		"          nocopy: true",
+		"      - type: tmpfs",
+		"        target: /run",
+		"        tmpfs:",
+		"          size: 64m",
+		"          mode: 1023",
+		"volumes:",
+		"  data:",
+		"    external: true",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load Compose long-form mounts: %v", err)
+	}
+	service := file.Services["api"]
+	if !reflect.DeepEqual(service.Volumes, []VolumeMount{{Name: "data", Target: "/var/lib/data", ReadOnly: true}}) {
+		t.Fatalf("long-form external volume translation = %#v", service.Volumes)
+	}
+	if !reflect.DeepEqual(service.Options.BindMounts, []container.BindMount{{Source: bindDir, Target: "/etc/app", ReadOnly: true}}) {
+		t.Fatalf("long-form bind translation = %#v", service.Options.BindMounts)
+	}
+	if !reflect.DeepEqual(service.Options.TmpfsMounts, []container.TmpfsMount{{Target: "/run", SizeBytes: 64 << 20, Mode: 1023}}) {
+		t.Fatalf("long-form tmpfs translation = %#v", service.Options.TmpfsMounts)
+	}
+}
+	if _, err := BuildPlan(file); err != nil {
+		t.Fatalf("BuildPlan(long-form mounts): %v", err)
+	}
+
+
+func TestLoadComposeLongFormMountsRejectUnsupportedSemantics(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "config"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name     string
+		mounts   string
+		topLevel string
+	}{
+		{
+			name: "host path auto creation",
+			mounts: "      - type: bind\n        source: ./config\n        target: /data\n        bind:\n          create_host_path: true",
+		},
+		{
+			name: "unsupported propagation",
+			mounts: "      - type: bind\n        source: ./config\n        target: /data\n        bind:\n          propagation: rshared",
+		},
+		{
+			name: "unknown bind option",
+			mounts: "      - type: bind\n        source: ./config\n        target: /data\n        bind:\n          recursive: disabled",
+		},
+		{
+			name: "volume copy up",
+			mounts: "      - type: volume\n        source: data\n        target: /data",
+			topLevel: "volumes:\n  data:\n    external: true\n",
+		},
+		{
+			name: "volume copy up explicitly enabled",
+			mounts: "      - type: volume\n        source: data\n        target: /data\n        volume:\n          nocopy: false",
+			topLevel: "volumes:\n  data:\n    external: true\n",
+		},
+		{
+			name: "volume subpath",
+			mounts: "      - type: volume\n        source: data\n        target: /data\n        volume:\n          nocopy: true\n          subpath: child",
+			topLevel: "volumes:\n  data:\n    external: true\n",
+		},
+		{
+			name: "tmpfs missing size",
+			mounts: "      - type: tmpfs\n        target: /run\n        tmpfs:\n          mode: 1023",
+		},
+		{
+			name: "tmpfs too large",
+			mounts: "      - type: tmpfs\n        target: /run\n        tmpfs:\n          size: 2g",
+		},
+		{
+			name: "combined tmpfs limit",
+			mounts: "      - type: tmpfs\n        target: /run/a\n        tmpfs:\n          size: 1g\n      - type: tmpfs\n        target: /run/b\n        tmpfs:\n          size: 1g\n      - type: tmpfs\n        target: /run/c\n        tmpfs:\n          size: 1g",
+		},
+		{
+			name: "tmpfs unknown option",
+			mounts: "      - type: tmpfs\n        target: /run\n        tmpfs:\n          size: 64m\n          noexec: true",
+		},
+		{
+			name: "tmpfs marked read only",
+			mounts: "      - type: tmpfs\n        target: /run\n        read_only: true\n        tmpfs:\n          size: 64m",
+		},
+		{
+			name: "target traversal",
+			mounts: "      - type: tmpfs\n        target: /data/../escape\n        tmpfs:\n          size: 64m",
+		},
+		{
+			name: "duplicate mount target",
+			mounts: "      - type: bind\n        source: ./config\n        target: /shared\n      - type: tmpfs\n        target: /shared\n        tmpfs:\n          size: 64m",
+		},
+		{
+			name: "nested mount targets",
+			mounts: "      - type: bind\n        source: ./config\n        target: /workspace\n      - type: tmpfs\n        target: /workspace/cache\n        tmpfs:\n          size: 64m",
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			contents := "services:\n  api:\n    image: alpine:3.21\n    network_mode: none\n    volumes:\n" + test.mounts + "\n" + test.topLevel
+			path := filepath.Join(dir, strings.ReplaceAll(test.name, " ", "-")+".yaml")
+			if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatal("unsupported long-form mount semantics were accepted")
+			}
+		})
+	}
+}
+
 func TestLoadComposeRejectsUnsafeOrImplicitVolumeSemantics(t *testing.T) {
 	dir := t.TempDir()
 	missingBind := filepath.Join(dir, "does-not-exist")
@@ -305,7 +447,7 @@ func TestLoadComposeRejectsUnsafeOrImplicitVolumeSemantics(t *testing.T) {
 			volumes: "volumes: [./config:/data:ro,z]",
 		},
 		{
-			name:     "long syntax",
+			name:     "long-form volume requires explicit no-copy",
 			volumes:  "volumes:\n      - type: volume\n        source: data\n        target: /data\n",
 			topLevel: "volumes:\n  data:\n    external: true\n",
 		},
