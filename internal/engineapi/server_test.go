@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -239,6 +240,78 @@ func TestContainerAttachStreamsDockerMultiplexedLogSnapshot(t *testing.T) {
 	}
 	if string(body[8:]) != string(payload) {
 		t.Fatalf("attach payload=%q want %q", body[8:], payload)
+	}
+}
+
+func TestContainerAttachSupportsDockerTCPUpgrade(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("attach-upgrade-test", []string{"/bin/echo", "hello"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := state.OpenLog(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("upgraded attach output\n")
+	if _, err := logFile.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := logFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	target, err := url.Parse(httpServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := net.Dial("tcp", target.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	requestPath := "/v1.45/containers/" + record.ID + "/attach?logs=1&stream=0&stdout=1"
+	if _, err := fmt.Fprintf(connection,
+		"POST %s HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Length: 0\r\n\r\n",
+		requestPath, target.Host); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(connection)
+	statusLine, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(statusLine, "101 UPGRADED") {
+		t.Fatalf("Docker attach upgrade response = %q", statusLine)
+	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	var header [8]byte
+	if _, err := io.ReadFull(reader, header[:]); err != nil {
+		t.Fatalf("read upgraded attach frame header: %v", err)
+	}
+	if header[0] != 1 {
+		t.Fatalf("upgraded attach stream type = %d, want stdout", header[0])
+	}
+	length := binary.BigEndian.Uint32(header[4:])
+	if length != uint32(len(payload)) {
+		t.Fatalf("upgraded attach frame length = %d, want %d", length, len(payload))
+	}
+	body := make([]byte, length)
+	if _, err := io.ReadFull(reader, body); err != nil {
+		t.Fatalf("read upgraded attach payload: %v", err)
+	}
+	if string(body) != string(payload) {
+		t.Fatalf("upgraded attach payload = %q, want %q", body, payload)
 	}
 }
 
