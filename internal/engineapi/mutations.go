@@ -920,7 +920,7 @@ func parseDockerMounts(rawMounts []json.RawMessage) ([]container.BindMount, []co
 					return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].BindOptions.Propagation supports only rprivate", index)
 				}
 			}
-						parsed, err := parseDockerBindPaths(mount.Source, target, mount.ReadOnly)
+			parsed, err := parseDockerBindPaths(mount.Source, target, mount.ReadOnly)
 			if err != nil {
 				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d]: %w", index, err)
 			}
