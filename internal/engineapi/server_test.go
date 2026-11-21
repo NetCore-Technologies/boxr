@@ -1901,7 +1901,6 @@ func TestDockerAnonymousVolumeCreateAndPruneProtectsContainerReferences(t *testi
 	}
 }
 
-
 func TestDockerNetworkPruneFiltersAndProtectsContainerReferences(t *testing.T) {
 	server := setupEngineAPITest(t)
 	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
