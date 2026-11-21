@@ -1018,11 +1018,15 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 		"Pid": record.PID, "ExitCode": exitCode(record.ExitCode), "Error": record.Error,
 		"StartedAt": startedAt, "FinishedAt": finishedAt,
 	}
+	if record.Health != nil {
+		stateObject["Health"] = record.Health
+	}
 	configObject := map[string]any{
 		"Hostname": record.Options.Hostname, "Cmd": record.Command,
 		"Image": image, "WorkingDir": record.Options.Workdir, "Labels": record.Labels,
 		"ExposedPorts": dockerContainerExposedPorts(record.Options.ExposedPorts),
 		"StopSignal":   record.Options.StopSignal,
+		"Healthcheck":  record.Options.Healthcheck,
 		"OpenStdin":    false, "StdinOnce": false, "Tty": false,
 	}
 	hostConfig := map[string]any{
@@ -1362,6 +1366,7 @@ func dockerImageConfig(config imageStore.ImageRuntimeConfig) map[string]any {
 		"Env": env, "Cmd": command, "Entrypoint": entrypoint,
 		"WorkingDir": config.WorkingDir, "User": config.User, "Labels": labels,
 		"Volumes": volumes, "ExposedPorts": exposedPorts, "StopSignal": config.StopSignal,
+		"Healthcheck": config.Healthcheck,
 	}
 }
 

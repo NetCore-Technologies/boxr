@@ -652,9 +652,6 @@ func createContainerRecord(name string, input dockerCreateRequest) (result state
 	if input.Tty || input.OpenStdin || input.StdinOnce || input.AttachStdin || input.AttachStdout || input.AttachStderr {
 		return empty, fmt.Errorf("interactive create/attach settings are not supported; use boxr exec -it after the container starts")
 	}
-	if len(input.Healthcheck) > 0 && string(input.Healthcheck) != "null" {
-		return empty, fmt.Errorf("Docker Healthcheck configuration is not implemented by Engine API create")
-	}
 
 	if strings.TrimSpace(name) != "" {
 		name = strings.TrimPrefix(name, "/")
@@ -680,6 +677,11 @@ func createContainerRecord(name string, input dockerCreateRequest) (result state
 	}
 	options.Hostname = input.Hostname
 	options.Env = container.MergeEnvironment(image.RuntimeConfig.Env, input.Env)
+	healthcheck, err := dockerConfigHealthcheck(input.Healthcheck, image.RuntimeConfig.Healthcheck)
+	if err != nil {
+		return empty, fmt.Errorf("validate Docker Healthcheck: %w", err)
+	}
+	options.Healthcheck = healthcheck
 	stopSignal, err := dockerConfigStopSignal(input.StopSignal, image.RuntimeConfig.StopSignal)
 	if err != nil {
 		return empty, fmt.Errorf("validate Docker Config.StopSignal: %w", err)
@@ -792,6 +794,26 @@ func createContainerRecord(name string, input dockerCreateRequest) (result state
 
 // dockerConfigStopSignal applies the container override or inherits the image
 // signal. An empty result means Docker's default SIGTERM at stop time.
+func dockerConfigHealthcheck(requested json.RawMessage, imageDefault *container.HealthcheckConfig) (*container.HealthcheckConfig, error) {
+	if len(requested) == 0 || bytes.Equal(bytes.TrimSpace(requested), []byte("null")) {
+		return container.NormalizeHealthcheck(imageDefault)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(requested))
+	decoder.DisallowUnknownFields()
+	var config container.HealthcheckConfig
+	if err := decoder.Decode(&config); err != nil {
+		return nil, fmt.Errorf("decode Healthcheck object: %w", err)
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("decode Healthcheck object: multiple JSON values")
+		}
+		return nil, fmt.Errorf("decode Healthcheck object: %w", err)
+	}
+	return container.NormalizeHealthcheck(&config)
+}
+
 func dockerConfigStopSignal(requested, imageDefault string) (string, error) {
 	value := imageDefault
 	if requested != "" {

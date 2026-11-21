@@ -107,3 +107,6 @@ boxr image build --tag example/api:online --network host -f Dockerfile .
 ```
 
 `USER` metadata is preserved in the resulting image, but `RUN` after a non-root `USER` is rejected for now; build commands currently execute as root inside a user namespace. A base image with a non-root default user is subject to the same restriction unless the Dockerfile switches back to root before `RUN`.
+
+
+Dockerfile `HEALTHCHECK` supports exec-form and shell-form probes, bounded interval/timeout/start-period/start-interval settings, retry limits, and `NONE` to disable an inherited image healthcheck.
