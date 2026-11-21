@@ -479,6 +479,8 @@ func (s *Server) handleContainerCreate(writer http.ResponseWriter, request *http
 	defer s.imageMu.Unlock()
 	s.volumeMu.Lock()
 	defer s.volumeMu.Unlock()
+	s.networkMu.Lock()
+	defer s.networkMu.Unlock()
 
 	data, err := io.ReadAll(io.LimitReader(request.Body, maxCreateBodyBytes+1))
 	if err != nil {
