@@ -786,6 +786,10 @@ func createContainerRecord(name string, input dockerCreateRequest) (result state
 		}
 		return empty, fmt.Errorf("copy image data into Docker volumes: %w", err)
 	}
+	// state.Create deliberately removes environment values from the public
+	// container record. Restore them only in this returned value so the caller
+	// can place them in the owner-only Engine API config sidecar.
+	record.Options.Env = append([]string(nil), options.Env...)
 	anonymousVolumesCommitted = true
 	return record, nil
 }
