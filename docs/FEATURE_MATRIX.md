@@ -923,3 +923,7 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 911. Docker container list supports network-name/network-ID-prefix, health, exited-code, and negative-label filters against live managed endpoint metadata
 912. Docker exec supports upgraded stdin streams, non-TTY Docker stdout/stderr multiplex framing, Linux TTY/PTY raw streams, and bounded PTY resize requests
 913. Engine API stdin socket placement falls back to a private per-user short path when a configured state directory exceeds Unix-domain socket path limits
+
+
+914. Docker network connect supports validated static IPv4 endpoint addresses and explicit unicast MAC addresses, persists them in IPAM state, and configures the container interface
+915. Docker EndpointConfig rejects unsupported aliases links IPv6 link-local addresses and driver options instead of silently dropping them
