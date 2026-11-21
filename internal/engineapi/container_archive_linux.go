@@ -160,6 +160,25 @@ func (s *Server) handleContainerArchive(writer http.ResponseWriter, request *htt
 		writeError(writer, http.StatusConflict, fmt.Errorf("container image rootfs is not a verified Boxr-managed directory"))
 		return
 	}
+	if overlayInfo, overlayErr := os.Lstat(overlayDir); overlayErr == nil {
+		if overlayInfo.Mode()&os.ModeSymlink != 0 || !overlayInfo.IsDir() {
+			writeError(writer, http.StatusConflict, fmt.Errorf("container writable-layer directory is not a real directory"))
+			return
+		}
+	} else if !errors.Is(overlayErr, os.ErrNotExist) {
+		writeError(writer, http.StatusInternalServerError, fmt.Errorf("inspect container writable-layer directory: %w", overlayErr))
+		return
+	} else if request.Method == http.MethodPut {
+		parentInfo, parentErr := os.Lstat(filepath.Dir(overlayDir))
+		if parentErr != nil || parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() {
+			writeError(writer, http.StatusConflict, fmt.Errorf("container writable-layer parent is not a verified directory"))
+			return
+		}
+		if err := os.Mkdir(overlayDir, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+			writeError(writer, http.StatusInternalServerError, fmt.Errorf("create container writable-layer directory: %w", err))
+			return
+		}
+	}
 	upperRoot := filepath.Join(overlayDir, "upper")
 	if info, statErr := os.Lstat(upperRoot); statErr == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
