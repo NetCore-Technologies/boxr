@@ -546,8 +546,20 @@ func publishCopyUpTree(source, destination string) error {
 					return err
 				}
 			}
-			if err := os.Chmod(destinationPath, info.Mode().Perm()); err != nil {
-				return fmt.Errorf("restore published directory mode %s: %w", destinationPath, err)
+			directory, err := os.Open(destinationPath)
+			if err != nil {
+				return fmt.Errorf("open published directory for sync %s: %w", destinationPath, err)
+			}
+			modeErr := os.Chmod(destinationPath, info.Mode().Perm())
+			syncErr := directory.Sync()
+			closeErr := directory.Close()
+			if modeErr != nil || syncErr != nil || closeErr != nil {
+				return errors.Join(
+					fmt.Errorf("finalize published directory %s", destinationPath),
+					modeErr,
+					syncErr,
+					closeErr,
+				)
 			}
 		case info.Mode().IsRegular():
 			if err := os.Link(sourcePath, destinationPath); err != nil {
