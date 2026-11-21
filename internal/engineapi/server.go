@@ -30,8 +30,9 @@ const (
 )
 
 type Server struct {
-	version string
-	imageMu sync.Mutex
+	version  string
+	imageMu  sync.Mutex
+	volumeMu sync.Mutex
 }
 
 func New(version string) *Server {
@@ -763,12 +764,28 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 			"HostIp": mapping.HostIP, "HostPort": strconv.Itoa(int(mapping.HostPort)),
 		})
 	}
+	volumeNames := make(map[string]string)
+	storedVolumes, volumeErr := volume.List()
+	if volumeErr != nil {
+		writeError(writer, http.StatusInternalServerError, fmt.Errorf("inspect volume metadata: %w", volumeErr))
+		return
+	}
+	for _, item := range storedVolumes {
+		volumeNames[item.Path] = item.Name
+	}
 	mounts := make([]map[string]any, 0, len(record.Options.BindMounts))
 	for _, mount := range record.Options.BindMounts {
-		mounts = append(mounts, map[string]any{
-			"Type": "bind", "Source": mount.Source, "Destination": mount.Target,
+		mountType := "bind"
+		mountInfo := map[string]any{
+			"Type": mountType, "Source": mount.Source, "Destination": mount.Target,
 			"RW": !mount.ReadOnly,
-		})
+		}
+		if name, ok := volumeNames[mount.Source]; ok {
+			mountInfo["Type"] = "volume"
+			mountInfo["Name"] = name
+			mountInfo["Driver"] = "local"
+		}
+		mounts = append(mounts, mountInfo)
 	}
 	stateObject := map[string]any{
 		"Status": containerState(record), "Running": running, "Paused": false,
@@ -830,13 +847,22 @@ func dockerPortBindings(options container.Options) map[string][]map[string]strin
 }
 
 func dockerBinds(options container.Options) []string {
+	volumes, _ := volume.List()
+	volumeNames := make(map[string]string, len(volumes))
+	for _, item := range volumes {
+		volumeNames[item.Path] = item.Name
+	}
 	result := make([]string, 0, len(options.BindMounts))
 	for _, mount := range options.BindMounts {
 		mode := "rw"
 		if mount.ReadOnly {
 			mode = "ro"
 		}
-		result = append(result, mount.Source+":"+mount.Target+":"+mode)
+		source := mount.Source
+		if name, ok := volumeNames[mount.Source]; ok {
+			source = name
+		}
+		result = append(result, source+":"+mount.Target+":"+mode)
 	}
 	return result
 }
