@@ -156,6 +156,12 @@ func (s *Server) handleContainerCommit(writer http.ResponseWriter, request *http
 		writeError(writer, http.StatusConflict, fmt.Errorf("verify container writable upperdir: %w", err))
 		return
 	}
+	if _, err := os.Lstat(upperRoot); errors.Is(err, os.ErrNotExist) {
+		upperRoot = ""
+	} else if err != nil {
+		writeError(writer, http.StatusInternalServerError, fmt.Errorf("inspect container writable upperdir: %w", err))
+		return
+	}
 
 	baseImage, err := imageStore.Inspect(record.Labels["io.boxr.image"])
 	if err != nil {
@@ -192,7 +198,7 @@ func (s *Server) handleContainerCommit(writer http.ResponseWriter, request *http
 		return
 	}
 	for _, candidate := range records {
-		if candidate.ID != record.ID && candidate.Labels["io.boxr.image"] == reference {
+		if candidate.Labels["io.boxr.image"] == reference {
 			writeError(writer, http.StatusConflict, fmt.Errorf("cannot replace image %q while container %s references it", reference, candidate.ID))
 			return
 		}
