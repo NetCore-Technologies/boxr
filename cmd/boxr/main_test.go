@@ -201,7 +201,6 @@ func TestImagePullRequiresReference(t *testing.T) {
 	}
 }
 
-
 func TestImagePullBatchContinuesAfterFailureAndDeduplicates(t *testing.T) {
 	var tarData bytes.Buffer
 	tarWriter := tar.NewWriter(&tarData)
