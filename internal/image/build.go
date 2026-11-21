@@ -300,7 +300,7 @@ func buildDockerfileStages(
 								return empty, fmt.Errorf("COPY --from image %q changed while its rootfs was being staged", step.copyFrom)
 							}
 							externalImageRoots[step.copyFrom] = copyRoot
-					}
+						}
 					}
 					copyIgnore = nil
 				}
