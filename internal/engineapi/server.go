@@ -44,7 +44,7 @@ type Server struct {
 	execSessions          map[string]*dockerExecSession
 	createNetwork         func(string, boxrnetwork.CreateOptions) (boxrnetwork.Network, error)
 	removeNetwork         func(string) error
-	joinNetwork           func(string, int, string, ...boxrnetwork.PortMapping) (string, error)
+	joinNetwork           func(string, int, string, boxrnetwork.EndpointOptions, ...boxrnetwork.PortMapping) (string, error)
 	leaveNetwork          func(string, string) error
 	verifyNetworkPID      func(state.Record) error
 	verifyExecPID         func(state.Record) error
@@ -61,7 +61,7 @@ func New(version string) *Server {
 		version:               version,
 		createNetwork:         boxrnetwork.Create,
 		removeNetwork:         boxrnetwork.Remove,
-		joinNetwork:           boxrnetwork.Join,
+		joinNetwork:           boxrnetwork.JoinWithOptions,
 		leaveNetwork:          boxrnetwork.Leave,
 		verifyNetworkPID:      verifyDockerContainerPID,
 		verifyExecPID:         verifyDockerContainerPID,
