@@ -71,7 +71,14 @@ func runContainerHealthMonitor(ctx context.Context, id string, input *container.
 		}
 
 		record, err := state.Get(id)
-		if err != nil || record.Status != "running" {
+		if err != nil {
+			return
+		}
+		if record.Status == "paused" {
+			timer.Reset(config.Interval)
+			continue
+		}
+		if record.Status != "running" {
 			return
 		}
 		result := executeContainerHealthcheck(ctx, id, config)
@@ -79,8 +86,22 @@ func runContainerHealthMonitor(ctx context.Context, id string, input *container.
 			return
 		}
 		record, err = state.Get(id)
-		if err != nil || record.Status != "running" {
+		if err != nil {
 			return
+		}
+		if record.Status == "paused" {
+			timer.Reset(config.Interval)
+			continue
+		}
+		if record.Status != "running" {
+			return
+		}
+		pausedDuringProbe, pauseCheckErr := healthcheckProbeOverlappedPause(id, result.Start, result.End)
+		if pauseCheckErr != nil || pausedDuringProbe {
+			// A probe blocked by the cgroup freezer is not evidence of an
+			// unhealthy workload. Preserve prior health state and retry later.
+			timer.Reset(config.Interval)
+			continue
 		}
 		current := state.HealthState{Status: "starting", Log: []state.HealthLog{}}
 		if record.Health != nil {
@@ -179,3 +200,22 @@ func nextContainerHealthState(current state.HealthState, startedAt *time.Time, c
 }
 
 var _ io.Writer = (*healthOutputBuffer)(nil)
+
+func healthcheckProbeOverlappedPause(id string, started, ended time.Time) (bool, error) {
+	if ended.Before(started) {
+		return false, fmt.Errorf("healthcheck probe ended before it started")
+	}
+	events, err := state.Events(1000)
+	if err != nil {
+		return false, err
+	}
+	for _, event := range events {
+		if event.ID != id || (event.Action != "pause" && event.Action != "unpause") {
+			continue
+		}
+		if !event.Time.Before(started) && !event.Time.After(ended) {
+			return true, nil
+		}
+	}
+	return false, nil
+}

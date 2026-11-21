@@ -3,6 +3,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -64,5 +66,56 @@ func TestHealthOutputBufferEnforcesOutputLimit(t *testing.T) {
 	}
 	if got := len(output.String()); got != container.MaxHealthcheckOutputBytes {
 		t.Fatalf("health output size = %d", got)
+	}
+}
+
+func TestHealthcheckProbeOverlappedPause(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BOXR_STATE_DIR", filepath.Join(root, "state"))
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(root, "images"))
+
+	created, err := state.Create("health-pause", []string{"/bin/sleep", "30"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(created.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	running, err := state.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC().Add(-time.Second)
+	if err := state.SetPaused(running.ID, running.PID, running.ProcessStartTicks, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SetPaused(running.ID, running.PID, running.ProcessStartTicks, false); err != nil {
+		t.Fatal(err)
+	}
+	overlapped, err := healthcheckProbeOverlappedPause(running.ID, started, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !overlapped {
+		t.Fatal("healthcheck probe overlapping a pause/unpause cycle was not detected")
+	}
+}
+
+func TestHealthcheckProbeWithoutPauseIsNotDiscarded(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("BOXR_STATE_DIR", filepath.Join(root, "state"))
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(root, "images"))
+
+	created, err := state.Create("health-no-pause", []string{"/bin/sleep", "30"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC().Add(-time.Second)
+	overlapped, err := healthcheckProbeOverlappedPause(created.ID, started, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overlapped {
+		t.Fatal("healthcheck probe without a pause transition was discarded")
 	}
 }

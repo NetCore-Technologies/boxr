@@ -915,3 +915,4 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 905. Docker Engine inspect reports State.Paused and State.Running consistently with persisted paused status, while prune protects paused containers
 906. Docker Engine container changes reports bounded added changed and deleted paths from managed image and writable filesystem layers
 907. Docker exec supports validated USER[:GROUP] overrides and otherwise inherits the container's configured identity
+908. Container health monitors suspend probes while paused and discard probes overlapping pause/unpause so freezer delays do not create false unhealthy transitions
