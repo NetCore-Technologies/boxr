@@ -205,6 +205,139 @@ func removeManagedOverlay(record Record) error {
 	return nil
 }
 
+// ManagedRootFSDir returns the private immutable image snapshot path owned by
+// an Engine API container. The final directory is intentionally not created so
+// image unpack can publish it atomically.
+func ManagedRootFSDir(id string) (string, error) {
+	if !validContainerID(id) {
+		return "", fmt.Errorf("invalid container ID for rootfs storage")
+	}
+	dir, err := ensureDir()
+	if err != nil {
+		return "", err
+	}
+	parent := filepath.Join(dir, "rootfs")
+	if err := os.MkdirAll(parent, 0700); err != nil {
+		return "", fmt.Errorf("create managed rootfs parent: %w", err)
+	}
+	info, err := os.Lstat(parent)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", fmt.Errorf("managed rootfs parent must be a real directory")
+	}
+	if err := os.Chmod(parent, 0700); err != nil {
+		return "", fmt.Errorf("secure managed rootfs parent: %w", err)
+	}
+	return filepath.Join(parent, id), nil
+}
+
+func managedRootFSPath(id string) (string, error) {
+	if !validContainerID(id) {
+		return "", fmt.Errorf("invalid container ID for rootfs storage")
+	}
+	dir, err := Dir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "rootfs", id), nil
+}
+
+// ConfigureManagedRootFS persists the immutable rootfs snapshot extracted from
+// the verified image. The path must be the deterministic Boxr-owned location.
+func ConfigureManagedRootFS(id, rootPath string) (Record, error) {
+	expected, err := managedRootFSPath(id)
+	if err != nil {
+		return Record{}, err
+	}
+	if filepath.Clean(rootPath) != filepath.Clean(expected) {
+		return Record{}, fmt.Errorf("container rootfs must use its Boxr-managed storage path")
+	}
+	parent := filepath.Dir(expected)
+	parentInfo, err := os.Lstat(parent)
+	if err != nil {
+		return Record{}, fmt.Errorf("inspect managed rootfs parent: %w", err)
+	}
+	if parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() {
+		return Record{}, fmt.Errorf("managed rootfs parent must be a real directory")
+	}
+	info, err := os.Lstat(expected)
+	if err != nil {
+		return Record{}, fmt.Errorf("inspect extracted managed rootfs: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return Record{}, fmt.Errorf("managed rootfs must be a real directory")
+	}
+
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	record, err := findLocked(id)
+	if err != nil {
+		return Record{}, err
+	}
+	if record.Status != "created" {
+		return Record{}, fmt.Errorf("container %s must be created before configuring its rootfs", record.ID)
+	}
+	if record.Options.RootFS != "" && filepath.Clean(record.Options.RootFS) != filepath.Clean(expected) {
+		return Record{}, fmt.Errorf("container %s already references a different rootfs", record.ID)
+	}
+	record.Options.RootFS = expected
+	if err := saveRecord(record); err != nil {
+		return Record{}, fmt.Errorf("persist managed rootfs configuration: %w", err)
+	}
+	return record, nil
+}
+
+func removeManagedRootFS(record Record) error {
+	if record.Options.RootFS == "" {
+		return nil
+	}
+	expected, err := managedRootFSPath(record.ID)
+	if err != nil {
+		return err
+	}
+	if filepath.Clean(record.Options.RootFS) != filepath.Clean(expected) {
+		// User-supplied native CLI rootfs directories are never owned by Boxr.
+		return nil
+	}
+	parent := filepath.Dir(expected)
+	parentInfo, err := os.Lstat(parent)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() {
+		return fmt.Errorf("managed rootfs parent %s must be a real directory", parent)
+	}
+	info, err := os.Lstat(expected)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("managed rootfs path %s must be a real directory", expected)
+	}
+	if err := os.RemoveAll(expected); err != nil {
+		return fmt.Errorf("remove managed rootfs %s: %w", expected, err)
+	}
+	return nil
+}
+
+// RemoveManagedRootFS cleans up an incomplete Engine API create operation.
+// It can only remove the deterministic rootfs path associated with a valid ID.
+func RemoveManagedRootFS(id string) error {
+	expected, err := managedRootFSPath(id)
+	if err != nil {
+		return err
+	}
+	return removeManagedRootFS(Record{ID: id, Options: container.Options{RootFS: expected}})
+}
+
 func Create(name string, command []string, options container.Options, labels map[string]string) (Record, error) {
 	storeMu.Lock()
 	defer storeMu.Unlock()
@@ -438,6 +571,9 @@ func remove(query string, allowCreated bool) error {
 		return fmt.Errorf("remove container Engine API configuration: %w", err)
 	}
 	if err := removeManagedOverlay(record); err != nil {
+		return err
+	}
+	if err := removeManagedRootFS(record); err != nil {
 		return err
 	}
 	if err := os.Remove(recordPath(record.ID)); err != nil {
@@ -724,6 +860,9 @@ func Prune(before time.Time) (int, error) {
 		}
 		if err := removeManagedOverlay(record); err != nil {
 			return removed, fmt.Errorf("remove writable layer for %s: %w", record.ID, err)
+		}
+		if err := removeManagedRootFS(record); err != nil {
+			return removed, fmt.Errorf("remove managed rootfs for %s: %w", record.ID, err)
 		}
 		if err := os.Remove(recordPath(record.ID)); err != nil {
 			return removed, err

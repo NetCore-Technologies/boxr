@@ -549,11 +549,25 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 	}
 	commandArgs := providedCommand
 	var imageRuntimeConfig imageStore.ImageRuntimeConfig
+	managedExistingRootFS := false
 	if imageReference != "" && opts.RootFS != "" {
-		fmt.Fprintln(stderr, "boxr run: --image cannot be combined with --rootfs")
-		return 2
+		if existingID == "" {
+			fmt.Fprintln(stderr, "boxr run: --image cannot be combined with --rootfs")
+			return 2
+		}
+		expected, pathErr := state.ManagedRootFSDir(existingID)
+		if pathErr != nil || filepath.Clean(opts.RootFS) != filepath.Clean(expected) {
+			fmt.Fprintln(stderr, "boxr run: existing Engine API rootfs does not match its Boxr-managed storage path")
+			return 2
+		}
+		info, statErr := os.Lstat(expected)
+		if statErr != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			fmt.Fprintf(stderr, "boxr run: managed image rootfs is missing or unsafe: %v\n", statErr)
+			return 1
+		}
+		managedExistingRootFS = true
 	}
-	if imageReference != "" {
+	if imageReference != "" && !managedExistingRootFS {
 		imageInfo, err := imageStore.Inspect(imageReference)
 		if err != nil {
 			fmt.Fprintf(stderr, "boxr run: inspect image %s: %v\n", imageReference, err)
@@ -586,11 +600,7 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 
 	var imageStage string
 	if imageReference != "" {
-		if opts.RootFS != "" {
-			fmt.Fprintln(stderr, "boxr run: --image cannot be combined with --rootfs")
-			return 2
-		}
-		if _, err := imageStore.Verify(imageReference); err != nil {
+		if _, err := imageStore.Verify(imageReference); err != nil && !managedExistingRootFS {
 			fmt.Fprintf(stderr, "boxr run: verify image %s: %v\n", imageReference, err)
 			return 1
 		}
@@ -599,9 +609,11 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 			// dry-run never creates or extracts a rootfs.
 			opts.RootFS = filepath.Join(os.TempDir(), "boxr-image-dry-run")
 		} else if createOnly {
-			// The created record stores the verified image reference. Its
-			// rootfs is unpacked only when start launches the container.
+			// The native create path unpacks the image only when start launches it.
 			opts.RootFS = filepath.Join(os.TempDir(), "boxr-image-create-validation")
+		} else if managedExistingRootFS {
+			// Reuse the immutable snapshot recorded at Engine API create time.
+			// The writable OverlayFS upper/work pair is mounted over this path.
 		} else {
 			var err error
 			imageStage, err = os.MkdirTemp("", "boxr-run-image-*")
@@ -3730,6 +3742,7 @@ var implementedFeatures = []string{
 	"Engine API prunes stopped and created containers using Docker until and label filters and emits Docker prune events",
 	"Engine API can expose remote TCP access only through mutually authenticated TLS with client certificates verified by a configured CA",
 	"Engine API-created containers persist writable OverlayFS layers across stop and restart and remove owned storage with container deletion",
+	"Engine API containers retain a private immutable image rootfs snapshot across stops, survive local image-tag deletion, and remove owned snapshots with container deletion",
 }
 
 func printFeatures(stdout io.Writer) {

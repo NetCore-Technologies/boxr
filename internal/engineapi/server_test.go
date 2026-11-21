@@ -1272,6 +1272,67 @@ func TestDockerContainerStartRequiresARealCreatedEngineRecord(t *testing.T) {
 	}
 }
 
+func TestDockerCreatePersistsVerifiedImageRootFSForContainerLifetime(t *testing.T) {
+	server := setupEngineAPITest(t)
+	const reference = "registry.example/team/persistent-rootfs:v1"
+	importEngineAPITestImage(t, reference)
+
+	response := engineAPIRequest(server, http.MethodPost, "/v1.45/containers/create?name=persistent-rootfs")
+	// Create requires the JSON image payload, so use a request recorder with body.
+	request := httptest.NewRequest(http.MethodPost, "/v1.45/containers/create?name=persistent-rootfs", strings.NewReader(`{"Image":"`+reference+`"}`))
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created struct {
+		ID string `json:"Id"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	record, err := state.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := state.ManagedRootFSDir(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Options.RootFS != expected {
+		t.Fatalf("container RootFS=%q, want managed persistent path %q", record.Options.RootFS, expected)
+	}
+	if info, err := os.Lstat(expected); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("managed image rootfs is not a real directory: info=%v err=%v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(expected, "etc", "os-release")); err != nil {
+		t.Fatalf("unpacked image rootfs is incomplete: %v", err)
+	}
+	configPath, err := state.EngineConfigPath(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved struct {
+		Options container.Options `json:"options"`
+	}
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Options.RootFS != expected {
+		t.Fatalf("saved start configuration RootFS=%q, want %q", saved.Options.RootFS, expected)
+	}
+	if err := state.RemoveCreated(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(expected); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("managed image rootfs remains after deletion: %v", err)
+	}
+}
+
 func TestDockerCreatePersistsManagedWritableLayerInStartConfiguration(t *testing.T) {
 	server := setupEngineAPITest(t)
 	const reference = "registry.example/team/persistent-writable-layer:v1"

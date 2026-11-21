@@ -62,6 +62,112 @@ func TestCreateStartFinishInspectAndRemoveLifecycle(t *testing.T) {
 	}
 }
 
+func TestManagedRootFSIsPrivateAndRemovedWithContainer(t *testing.T) {
+	stateDir := useTempState(t)
+	record, err := Create("managed-rootfs", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootPath, err := ManagedRootFSDir(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(rootPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootPath, "image-marker"), []byte("immutable image"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	configured, err := ConfigureManagedRootFS(record.ID, rootPath)
+	if err != nil {
+		t.Fatalf("configure managed rootfs: %v", err)
+	}
+	if configured.Options.RootFS != rootPath {
+		t.Fatalf("RootFS=%q, want %q", configured.Options.RootFS, rootPath)
+	}
+	parentInfo, err := os.Stat(filepath.Dir(rootPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parentInfo.Mode().Perm() != 0700 {
+		t.Fatalf("managed rootfs parent permissions=%o, want 0700", parentInfo.Mode().Perm())
+	}
+	if err := RemoveCreated(record.ID); err != nil {
+		t.Fatalf("remove Engine API container: %v", err)
+	}
+	if _, err := os.Lstat(rootPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("managed rootfs remains after container removal: %v", err)
+	}
+	_ = os.RemoveAll(filepath.Join(stateDir, "rootfs"))
+}
+
+func TestContainerRemovalNeverDeletesUserManagedRootFS(t *testing.T) {
+	useTempState(t)
+	userRootFS := filepath.Join(t.TempDir(), "user-rootfs")
+	if err := os.Mkdir(userRootFS, 0700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(userRootFS, "keep")
+	if err := os.WriteFile(marker, []byte("user-owned"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	record, err := Create("user-rootfs", []string{"/bin/true"}, container.Options{RootFS: userRootFS}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveCreated(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("user-managed rootfs was removed: %v", err)
+	}
+}
+
+func TestContainerRemovalRejectsSymlinkedManagedRootFSParent(t *testing.T) {
+	stateDir := useTempState(t)
+	record, err := Create("symlinked-managed-rootfs-parent", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootPath, err := ManagedRootFSDir(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(rootPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ConfigureManagedRootFS(record.ID, rootPath); err != nil {
+		t.Fatal(err)
+	}
+	parent := filepath.Dir(rootPath)
+	outside := filepath.Join(t.TempDir(), "outside-rootfs")
+	if err := os.MkdirAll(filepath.Join(outside, record.ID), 0700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(outside, record.ID, "must-survive")
+	if err := os.WriteFile(marker, []byte("outside"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveCreated(record.ID); err == nil || !strings.Contains(err.Error(), "parent") {
+		t.Fatalf("removal accepted a symlinked managed rootfs parent: %v", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("symlink target was touched: %v", err)
+	}
+	if _, err := Get(record.ID); err != nil {
+		t.Fatalf("container record was removed after unsafe rootfs path: %v", err)
+	}
+	_ = os.Remove(parent)
+	_ = os.RemoveAll(outside)
+	_ = os.RemoveAll(filepath.Join(stateDir, "rootfs"))
+}
+
 func TestManagedOverlayIsPrivateAndRemovedWithContainer(t *testing.T) {
 	stateDir := useTempState(t)
 	record, err := Create("managed-overlay", []string{"/bin/true"}, container.Options{}, nil)

@@ -8,7 +8,9 @@ boxr daemon
 
 By default it listens on `$XDG_RUNTIME_DIR/boxr/engine.sock`, or `~/.cache/boxr/run/engine.sock` when `XDG_RUNTIME_DIR` is unset. Override the path with `--host unix:///absolute/path/engine.sock`. The socket is owner-only (`0600`); the daemon refuses symlinked socket paths, unsafe socket directories, replacement of regular files, and a second live listener. For remote administration, one TCP listener is available only with mutual TLS: plaintext TCP is rejected, the server verifies client certificates against the configured CA, TLS 1.2 or newer is required, and the server private key must be owner-only.
 
-Engine API-created containers now receive a private per-container OverlayFS writable layer under the Boxr state directory. The layer is reused when a stopped container starts again, keeping filesystem changes separate from the verified image rootfs, and is removed with the container record. This persistence is limited to Engine API-created containers; native CLI workloads continue to use the explicitly configured `--overlay-dir` policy.
+Engine API-created containers now unpack the verified image into a private, container-owned immutable rootfs snapshot at create time. That lower snapshot is retained with the container until it is removed or pruned, even if the original local image tag is later deleted. The persistent OverlayFS writable layer is mounted over the snapshot on each start. Native CLI workloads continue to use the explicitly configured `--rootfs` policy.
+
+Engine API-created containers also receive a private per-container OverlayFS writable layer under the Boxr state directory. The layer is reused when a stopped container starts again, keeping filesystem changes separate from the verified image rootfs, and is removed with the container record. This persistence is limited to Engine API-created containers; native CLI workloads continue to use the explicitly configured `--overlay-dir` policy.
 
 A Docker CLI can use that socket for the implemented operations shown below; most container lifecycle and image workflows still require native Boxr commands:
 

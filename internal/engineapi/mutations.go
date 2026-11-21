@@ -713,6 +713,26 @@ func createContainerRecord(name string, input dockerCreateRequest) (state.Record
 	if err != nil {
 		return empty, fmt.Errorf("create Boxr container record: %w", err)
 	}
+	rootPath, err := state.ManagedRootFSDir(record.ID)
+	if err != nil {
+		_ = state.RemoveCreated(record.ID)
+		return empty, fmt.Errorf("prepare persistent container rootfs: %w", err)
+	}
+	if _, err := imageStore.Unpack(imageReference, rootPath); err != nil {
+		_ = state.RemoveManagedRootFS(record.ID)
+		_ = state.RemoveCreated(record.ID)
+		return empty, fmt.Errorf("unpack verified image into persistent container rootfs: %w", err)
+	}
+	record, err = state.ConfigureManagedRootFS(record.ID, rootPath)
+	if err != nil {
+		cleanupErr := state.RemoveManagedRootFS(record.ID)
+		removeErr := state.RemoveCreated(record.ID)
+		return empty, errors.Join(
+			fmt.Errorf("configure persistent container rootfs: %w", err),
+			cleanupErr,
+			removeErr,
+		)
+	}
 	record, err = state.ConfigureManagedOverlay(record.ID)
 	if err != nil {
 		if removeErr := state.RemoveCreated(record.ID); removeErr != nil {
