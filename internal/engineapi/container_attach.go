@@ -88,7 +88,7 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 			writeError(writer, http.StatusInternalServerError, fmt.Errorf("hijack Docker attach stream: %w", hijackErr))
 			return
 		}
-		if _, writeErr := buffered.WriteString("HTTP/1.1 101 UPGRADED\\r\\nContent-Type: application/vnd.docker.raw-stream\\r\\nConnection: Upgrade\\r\\nUpgrade: tcp\\r\\n\\r\\n"); writeErr != nil {
+		if _, writeErr := buffered.WriteString("HTTP/1.1 101 UPGRADED\r\\nContent-Type: application/vnd.docker.raw-stream\r\\nConnection: Upgrade\r\\nUpgrade: tcp\r\\n\r\\n"); writeErr != nil {
 			_ = conn.Close()
 			return
 		}
