@@ -1485,6 +1485,9 @@ func TestDockerVolumeDeleteRejectsActiveContainerUse(t *testing.T) {
 	if err := state.Finish(record.ID, nil); err != nil {
 		t.Fatal(err)
 	}
+	if err := state.Remove(record.ID); err != nil {
+		t.Fatal(err)
+	}
 	response = engineAPIRequest(server, http.MethodDelete, "/v1.45/volumes/busy-data")
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("delete released volume status=%d body=%s", response.Code, response.Body.String())
