@@ -3302,7 +3302,6 @@ func TestDockerContainerFiltersRejectUnknownAndMissingReferences(t *testing.T) {
 	}
 }
 
-
 func TestDockerContainerListSizeReportsBaseAndWritableLayerBytes(t *testing.T) {
 	server := setupEngineAPITest(t)
 	root := t.TempDir()
