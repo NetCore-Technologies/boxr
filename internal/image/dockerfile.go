@@ -156,7 +156,10 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 			}
 			spec.Base = words[0]
 			fromSeen = true
-			// Global ARG declarations are used for FR		case "COPY", "ADD":
+			// Global ARG declarations are used for FROM expansion only.
+			args = make(map[string]string)
+
+		case "COPY", "ADD":
 			instructionName := instruction
 			remaining := strings.TrimSpace(expanded)
 			copyMode := os.FileMode(0)
@@ -235,9 +238,6 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 				spec.dockerfileSteps = append(spec.dockerfileSteps, dockerfileStep{
 					kind: stepKind, source: cleanSource, destination: stepDestination,
 					copyMode: copyMode, hasCopyMode: hasCopyMode,
-				})
-			}
-leanSource, destination: stepDestination,
 				})
 			}
 
