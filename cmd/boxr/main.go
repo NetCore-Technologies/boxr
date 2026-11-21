@@ -3726,6 +3726,7 @@ var implementedFeatures = []string{
 	"Dockerfile COPY supports safe octal --chmod modes for copied files",
 	"Dockerfile multi-stage builds support named and numeric earlier-stage COPY --from references",
 	"Dockerfile COPY --from supports verified local image references without implicit network pulls",
+	"Docker Engine API creates starts inspects and streams non-TTY exec sessions through Boxr namespace-aware execution",
 }
 
 func printFeatures(stdout io.Writer) {

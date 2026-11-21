@@ -35,11 +35,14 @@ type Server struct {
 	imageMu          sync.Mutex
 	volumeMu         sync.Mutex
 	networkMu        sync.Mutex
+	execMu           sync.Mutex
+	execSessions     map[string]*dockerExecSession
 	createNetwork    func(string, boxrnetwork.CreateOptions) (boxrnetwork.Network, error)
 	removeNetwork    func(string) error
 	joinNetwork      func(string, int, string, ...boxrnetwork.PortMapping) (string, error)
 	leaveNetwork     func(string, string) error
 	verifyNetworkPID func(state.Record) error
+	verifyExecPID    func(state.Record) error
 }
 
 func New(version string) *Server {
@@ -53,6 +56,8 @@ func New(version string) *Server {
 		joinNetwork:      boxrnetwork.Join,
 		leaveNetwork:     boxrnetwork.Leave,
 		verifyNetworkPID: verifyDockerContainerPID,
+		verifyExecPID:    verifyDockerContainerPID,
+		execSessions:     make(map[string]*dockerExecSession),
 	}
 }
 
@@ -112,6 +117,18 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.handleContainers(writer, request)
 	case strings.HasPrefix(path, "/containers/"):
 		remainder := strings.TrimPrefix(path, "/containers/")
+		if strings.HasSuffix(remainder, "/exec") {
+			containerID := strings.TrimSuffix(remainder, "/exec")
+			if containerID == "" || strings.Contains(containerID, "/") {
+				writeError(writer, http.StatusNotFound, fmt.Errorf("container exec endpoint not found"))
+				return
+			}
+			if !requireMethod(writer, request, http.MethodPost) {
+				return
+			}
+			s.handleContainerExecCreate(writer, request, containerID)
+			return
+		}
 		if strings.HasSuffix(remainder, "/kill") {
 			if !requireMethodAllow(writer, request, http.MethodPost, http.MethodPost) {
 				return
@@ -163,6 +180,32 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		s.handleContainer(writer, request, remainder)
+	case strings.HasPrefix(path, "/exec/"):
+		remainder := strings.TrimPrefix(path, "/exec/")
+		parts := strings.Split(remainder, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			writeError(writer, http.StatusNotFound, fmt.Errorf("exec endpoint not found"))
+			return
+		}
+		execID, err := url.PathUnescape(parts[0])
+		if err != nil || strings.Contains(execID, "/") {
+			writeError(writer, http.StatusBadRequest, fmt.Errorf("invalid exec identifier"))
+			return
+		}
+		switch parts[1] {
+		case "start":
+			if !requireMethod(writer, request, http.MethodPost) {
+				return
+			}
+			s.handleExecStart(writer, request, execID)
+		case "json":
+			if !requireMethod(writer, request, http.MethodGet) {
+				return
+			}
+			s.handleExecInspect(writer, execID)
+		default:
+			writeError(writer, http.StatusNotFound, fmt.Errorf("exec endpoint not found"))
+		}
 	case path == "/images/prune":
 		if !requireMethod(writer, request, http.MethodPost) {
 			return
