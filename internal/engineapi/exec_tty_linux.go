@@ -3,7 +3,6 @@
 package engineapi
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -71,4 +70,3 @@ func resizeDockerExecTTY(terminal *os.File, rows, columns uint16) error {
 	return pty.Setsize(terminal, &pty.Winsize{Rows: rows, Cols: columns})
 }
 
-var _ = context.Background
