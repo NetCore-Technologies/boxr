@@ -28,11 +28,26 @@ func TestScanDockerOverlayChangesReportsAddedChangedAndDeletedPaths(t *testing.T
 	write(lower, "changed.txt", "base")
 	write(lower, "deleted.txt", "remove")
 	write(lower, "opaque/old.txt", "old")
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostSentinel, err := os.CreateTemp(cwd, ".boxr-overlay-lower-sentinel-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentinelName := filepath.Base(hostSentinel.Name())
+	if err := hostSentinel.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(filepath.Join(cwd, sentinelName)) })
 	write(upper, "changed.txt", "updated")
 	write(upper, "added.txt", "new")
 	write(upper, ".wh.deleted.txt", "")
 	write(upper, "opaque/.wh..wh..opq", "")
 	write(upper, "opaque/new.txt", "new")
+	write(upper, "brand-new/.wh."+sentinelName, "")
 
 	changes, err := scanDockerOverlayChanges(lower, upper)
 	if err != nil {
@@ -49,9 +64,13 @@ func TestScanDockerOverlayChangesReportsAddedChangedAndDeletedPaths(t *testing.T
 		"/opaque":        0,
 		"/opaque/new.txt": 1,
 		"/opaque/old.txt": 2,
+		"/brand-new": 1,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("changes = %#v, want %#v", got, want)
+	}
+	if _, exists := got["/brand-new/"+sentinelName]; exists {
+		t.Fatalf("whiteout in a new directory incorrectly inspected the host working directory: %#v", got)
 	}
 	for path, kind := range want {
 		if got[path] != kind {
