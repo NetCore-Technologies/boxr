@@ -1529,7 +1529,7 @@ func dockerStatsSnapshotWithPrevious(record state.Record, previous *dockerStatsS
 		},
 		"memory_stats": map[string]any{
 			"usage": stats.MemoryCurrent, "max_usage": maxUsage, "limit": memoryLimit,
-			"failcnt": memoryStats["oom"], "stats": memoryStats,
+			"stats": memoryStats,
 		},
 		"cpu_stats": map[string]any{
 			"cpu_usage": cpuUsage, "system_cpu_usage": stats.SystemCPUUsageNS,
