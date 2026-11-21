@@ -974,6 +974,7 @@ func copyUpDockerVolumes(mounts []container.BindMount, rootPath string) error {
 func dockerOptions(host dockerHostConfig) (container.Options, error) {
 	options := container.Options{
 		NetworkMode:       "none",
+		CgroupEnabled:     true,
 		MemoryLimitBytes:  host.Memory,
 		MemoryLowBytes:    host.MemoryReservation,
 		PidsLimit:         host.PidsLimit,
@@ -983,8 +984,8 @@ func dockerOptions(host dockerHostConfig) (container.Options, error) {
 		RestartMaxRetries: host.RestartPolicy.MaximumRetryCount,
 		DropCapabilities:  append([]string(nil), host.CapDrop...),
 	}
-	if host.Memory < 0 || host.MemoryReservation < 0 || host.MemorySwap < 0 || host.NanoCPUs < 0 || host.PidsLimit < 0 {
-		return options, fmt.Errorf("Docker memory, CPU and PID limits must not be negative")
+	if host.Memory < 0 || host.MemoryReservation < 0 || host.MemorySwap < -1 || host.NanoCPUs < 0 || host.PidsLimit < 0 {
+		return options, fmt.Errorf("Docker memory, CPU and PID limits must not be negative (MemorySwap also accepts -1 for unlimited)")
 	}
 	if host.NanoCPUs > 0 {
 		options.CPUs = float64(host.NanoCPUs) / 1e9
@@ -1000,6 +1001,7 @@ func dockerOptions(host dockerHostConfig) (container.Options, error) {
 			return options, fmt.Errorf("MemorySwap cannot be smaller than Memory")
 		}
 		options.MemorySwapMaxBytes = host.MemorySwap - host.Memory
+		options.MemorySwapMaxSet = true
 	}
 	if host.Privileged || host.PublishAllPorts || len(host.CapAdd) > 0 || len(host.Devices) > 0 || len(host.SecurityOpt) > 0 || len(host.Tmpfs) > 0 || host.ShmSize > 0 {
 		return options, fmt.Errorf("Privileged, CapAdd, Devices, SecurityOpt, legacy Tmpfs, ShmSize and PublishAllPorts are not supported by Engine API create")

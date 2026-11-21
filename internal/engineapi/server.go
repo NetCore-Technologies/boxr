@@ -43,8 +43,10 @@ type Server struct {
 	removeNetwork    func(string) error
 	joinNetwork      func(string, int, string, ...boxrnetwork.PortMapping) (string, error)
 	leaveNetwork     func(string, string) error
-	verifyNetworkPID func(state.Record) error
-	verifyExecPID    func(state.Record) error
+	verifyNetworkPID      func(state.Record) error
+	verifyExecPID         func(state.Record) error
+	verifyUpdatePID       func(state.Record) error
+	updateCgroupResources func(int, container.Options, container.CgroupResourceUpdate) error
 }
 
 func New(version string) *Server {
@@ -57,8 +59,10 @@ func New(version string) *Server {
 		removeNetwork:    boxrnetwork.Remove,
 		joinNetwork:      boxrnetwork.Join,
 		leaveNetwork:     boxrnetwork.Leave,
-		verifyNetworkPID: verifyDockerContainerPID,
-		verifyExecPID:    verifyDockerContainerPID,
+		verifyNetworkPID:      verifyDockerContainerPID,
+		verifyExecPID:         verifyDockerContainerPID,
+		verifyUpdatePID:       verifyDockerContainerPID,
+		updateCgroupResources: container.UpdateCgroupResources,
 		execSessions:     make(map[string]*dockerExecSession),
 	}
 }
@@ -124,6 +128,18 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.handleContainers(writer, request)
 	case strings.HasPrefix(path, "/containers/"):
 		remainder := strings.TrimPrefix(path, "/containers/")
+		if strings.HasSuffix(remainder, "/update") {
+			containerID := strings.TrimSuffix(remainder, "/update")
+			if containerID == "" || strings.Contains(containerID, "/") {
+				writeError(writer, http.StatusNotFound, fmt.Errorf("container update endpoint not found"))
+				return
+			}
+			if !requireMethod(writer, request, http.MethodPost) {
+				return
+			}
+			s.handleContainerUpdate(writer, request, containerID)
+			return
+		}
 		if strings.HasSuffix(remainder, "/exec") {
 			containerID := strings.TrimSuffix(remainder, "/exec")
 			if containerID == "" || strings.Contains(containerID, "/") {

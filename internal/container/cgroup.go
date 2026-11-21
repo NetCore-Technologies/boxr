@@ -45,7 +45,7 @@ func configureCgroupOptionsAt(root string, pid int, options Options) (func() err
 	if cpus < 0 || math.IsNaN(cpus) || math.IsInf(cpus, 0) {
 		return nil, fmt.Errorf("CPU limit must be a finite positive number")
 	}
-	if memoryLimitBytes == 0 && options.MemoryHighBytes == 0 && options.MemoryLowBytes == 0 && options.MemoryMinBytes == 0 && options.MemorySwapMaxBytes == 0 && cpus == 0 && options.CPUWeight == 0 && options.IOWeight == 0 && options.PidsLimit == 0 && !options.MemoryOOMGroup {
+	if memoryLimitBytes == 0 && options.MemoryHighBytes == 0 && options.MemoryLowBytes == 0 && options.MemoryMinBytes == 0 && options.MemorySwapMaxBytes == 0 && cpus == 0 && options.CPUWeight == 0 && options.IOWeight == 0 && options.PidsLimit == 0 && !options.MemoryOOMGroup && !options.MemorySwapMaxSet && !options.CgroupEnabled {
 		return nil, nil
 	}
 	if root == "" {
@@ -57,7 +57,7 @@ func configureCgroupOptionsAt(root string, pid int, options Options) (func() err
 		return nil, fmt.Errorf("create cgroup parent %s: %w", parent, err)
 	}
 	controllers := make([]string, 0, 4)
-	if memoryLimitBytes > 0 || options.MemoryHighBytes > 0 || options.MemoryLowBytes > 0 || options.MemoryMinBytes > 0 || options.MemorySwapMaxBytes > 0 || options.MemoryOOMGroup {
+	if memoryLimitBytes > 0 || options.MemoryHighBytes > 0 || options.MemoryLowBytes > 0 || options.MemoryMinBytes > 0 || options.MemorySwapMaxBytes > 0 || options.MemorySwapMaxSet || options.MemoryOOMGroup {
 		controllers = append(controllers, "memory")
 	}
 	if cpus > 0 || options.CPUWeight > 0 {
@@ -103,7 +103,7 @@ func configureCgroupOptionsAt(root string, pid int, options Options) (func() err
 			return rollback(fmt.Errorf("set memory.min: %w", err))
 		}
 	}
-	if options.MemorySwapMaxBytes > 0 {
+	if options.MemorySwapMaxSet || options.MemorySwapMaxBytes > 0 {
 		if err := writeCgroupFile(filepath.Join(path, "memory.swap.max"), strconv.FormatInt(options.MemorySwapMaxBytes, 10)); err != nil {
 			return rollback(fmt.Errorf("set memory.swap.max: %w", err))
 		}

@@ -30,11 +30,13 @@ type Options struct {
 	MemoryLowBytes     int64             `json:"memoryLowBytes,omitempty"`
 	MemoryMinBytes     int64             `json:"memoryMinBytes,omitempty"`
 	MemorySwapMaxBytes int64             `json:"memorySwapMaxBytes,omitempty"`
+	MemorySwapMaxSet   bool              `json:"memorySwapMaxSet,omitempty"`
 	CPUs               float64           `json:"cpus,omitempty"`
 	CPUWeight          int               `json:"cpuWeight,omitempty"`
 	IOWeight           int               `json:"ioWeight,omitempty"`
 	PidsLimit          int64             `json:"pidsLimit,omitempty"`
 	MemoryOOMGroup     bool              `json:"memoryOOMGroup,omitempty"`
+	CgroupEnabled      bool              `json:"cgroupEnabled,omitempty"`
 	Workdir            string            `json:"workdir,omitempty"`
 	Env                []string          `json:"env,omitempty"`
 	ClearEnv           bool              `json:"-"`
