@@ -29,7 +29,7 @@ The default API version advertised is `1.45` (minimum `1.24`). Implemented endpo
 | GET | `/version` | API and Boxr build version |
 | GET | `/info` | Runtime-backed host, container and image counts |
 | GET | `/containers/json` | Container list with name, ID, status and label filters |
-| POST | `/containers/prune` | Remove created and stopped containers using Docker-compatible `until`, `label` and `label!` filters; running and restarting containers are protected |
+| POST | `/containers/prune` | Remove created and stopped containers using Docker-compatible `until`, `label` and `label!` filters; running and restarting containers are protected; emits the Docker `prune` event |
 | GET | `/containers/{id}/json` | Container state, command, resource, mount and port metadata |
 | GET | `/containers/{id}/logs` | Bounded tail or follow using Docker multiplex framing |
 | GET | `/containers/{id}/stats` | cgroup v2 CPU, memory and PID samples (snapshot or stream) |

@@ -44,12 +44,13 @@ type Record struct {
 }
 
 type Event struct {
-	Time     time.Time `json:"time"`
-	Action   string    `json:"action"`
-	ID       string    `json:"id"`
-	Name     string    `json:"name,omitempty"`
-	PID      int       `json:"pid,omitempty"`
-	ExitCode *int      `json:"exitCode,omitempty"`
+	Time      time.Time `json:"time"`
+	Action    string    `json:"action"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name,omitempty"`
+	PID       int       `json:"pid,omitempty"`
+	ExitCode  *int      `json:"exitCode,omitempty"`
+	Reclaimed *int64    `json:"reclaimed,omitempty"`
 }
 
 func Dir() (string, error) {
@@ -497,6 +498,22 @@ func saveRecord(record Record) error {
 	}
 	ok = true
 	return nil
+}
+
+// RecordPruneEvent appends the Docker-compatible summary event after a
+// successful Engine API prune operation. Reclaimed bytes are explicit even
+// when zero, because Boxr does not yet account for per-container writable layers.
+func RecordPruneEvent(reclaimed int64) error {
+	if reclaimed < 0 {
+		return fmt.Errorf("reclaimed bytes cannot be negative")
+	}
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	return appendEvent(Event{
+		Time:      time.Now().UTC(),
+		Action:    "prune-completed",
+		Reclaimed: &reclaimed,
+	})
 }
 
 func appendEvent(event Event) error {

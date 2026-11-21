@@ -1410,10 +1410,20 @@ func (s *Server) handleEvents(writer http.ResponseWriter, request *http.Request)
 			if !matchesEventFilters(event, filters) {
 				continue
 			}
+			attributes := make(map[string]string, 2)
+			if event.Action == "prune-completed" {
+				reclaimed := int64(0)
+				if event.Reclaimed != nil {
+					reclaimed = *event.Reclaimed
+				}
+				attributes["reclaimed"] = strconv.FormatInt(reclaimed, 10)
+			} else {
+				attributes["name"] = event.Name
+			}
 			payload := map[string]any{
 				"Type": "container", "Action": dockerEventAction(event.Action),
 				"Actor": map[string]any{
-					"ID": event.ID, "Attributes": map[string]string{"name": event.Name},
+					"ID": event.ID, "Attributes": attributes,
 				},
 				"time": event.Time.Unix(), "timeNano": event.Time.UnixNano(),
 			}
@@ -1485,6 +1495,8 @@ func dockerEventAction(value string) string {
 		return "stop"
 	case "restart-cancelled":
 		return "stop"
+	case "prune-completed":
+		return "prune"
 	default:
 		return value
 	}

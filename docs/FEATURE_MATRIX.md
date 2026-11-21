@@ -902,4 +902,4 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 893. Dockerfile multi-stage builds support named and numeric earlier-stage COPY --from references
 894. Dockerfile COPY --from supports verified local image references without implicit network pulls
 895. Docker Engine API creates starts inspects and streams non-TTY exec sessions through Boxr namespace-aware execution
-896. Engine API prunes stopped and created containers using Docker until and label filters
+896. Engine API prunes stopped and created containers using Docker until and label filters and emits Docker prune events

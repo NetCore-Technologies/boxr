@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"bufio"
+	"strings"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -183,6 +186,60 @@ func TestEngineAPIContainerPruneCombinesMultipleNegativeLabelsLikeDocker(t *test
 	}
 	if _, err := state.Get(both.ID); err != nil {
 		t.Fatalf("container with both excluded labels should be protected: %v", err)
+	}
+}
+
+func TestEngineAPIContainerPruneEmitsDockerPruneEvent(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record := createContainerPruneRecord(t, "prune-event", nil)
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	response := requestContainerPrune(t, server, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("prune status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	eventFilters, err := json.Marshal(map[string][]string{"event": {"prune"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedFilters := base64.RawURLEncoding.EncodeToString(eventFilters)
+	until := time.Now().Add(time.Minute).Unix()
+	events := engineAPIRequest(server, http.MethodGet, "/v1.45/events?until="+strconv.FormatInt(until, 10)+"&filters="+url.QueryEscape(encodedFilters))
+	if events.Code != http.StatusOK {
+		t.Fatalf("events status=%d body=%s", events.Code, events.Body.String())
+	}
+	scanner := bufio.NewScanner(strings.NewReader(events.Body.String()))
+	found := false
+	for scanner.Scan() {
+		var event map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event["Action"] != "prune" {
+			continue
+		}
+		actor, ok := event["Actor"].(map[string]any)
+		if !ok || actor["ID"] != "" {
+			t.Fatalf("prune event Actor = %#v, want an empty ID", event["Actor"])
+		}
+		attributes, ok := actor["Attributes"].(map[string]any)
+		if !ok || attributes["reclaimed"] != "0" {
+			t.Fatalf("prune event Attributes = %#v, want reclaimed=0", actor["Attributes"])
+		}
+		if _, hasName := attributes["name"]; hasName {
+			t.Fatalf("prune event unexpectedly contains container name: %#v", attributes)
+		}
+		found = true
+		break
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatalf("Docker prune event was not emitted: %s", events.Body.String())
 	}
 }
 

@@ -79,6 +79,10 @@ func (s *Server) handleContainerPrune(writer http.ResponseWriter, request *http.
 	// report Docker's filesystem-layer reclaim metric accurately. State records,
 	// Engine API sidecars and log files are still removed by the state store.
 	result.SpaceReclaimed = 0
+	if err := state.RecordPruneEvent(result.SpaceReclaimed); err != nil {
+		writeError(writer, http.StatusInternalServerError, fmt.Errorf("record container prune event: %w", err))
+		return
+	}
 	writeJSON(writer, http.StatusOK, result)
 }
 
