@@ -168,6 +168,10 @@ func TestDockerContainerPauseAndUnpauseSerializePerContainer(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("pause did not reach the cgroup freezer")
 	}
+	firstTransition := <-transitions
+	if !firstTransition {
+		t.Fatalf("first freezer transition = %t, want pause=true", firstTransition)
+	}
 
 	unpauseStarted := make(chan struct{})
 	unpauseResponse := make(chan int, 1)
@@ -208,9 +212,9 @@ func TestDockerContainerPauseAndUnpauseSerializePerContainer(t *testing.T) {
 		t.Fatalf("unpause status=%d, want %d", got, http.StatusNoContent)
 	}
 
-	first, second := <-transitions, <-transitions
-	if first || !second {
-		t.Fatalf("serialized freezer transitions = [%t %t], want [true false]", first, second)
+	second := <-transitions
+	if second {
+		t.Fatalf("serialized second freezer transition = %t, want unpause=false", second)
 	}
 	current, err := state.Get(record.ID)
 	if err != nil {
