@@ -562,7 +562,7 @@ func TestComposeInterpolationOperatorsAndNestedDefaults(t *testing.T) {
 		{"${EMPTY+alternate}", "alternate"},
 		{"${EMPTY:+alternate}", ""},
 		{"${SET:+alternate}", "alternate"},
-		{"${MISSING:-${NUMBER:-nested}}", "nested"},
+		{"${MISSING:-${UNSET_NUMBER:-nested}}", "nested"},
 		{"$$SET", "$SET"},
 		{"prefix-$NUMBER-suffix", "prefix-42-suffix"},
 		{"literal $ punctuation", "literal $ punctuation"},
@@ -583,7 +583,7 @@ func TestComposeInterpolationRejectsUndefinedMalformedAndRequiredValues(t *testi
 	for _, input := range []string{
 		"${MISSING}",
 		"${EMPTY:?set a non-empty value}",
-		"${EMPTY?set a value}",
+		"${MISSING?set a value}",
 		"${}",
 		"${MISSING",
 		"${SET:unsupported}",
