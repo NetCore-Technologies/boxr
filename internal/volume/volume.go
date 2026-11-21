@@ -313,7 +313,7 @@ func ExportArchive(name, archivePath string) (Archive, error) {
 }
 
 
- // CopyUpFromRootFS populates an empty managed volume from a directory in a
+// CopyUpFromRootFS populates an empty managed volume from a directory in a
  // verified image rootfs. Non-empty volumes are never modified. The source is
  // archived and safely extracted using the rootfs package's path, symlink and
  // size checks before any entries are published into the volume.
