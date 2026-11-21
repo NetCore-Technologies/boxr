@@ -158,6 +158,16 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		s.handleContainer(writer, request, remainder)
+	case path == "/images/load":
+		if !requireMethod(writer, request, http.MethodPost) {
+			return
+		}
+		s.handleImageLoad(writer, request)
+	case path == "/images/get":
+		if !requireMethod(writer, request, http.MethodGet) {
+			return
+		}
+		s.handleImageExportMany(writer, request)
 	case path == "/images/create":
 		if !requireMethod(writer, request, http.MethodPost) {
 			return
@@ -170,6 +180,13 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.handleImages(writer)
 	case strings.HasPrefix(path, "/images/"):
 		remainder := strings.TrimPrefix(path, "/images/")
+		if strings.HasSuffix(remainder, "/get") {
+			if !requireMethod(writer, request, http.MethodGet) {
+				return
+			}
+			s.handleImageExport(writer, request, strings.TrimSuffix(remainder, "/get"))
+			return
+		}
 		if strings.HasSuffix(remainder, "/tag") {
 			if !requireMethod(writer, request, http.MethodPost) {
 				return
