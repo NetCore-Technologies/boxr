@@ -1408,7 +1408,8 @@ func (s *Server) handleContainerRestart(writer http.ResponseWriter, request *htt
 	}
 
 	unlock := s.containerTransitions.lock(query)
-	defer unlock()	record, err := state.Get(query)
+	defer unlock()
+	record, err := state.Get(query)
 	if err != nil {
 		writeError(writer, http.StatusNotFound, err)
 		return
@@ -1465,7 +1466,8 @@ func (s *Server) handleContainerStart(writer http.ResponseWriter, request *http.
 	}
 
 	unlock := s.containerTransitions.lock(query)
-	defer unlock()	record, err := state.Get(query)
+	defer unlock()
+	record, err := state.Get(query)
 	if err != nil {
 		writeError(writer, http.StatusNotFound, err)
 		return
@@ -1519,7 +1521,8 @@ func (s *Server) handleContainerStop(writer http.ResponseWriter, request *http.R
 	}
 
 	unlock := s.containerTransitions.lock(query)
-	defer unlock()	timeout := 10 * time.Second
+	defer unlock()
+	timeout := 10 * time.Second
 	if raw := request.URL.Query().Get("t"); raw != "" {
 		seconds, parseErr := strconv.Atoi(raw)
 		if parseErr != nil || seconds < -1 || seconds > 300 {
