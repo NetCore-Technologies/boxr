@@ -705,6 +705,9 @@ func resolveDockerOverlayPathWithSymlinks(lowerRoot, upperRoot, relative string,
 				return "", "", nil, statErr
 			}
 		}
+		if singleRoot && lowerChild != "" {
+			upperChild, upperEntryInfo = lowerChild, lowerEntryInfo
+		}
 		if upperChild == "" && lowerChild == "" {
 			return "", "", nil, os.ErrNotExist
 		}
