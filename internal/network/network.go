@@ -84,13 +84,13 @@ type PruneReport struct {
 
 // Summary is safe for CLI output; it omits per-container allocation identities.
 type Summary struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	Driver         string    `json:"driver"`
-	Bridge         string    `json:"bridge"`
-	Subnet         string    `json:"subnet"`
-	Gateway        string    `json:"gateway"`
-	NAT            bool      `json:"nat"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Driver         string            `json:"driver"`
+	Bridge         string            `json:"bridge"`
+	Subnet         string            `json:"subnet"`
+	Gateway        string            `json:"gateway"`
+	NAT            bool              `json:"nat"`
 	ContainerCount int               `json:"containerCount"`
 	CreatedAt      time.Time         `json:"createdAt"`
 	Labels         map[string]string `json:"labels,omitempty"`
