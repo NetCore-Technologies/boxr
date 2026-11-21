@@ -50,6 +50,7 @@ type Network struct {
 	CreatedAt   time.Time                `json:"createdAt"`
 	Allocations map[string]string        `json:"allocations,omitempty"`
 	Published   map[string][]PortMapping `json:"published,omitempty"`
+	Labels      map[string]string        `json:"labels,omitempty"`
 }
 
 // PortMapping publishes one host IPv4 socket to a container IPv4 TCP or UDP port.
@@ -62,6 +63,7 @@ type CreateOptions struct {
 	Gateway string
 	Bridge  string
 	NAT     bool
+	Labels  map[string]string
 }
 
 // StaleAttachment is a managed network lease whose container is not in the
@@ -89,8 +91,9 @@ type Summary struct {
 	Subnet         string    `json:"subnet"`
 	Gateway        string    `json:"gateway"`
 	NAT            bool      `json:"nat"`
-	ContainerCount int       `json:"containerCount"`
-	CreatedAt      time.Time `json:"createdAt"`
+	ContainerCount int               `json:"containerCount"`
+	CreatedAt      time.Time         `json:"createdAt"`
+	Labels         map[string]string `json:"labels,omitempty"`
 }
 
 type store struct {
@@ -252,6 +255,11 @@ func loadStore() (store, string, error) {
 }
 
 func validateStoredNetworks(networks []Network) error {
+	for _, network := range networks {
+		if err := validateLabels(network.Labels); err != nil {
+			return fmt.Errorf("network store contains invalid labels for %q: %w", network.Name, err)
+		}
+	}
 	names := make(map[string]struct{}, len(networks))
 	ids := make(map[string]struct{}, len(networks))
 	bridges := make(map[string]struct{}, len(networks))
@@ -327,6 +335,30 @@ func validateStoredNetworks(networks []Network) error {
 	return validateAllPublishedPortReservations(networks)
 }
 
+func validateLabels(labels map[string]string) error {
+	if len(labels) > 64 {
+		return fmt.Errorf("at most 64 network labels are supported")
+	}
+	for key, value := range labels {
+		if strings.TrimSpace(key) == "" || len(key) > 128 || len(value) > 1024 ||
+			strings.ContainsAny(key+value, "\x00\r\n") || strings.Contains(key, "=") {
+			return fmt.Errorf("invalid network label %q", key)
+		}
+	}
+	return nil
+}
+
+func cloneNetworkLabels(labels map[string]string) map[string]string {
+	if len(labels) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(labels))
+	for key, value := range labels {
+		result[key] = value
+	}
+	return result
+}
+
 func validateAllPublishedPortReservations(networks []Network) error {
 	var seen []PortMapping
 	for _, network := range networks {
@@ -397,6 +429,9 @@ func CreateWithRunner(ctx context.Context, name string, options CreateOptions, r
 	if !networkNameRE.MatchString(name) {
 		return empty, fmt.Errorf("network name must start with a lowercase letter or digit and contain only lowercase letters, digits, '.', '_' or '-' (maximum 31 characters)")
 	}
+	if err := validateLabels(options.Labels); err != nil {
+		return empty, fmt.Errorf("network labels: %w", err)
+	}
 	prefix, gateway, err := parseIPv4Network(options.Subnet, options.Gateway)
 	if err != nil {
 		return empty, err
@@ -448,6 +483,7 @@ func CreateWithRunner(ctx context.Context, name string, options CreateOptions, r
 		NAT:         options.NAT,
 		CreatedAt:   time.Now().UTC(),
 		Allocations: make(map[string]string),
+		Labels:      cloneNetworkLabels(options.Labels),
 	}
 	if err := provisionBridge(ctx, runner, network); err != nil {
 		return empty, err
@@ -1063,6 +1099,7 @@ func summarize(network Network) Summary {
 		ID: network.ID, Name: network.Name, Driver: network.Driver,
 		Bridge: network.Bridge, Subnet: network.Subnet, Gateway: network.Gateway,
 		NAT: network.NAT, ContainerCount: len(network.Allocations), CreatedAt: network.CreatedAt,
+		Labels: cloneNetworkLabels(network.Labels),
 	}
 }
 
