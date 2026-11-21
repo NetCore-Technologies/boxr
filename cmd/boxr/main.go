@@ -3671,6 +3671,13 @@ var implementedFeatures = []string{
 	"Engine API inspects managed bridge network subnet gateway bridge interface and labels",
 	"Engine API deletes managed bridge networks only when no containers remain attached",
 	"managed bridge networks persist validated Docker-compatible network labels",
+	"Engine API creates anonymous local volumes when the create request omits Name",
+	"Engine API prunes unused anonymous volumes by default with Docker-compatible label filters",
+	"Engine API prunes unused named volumes when the all filter is true",
+	"Engine API prunes unused managed bridge networks with label and until filters",
+	"Engine API protects persisted container network references during network pruning",
+	"Engine API exports one or more verified local image tags as Docker-save archives",
+	"Engine API imports Docker-save archives after tag preflight and protects images referenced by containers",
 }
 
 func printFeatures(stdout io.Writer) {
