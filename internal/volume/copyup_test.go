@@ -134,3 +134,29 @@ func TestCopyUpFromRootFSRejectsSymlinkedMountTargetAndPreservesEscapingLinks(t 
 		t.Fatalf("relative symlink target changed during copy-up: %q, err=%v", link, err)
 	}
 }
+
+func TestPublishCopyUpTreeNeverOverwritesExistingVolumeData(t *testing.T) {
+	stage := t.TempDir()
+	destination := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stage, "a-new"), []byte("staged"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stage, "z-existing"), []byte("image"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	existing := filepath.Join(destination, "z-existing")
+	if err := os.WriteFile(existing, []byte("user-owned"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := publishCopyUpTree(stage, destination); err == nil {
+		t.Fatal("copy-up publication unexpectedly replaced an existing volume entry")
+	}
+	data, err := os.ReadFile(existing)
+	if err != nil || string(data) != "user-owned" {
+		t.Fatalf("existing volume data changed: %q, err=%v", data, err)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, "a-new")); !os.IsNotExist(err) {
+		t.Fatalf("partial copy-up was not rolled back: %v", err)
+	}
+}
