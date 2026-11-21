@@ -124,7 +124,7 @@ func TestBuildPlanRejectsInvalidGraphsAndServices(t *testing.T) {
 			"web": {Command: []string{"/bin/true"}, DependsOnHealthy: []string{"db"}},
 		}},
 		"healthy dependency without healthcheck": {Version: 1, Services: map[string]Service{
-			"db": validService,
+			"db":  validService,
 			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"db"}, DependsOnHealthy: []string{"db"}},
 		}},
 		"healthy dependency with disabled healthcheck": {Version: 1, Services: map[string]Service{
