@@ -148,6 +148,33 @@ func engineConfigDirectoryLocked() (string, error) {
 	return directory, nil
 }
 
+// EngineStdinSocketPath returns the private Unix-socket path used to
+// forward attach stdin to a running Engine API container.
+func EngineStdinSocketPath(id string) (string, error) {
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	record, err := findLocked(id)
+	if err != nil {
+		return "", err
+	}
+	stateDirectory, err := ensureDir()
+	if err != nil {
+		return "", err
+	}
+	directory := filepath.Join(stateDirectory, "engine-stdin")
+	if err := os.Mkdir(directory, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+		return "", fmt.Errorf("create Engine API stdin directory: %w", err)
+	}
+	info, err := os.Lstat(directory)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
+		return "", fmt.Errorf("Engine API stdin directory must be a private real directory")
+	}
+	return filepath.Join(directory, record.ID+".sock"), nil
+}
+
 func engineConfigPath(directory, id string) string {
 	return filepath.Join(directory, id+".json")
 }
