@@ -86,7 +86,7 @@ func TestDockerLegacyNamedVolumeBindUsesDefaultCopyUp(t *testing.T) {
 	}
 	image := importEngineAPITestImage(t, "registry.example/team/legacy-volume-copy-up:v1")
 	record, err := createContainerRecord("legacy-copy-up-container", dockerCreateRequest{
-		Image: image.Reference,
+		Image:      image.Reference,
 		HostConfig: dockerHostConfig{Binds: []string{"legacy-copy-up:/bin"}},
 	})
 	if err != nil {

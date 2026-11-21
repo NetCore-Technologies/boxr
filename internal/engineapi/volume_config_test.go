@@ -123,7 +123,7 @@ func TestDockerConfigVolumesRejectUnsafePathsAndMalformedValues(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			image := importEngineAPITestImage(t, "registry.example/team/invalid-volume-"+test.name+":v1")
 			_, err := createContainerRecord("invalid-volume-"+test.name, dockerCreateRequest{
-				Image: image.Reference,
+				Image:   image.Reference,
 				Volumes: map[string]json.RawMessage{test.target: test.value},
 			})
 			if err == nil {
