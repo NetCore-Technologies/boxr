@@ -2415,10 +2415,10 @@ func TestDockerImagePruneDefaultsToDanglingOnlyAndValidatesFilters(t *testing.T)
 	}
 
 	for name, filters := range map[string]map[string][]string{
-		"unknown key":   {"unsupported": {"yes"}},
+		"unknown key":      {"unsupported": {"yes"}},
 		"invalid dangling": {"dangling": {"maybe"}},
-		"invalid until": {"until": {"not-a-time"}},
-		"empty label":   {"label": {""}},
+		"invalid until":    {"until": {"not-a-time"}},
+		"empty label":      {"label": {""}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			data, err := json.Marshal(filters)
