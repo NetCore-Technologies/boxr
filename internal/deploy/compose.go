@@ -71,7 +71,32 @@ func decodeCompose(data []byte, path string) (File, error) {
 		return result, fmt.Errorf("deployment manifest exceeds %d bytes", MaxManifestBytes)
 	}
 
+	// Decode to a YAML syntax tree first so interpolation can be applied to
+	// scalar values without ever rewriting mapping keys or single-quoted values.
 	decoder := yaml.NewDecoder(strings.NewReader(string(data)))
+	var root yaml.Node
+	if err := decoder.Decode(&root); err != nil {
+		return result, fmt.Errorf("decode Compose YAML: %w", err)
+	}
+	var trailingDocument yaml.Node
+	if err := decoder.Decode(&trailingDocument); err != io.EOF {
+		if err == nil {
+			return result, fmt.Errorf("Compose YAML must contain exactly one document")
+		}
+		return result, fmt.Errorf("decode trailing Compose YAML: %w", err)
+	}
+	environment, err := loadComposeInterpolationEnvironment(path)
+	if err != nil {
+		return result, err
+	}
+	if err := interpolateComposeNode(&root, environment); err != nil {
+		return result, fmt.Errorf("interpolate Compose YAML: %w", err)
+	}
+	expanded, err := yaml.Marshal(&root)
+	if err != nil {
+		return result, fmt.Errorf("encode interpolated Compose YAML: %w", err)
+	}
+	decoder = yaml.NewDecoder(strings.NewReader(string(expanded)))
 	decoder.KnownFields(true)
 	var document composeDocument
 	if err := decoder.Decode(&document); err != nil {
@@ -216,9 +241,6 @@ func convertComposeService(name string, source composeService, networkNames map[
 			return result, fmt.Errorf("build is not supported yet; build the image with boxr build and set image")
 		}
 		return result, fmt.Errorf("image is required")
-	}
-	if strings.Contains(source.Image, "$") {
-		return result, fmt.Errorf("Compose variable interpolation is not supported yet; provide a literal image reference")
 	}
 	if source.Build.Kind != 0 {
 		return result, fmt.Errorf("build is not supported yet; build the image with boxr build and set image")

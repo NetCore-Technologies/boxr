@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 901 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 902 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 
 ## Implemented capabilities
@@ -909,34 +909,55 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 900. Engine API containers retain a private immutable image rootfs snapshot across stops, survive local image-tag deletion, and remove owned snapshots with container deletion
 901. Engine API volume mounts populate empty pre-created local volumes from the immutable image rootfs by default and honor Docker VolumeOptions.NoCopy
 
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
 902. Linux cgroup v2 freezer transitions verify cgroup membership and kernel frozen state before reporting pause or unpause success
-903. Failed cgroup freezer transitions restore the previous freeze state and confirm rollback
-904. Container pause and unpause persist process-identity-checked lifecycle states and events with rollback on persistence failure
-905. Native CLI and Docker Engine API pause/unpause paths serialize lifecycle transitions and resume paused workloads before stop or kill
-906. Docker Engine inspect reports State.Paused and State.Running consistently with persisted paused status, while prune protects paused containers
-907. Docker Engine container changes reports bounded added changed and deleted paths from managed image and writable filesystem layers
-908. Docker exec supports validated USER[:GROUP] overrides and otherwise inherits the container's configured identity
-909. Container health monitors suspend probes while paused and discard probes overlapping pause/unpause so freezer delays do not create false unhealthy transitions
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+904. Failed cgroup freezer transitions restore the previous freeze state and confirm rollback
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+905. Container pause and unpause persist process-identity-checked lifecycle states and events with rollback on persistence failure
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+906. Native CLI and Docker Engine API pause/unpause paths serialize lifecycle transitions and resume paused workloads before stop or kill
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+907. Docker Engine inspect reports State.Paused and State.Running consistently with persisted paused status, while prune protects paused containers
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+908. Docker Engine container changes reports bounded added changed and deleted paths from managed image and writable filesystem layers
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+909. Docker exec supports validated USER[:GROUP] overrides and otherwise inherits the container's configured identity
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+910. Container health monitors suspend probes while paused and discard probes overlapping pause/unpause so freezer delays do not create false unhealthy transitions
 
 
-910. Managed bridge endpoints persist a stable Docker endpoint ID and locally administered unicast MAC address, apply the MAC to the container interface, and remove both identities on disconnect
-911. Docker container inspect and network inspect expose the managed endpoint ID and configured MAC address from the same persisted IPAM endpoint
-912. Docker container list supports network-name/network-ID-prefix, health, exited-code, and negative-label filters against live managed endpoint metadata
-913. Docker exec supports upgraded stdin streams, non-TTY Docker stdout/stderr multiplex framing, Linux TTY/PTY raw streams, and bounded PTY resize requests
-914. Engine API stdin socket placement falls back to a private per-user short path when a configured state directory exceeds Unix-domain socket path limits
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+911. Managed bridge endpoints persist a stable Docker endpoint ID and locally administered unicast MAC address, apply the MAC to the container interface, and remove both identities on disconnect
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+912. Docker container inspect and network inspect expose the managed endpoint ID and configured MAC address from the same persisted IPAM endpoint
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+913. Docker container list supports network-name/network-ID-prefix, health, exited-code, and negative-label filters against live managed endpoint metadata
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+914. Docker exec supports upgraded stdin streams, non-TTY Docker stdout/stderr multiplex framing, Linux TTY/PTY raw streams, and bounded PTY resize requests
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+915. Engine API stdin socket placement falls back to a private per-user short path when a configured state directory exceeds Unix-domain socket path limits
 
 
-915. Docker network connect supports validated static IPv4 endpoint addresses and explicit unicast MAC addresses, persists them in IPAM state, and configures the container interface
-916. Docker EndpointConfig rejects unsupported aliases links IPv6 link-local addresses and driver options instead of silently dropping them
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+916. Docker network connect supports validated static IPv4 endpoint addresses and explicit unicast MAC addresses, persists them in IPAM state, and configures the container interface
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+917. Docker EndpointConfig rejects unsupported aliases links IPv6 link-local addresses and driver options instead of silently dropping them
 
-917. Docker bridge IPAM persists, validates, inspects and allocates only within configured `IPRange` prefixes, including explicit static endpoint address checks
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+918. Docker bridge IPAM persists, validates, inspects and allocates only within configured `IPRange` prefixes, including explicit static endpoint address checks
 
-918. Docker bridge IPAM auxiliary IPv4 reservations are persisted, returned by inspect, excluded from dynamic allocation and rejected for static endpoint assignment
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+919. Docker bridge IPAM auxiliary IPv4 reservations are persisted, returned by inspect, excluded from dynamic allocation and rejected for static endpoint assignment
 
-919. Docker container listing evaluates ancestor image, volume name/source/destination, published host/container port and exposed port/range filters
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+920. Docker container listing evaluates ancestor image, volume name/source/destination, published host/container port and exposed port/range filters
 
-920. Docker container list `before` and `since` filters resolve existing container IDs/names once per request and compare persisted creation times; invalid and unknown filter inputs return errors
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+921. Docker container list `before` and `since` filters resolve existing container IDs/names once per request and compare persisted creation times; invalid and unknown filter inputs return errors
 
-921. Docker container list and inspect `size=1` return `SizeRw` and `SizeRootFs` logical-byte counters using bounded, symlink-safe base-rootfs and OverlayFS-upper walks
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+922. Docker container list and inspect `size=1` return `SizeRw` and `SizeRootFs` logical-byte counters using bounded, symlink-safe base-rootfs and OverlayFS-upper walks
 
-922. Docker container create `Tty` launches the workload under a controlling PTY, merges terminal output, forwards signals to the PTY process group and preserves workload exit status
+902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+923. Docker container create `Tty` launches the workload under a controlling PTY, merges terminal output, forwards signals to the PTY process group and preserves workload exit status

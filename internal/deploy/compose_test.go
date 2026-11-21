@@ -492,3 +492,162 @@ func TestParseComposeExternalVolumesRejectsInvalidBoxrNames(t *testing.T) {
 		t.Fatal("invalid external Boxr volume name was accepted")
 	}
 }
+ 
+func TestLoadComposeInterpolatesEnvironmentAndDotEnv(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "compose.yaml")
+	t.Setenv("BOXR_COMPOSE_IMAGE_REPO", "host.example/team/api")
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("BOXR_COMPOSE_IMAGE_REPO=file.example/api\nBOXR_COMPOSE_IMAGE_TAG=1.2.3\nBOXR_COMPOSE_EMPTY=\nBOXR_COMPOSE_MESSAGE='hello # world'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	contents := `services:
+  api:
+    image: "${BOXR_COMPOSE_IMAGE_REPO}:${BOXR_COMPOSE_IMAGE_TAG}"
+    command: ["sh", "-c", "echo $$HOME ${BOXR_COMPOSE_MESSAGE:-fallback}"]
+    environment:
+      EMPTY_DEFAULT: "${BOXR_COMPOSE_EMPTY:-fallback}"
+      INHERITED: "${BOXR_COMPOSE_IMAGE_REPO}"
+      REQUIRED: "${BOXR_COMPOSE_IMAGE_TAG:?image tag is required}"
+      LITERAL: '${BOXR_COMPOSE_NOT_EXPANDED}'
+      OPTIONAL: "${BOXR_COMPOSE_NOT_SET+present}"
+    network_mode: none
+`
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load Compose YAML: %v", err)
+	}
+	api := file.Services["api"]
+	if api.Image != "host.example/team/api:1.2.3" {
+		t.Fatalf("image = %q; host environment must override project .env", api.Image)
+	}
+	if !reflect.DeepEqual(api.Command, []string{"sh", "-c", "echo $HOME hello # world"}) {
+		t.Fatalf("command = %#v", api.Command)
+	}
+	for key, want := range map[string]string{
+		"EMPTY_DEFAULT": "fallback",
+		"INHERITED":     "host.example/team/api",
+		"REQUIRED":      "1.2.3",
+		"LITERAL":       "${BOXR_COMPOSE_NOT_EXPANDED}",
+	} {
+		if !containsComposeEnv(api.Options.Env, key, want) {
+			t.Errorf("environment %s=%q missing from %#v", key, want, api.Options.Env)
+		}
+	}
+	if containsComposeEnv(api.Options.Env, "OPTIONAL", "present") {
+		t.Fatalf("unset + alternate unexpectedly produced a value: %#v", api.Options.Env)
+	}
+}
+
+func TestComposeInterpolationOperatorsAndNestedDefaults(t *testing.T) {
+	environment := map[string]string{
+		"SET": "value",
+		"EMPTY": "",
+		"NUMBER": "42",
+	}
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"$SET", "value"},
+		{"${SET}", "value"},
+		{"${MISSING:-default}", "default"},
+		{"${MISSING-nonempty}", "nonempty"},
+		{"${EMPTY:-fallback}", "fallback"},
+		{"${EMPTY-empty-default}", ""},
+		{"${SET:-fallback}", "value"},
+		{"${SET+alternate}", "alternate"},
+		{"${EMPTY+alternate}", "alternate"},
+		{"${EMPTY:+alternate}", ""},
+		{"${SET:+alternate}", "alternate"},
+		{"${MISSING:-${NUMBER:-nested}}", "nested"},
+		{"$$SET", "$SET"},
+		{"prefix-$NUMBER-suffix", "prefix-42-suffix"},
+		{"literal $ punctuation", "literal $ punctuation"},
+	}
+	for _, test := range cases {
+		got, err := expandComposeInterpolation(test.input, environment, 0)
+		if err != nil {
+			t.Errorf("expand %q: %v", test.input, err)
+			continue
+		}
+		if got != test.want {
+			t.Errorf("expand %q = %q, want %q", test.input, got, test.want)
+		}
+	}
+}
+
+func TestComposeInterpolationRejectsUndefinedMalformedAndRequiredValues(t *testing.T) {
+	for _, input := range []string{
+		"${MISSING}",
+		"${EMPTY:?set a non-empty value}",
+		"${EMPTY?set a value}",
+		"${}",
+		"${MISSING",
+		"${SET:unsupported}",
+	} {
+		if _, err := expandComposeInterpolation(input, map[string]string{"EMPTY": "", "SET": "value"}, 0); err == nil {
+			t.Errorf("expand %q unexpectedly succeeded", input)
+		}
+	}
+}
+
+func TestComposeInterpolationDoesNotRewriteYAMLKeysOrSingleQuotedScalars(t *testing.T) {
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte("services:\n  api:\n    image: 'literal:$IMAGE'\n    environment:\n      $KEY: value\n      VALUE: \"$IMAGE\"\n"), &root); err != nil {
+		t.Fatal(err)
+	}
+	if err := interpolateComposeNode(&root, map[string]string{"IMAGE": "expanded", "KEY": "renamed"}); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := yaml.Marshal(&root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	if !strings.Contains(text, "literal:$IMAGE") || !strings.Contains(text, "$KEY: value") || !strings.Contains(text, "VALUE: expanded") {
+		t.Fatalf("interpolation changed literal values or keys unexpectedly:\n%s", text)
+	}
+}
+
+func TestComposeDotEnvParserBoundsAndQuotedValues(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"plain value # comment", "plain value"},
+		{"value#kept", "value#kept"},
+		{"'literal $VALUE # value'", "literal $VALUE # value"},
+		{`"line\\nvalue"`, "line\nvalue"},
+		{`"quote: \\"yes\\""`, `quote: "yes"`},
+	}
+	for _, test := range cases {
+		got, err := parseComposeDotEnvValue(test.input)
+		if err != nil || got != test.want {
+			t.Errorf("parseComposeDotEnvValue(%q) = %q, %v; want %q", test.input, got, err, test.want)
+		}
+	}
+	if _, err := parseComposeDotEnvValue("'unterminated"); err == nil {
+		t.Fatal("unterminated single quote was accepted")
+	}
+}
+
+func TestLoadComposeInterpolationRejectsSymlinkedDotEnv(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "compose.yaml")
+	target := filepath.Join(dir, "secrets")
+	if err := os.WriteFile(target, []byte("IMAGE=alpine:3.21\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, ".env")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("services:\n  api:\n    image: alpine:3.21\n    network_mode: none\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "regular non-symlink") {
+		t.Fatalf("Load with symlinked .env error = %v", err)
+	}
+}

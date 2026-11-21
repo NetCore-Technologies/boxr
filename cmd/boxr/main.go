@@ -3780,6 +3780,7 @@ var implementedFeatures = []string{
 	"Engine API-created containers persist writable OverlayFS layers across stop and restart and remove owned storage with container deletion",
 	"Engine API containers retain a private immutable image rootfs snapshot across stops, survive local image-tag deletion, and remove owned snapshots with container deletion",
 	"Engine API volume mounts populate empty pre-created local volumes from the immutable image rootfs by default and honor Docker VolumeOptions.NoCopy",
+	"Compose YAML supports bounded Docker-style environment variable interpolation with project .env defaults and process-environment precedence",
 }
 
 func printFeatures(stdout io.Writer) {
