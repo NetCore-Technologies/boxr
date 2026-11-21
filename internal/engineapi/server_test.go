@@ -1677,7 +1677,6 @@ func TestDockerNetworkCreateRejectsUnsupportedModesAndOptions(t *testing.T) {
 	}
 }
 
-
 func TestDockerNetworkConnectDisconnectAndInspectEndpoint(t *testing.T) {
 	server := setupEngineAPITest(t)
 	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
