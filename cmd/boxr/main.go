@@ -4971,9 +4971,9 @@ func deploymentOSStopSignal(value string) (syscall.Signal, error) {
 	case "SIGQUIT":
 		return syscall.SIGQUIT, nil
 	case "SIGUSR1":
-		return syscall.SIGUSR1, nil
+		return syscall.Signal(10), nil
 	case "SIGUSR2":
-		return syscall.SIGUSR2, nil
+		return syscall.Signal(12), nil
 	case "SIGTERM":
 		return syscall.SIGTERM, nil
 	default:

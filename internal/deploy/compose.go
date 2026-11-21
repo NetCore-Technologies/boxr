@@ -37,31 +37,31 @@ type composeNetwork struct {
 }
 
 type composeService struct {
-	Image         string    `yaml:"image"`
-	Command       yaml.Node `yaml:"command"`
-	Entrypoint    yaml.Node `yaml:"entrypoint"`
-	Build         yaml.Node `yaml:"build"`
-	Volumes       yaml.Node `yaml:"volumes"`
-	Healthcheck   yaml.Node `yaml:"healthcheck"`
-	DependsOn     yaml.Node `yaml:"depends_on"`
-	Environment   yaml.Node `yaml:"environment"`
-	EnvFile       yaml.Node `yaml:"env_file"`
-	Ports         yaml.Node `yaml:"ports"`
-	Networks      yaml.Node `yaml:"networks"`
-	Labels        yaml.Node `yaml:"labels"`
-	Profiles      []string  `yaml:"profiles"`
-	WorkingDir    string    `yaml:"working_dir"`
-	Hostname      string    `yaml:"hostname"`
-	NetworkMode   string    `yaml:"network_mode"`
-	Restart        string    `yaml:"restart"`
-	StopSignal     string    `yaml:"stop_signal"`
+	Image           string    `yaml:"image"`
+	Command         yaml.Node `yaml:"command"`
+	Entrypoint      yaml.Node `yaml:"entrypoint"`
+	Build           yaml.Node `yaml:"build"`
+	Volumes         yaml.Node `yaml:"volumes"`
+	Healthcheck     yaml.Node `yaml:"healthcheck"`
+	DependsOn       yaml.Node `yaml:"depends_on"`
+	Environment     yaml.Node `yaml:"environment"`
+	EnvFile         yaml.Node `yaml:"env_file"`
+	Ports           yaml.Node `yaml:"ports"`
+	Networks        yaml.Node `yaml:"networks"`
+	Labels          yaml.Node `yaml:"labels"`
+	Profiles        []string  `yaml:"profiles"`
+	WorkingDir      string    `yaml:"working_dir"`
+	Hostname        string    `yaml:"hostname"`
+	NetworkMode     string    `yaml:"network_mode"`
+	Restart         string    `yaml:"restart"`
+	StopSignal      string    `yaml:"stop_signal"`
 	StopGracePeriod yaml.Node `yaml:"stop_grace_period"`
-	ContainerName string    `yaml:"container_name"`
-	TTY           bool      `yaml:"tty"`
-	StdinOpen     bool      `yaml:"stdin_open"`
-	Privileged    bool      `yaml:"privileged"`
-	ReadOnly      bool      `yaml:"read_only"`
-	CapDrop       yaml.Node `yaml:"cap_drop"`
+	ContainerName   string    `yaml:"container_name"`
+	TTY             bool      `yaml:"tty"`
+	StdinOpen       bool      `yaml:"stdin_open"`
+	Privileged      bool      `yaml:"privileged"`
+	ReadOnly        bool      `yaml:"read_only"`
+	CapDrop         yaml.Node `yaml:"cap_drop"`
 }
 
 // decodeCompose reads the deliberately supported Compose subset into Boxr's
@@ -328,15 +328,15 @@ func convertComposeService(name string, source composeService, networkNames map[
 		StopSignal:       stopSignal,
 	}
 	return Service{
-		Image:     source.Image,
-		Command:   command,
-		Options:   options,
+		Image:            source.Image,
+		Command:          command,
+		Options:          options,
 		DependsOn:        dependencies,
 		DependsOnHealthy: healthyDependencies,
-		Profiles:  append([]string(nil), source.Profiles...),
-		EnvFiles:  envFiles,
-		Volumes:       namedVolumes,
-		StopTimeoutMS: stopGracePeriodMS,
+		Profiles:         append([]string(nil), source.Profiles...),
+		EnvFiles:         envFiles,
+		Volumes:          namedVolumes,
+		StopTimeoutMS:    stopGracePeriodMS,
 	}, nil
 }
 

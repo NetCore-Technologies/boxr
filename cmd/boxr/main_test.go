@@ -4233,7 +4233,6 @@ func TestDeploymentHealthyDependencyTimeoutUsesHealthcheckBudget(t *testing.T) {
 	}
 }
 
-
 func TestDeploymentOSStopSignalMapping(t *testing.T) {
 	cases := map[string]syscall.Signal{
 		"":        0,
@@ -4242,8 +4241,8 @@ func TestDeploymentOSStopSignalMapping(t *testing.T) {
 		"SIGINT":  syscall.SIGINT,
 		"SIGQUIT": syscall.SIGQUIT,
 		"SIGHUP":  syscall.SIGHUP,
-		"SIGUSR1": syscall.SIGUSR1,
-		"SIGUSR2": syscall.SIGUSR2,
+		"SIGUSR1": syscall.Signal(10),
+		"SIGUSR2": syscall.Signal(12),
 	}
 	for input, want := range cases {
 		got, err := deploymentOSStopSignal(input)

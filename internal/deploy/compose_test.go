@@ -824,7 +824,6 @@ func TestLoadComposeRejectsHealthyDependencyWithoutEnabledHealthcheck(t *testing
 	}
 }
 
-
 func TestParseComposeStopGracePeriod(t *testing.T) {
 	cases := []struct {
 		input string
