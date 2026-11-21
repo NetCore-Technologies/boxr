@@ -1490,3 +1490,60 @@ func TestDockerVolumeDeleteRejectsActiveContainerUse(t *testing.T) {
 		t.Fatalf("delete released volume status=%d body=%s", response.Code, response.Body.String())
 	}
 }
+
+
+func TestParseDockerBindAcceptsOnlyPrecreatedNamedVolumes(t *testing.T) {
+	t.Setenv("BOXR_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+	item, err := volume.Create("api-bind-data", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mount, err := parseDockerBind("api-bind-data:/workspace:ro")
+	if err != nil {
+		t.Fatalf("parse named volume bind: %v", err)
+	}
+	if mount.Source != item.Path || mount.Target != "/workspace" || !mount.ReadOnly {
+		t.Fatalf("named volume bind = %+v; volume = %+v", mount, item)
+	}
+	if _, err := parseDockerBind("missing-volume:/workspace"); err == nil {
+		t.Fatal("missing named volume was accepted")
+	}
+}
+
+func TestDockerContainerInspectReportsNamedVolumeMount(t *testing.T) {
+	server := setupEngineAPITest(t)
+	t.Setenv("BOXR_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+	item, err := volume.Create("inspect-data", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := state.Create("volume-inspect", []string{"/bin/true"}, container.Options{
+		BindMounts: []container.BindMount{{Source: item.Path, Target: "/data", ReadOnly: true}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.RemoveCreated(record.ID)
+
+	response := engineAPIRequest(server, http.MethodGet, "/v1.45/containers/"+record.ID+"/json")
+	if response.Code != http.StatusOK {
+		t.Fatalf("inspect status=%d body=%s", response.Code, response.Body.String())
+	}
+	var inspected map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &inspected); err != nil {
+		t.Fatal(err)
+	}
+	mounts, ok := inspected["Mounts"].([]any)
+	if !ok || len(mounts) != 1 {
+		t.Fatalf("inspect mounts = %#v", inspected["Mounts"])
+	}
+	mount := mounts[0].(map[string]any)
+	if mount["Type"] != "volume" || mount["Name"] != "inspect-data" || mount["Source"] != item.Path || mount["RW"] != false {
+		t.Fatalf("Docker mount response = %#v", mount)
+	}
+	hostConfig := inspected["HostConfig"].(map[string]any)
+	binds := hostConfig["Binds"].([]any)
+	if len(binds) != 1 || binds[0] != "inspect-data:/data:ro" {
+		t.Fatalf("Docker HostConfig.Binds = %#v", binds)
+	}
+}
