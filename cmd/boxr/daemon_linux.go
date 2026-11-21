@@ -145,7 +145,6 @@ func runDaemon(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-
 func parseDaemonTCPHost(value string) (string, error) {
 	parsed, err := url.Parse(value)
 	if err != nil {

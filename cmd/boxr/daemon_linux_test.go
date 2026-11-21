@@ -183,7 +183,7 @@ func TestParseDaemonTCPHostRequiresExplicitValidAddress(t *testing.T) {
 	valid := map[string]string{
 		"tcp://127.0.0.1:2376": "127.0.0.1:2376",
 		"tcp://localhost:2376": "localhost:2376",
-		"tcp://[::1]:2376": "[::1]:2376",
+		"tcp://[::1]:2376":     "[::1]:2376",
 	}
 	for input, expected := range valid {
 		actual, err := parseDaemonTCPHost(input)
