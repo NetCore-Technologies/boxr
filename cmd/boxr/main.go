@@ -2157,7 +2157,7 @@ func printUsage(w io.Writer) {
 
 Usage:
   boxr daemon [--host unix:///absolute/path/engine.sock]
-  boxr pull [--platform linux/ARCH[/VARIANT]] [--authfile PATH] IMAGE
+  boxr pull [--platform linux/ARCH[/VARIANT]] [--authfile PATH] IMAGE [IMAGE ...]
   boxr push [--authfile PATH] LOCAL:TAG [REGISTRY/IMAGE:TAG]
   boxr build -t NAME:TAG [-f Dockerfile] [CONTEXT]
   boxr images [--format table|json] [--quiet]
@@ -2212,7 +2212,7 @@ Usage:
   boxr rootfs diff BEFORE AFTER
   boxr image build --tag NAME:TAG [-f Dockerfile|Boxrfile.json] [CONTEXT]
   boxr image import ROOTFS NAME:TAG
-  boxr image pull [--platform linux/ARCH[/VARIANT]] [--authfile PATH] REGISTRY/IMAGE[:TAG]
+  boxr image pull [--platform linux/ARCH[/VARIANT]] [--authfile PATH] IMAGE [IMAGE ...]
   boxr image push [--authfile PATH] LOCAL:TAG [REGISTRY/IMAGE:TAG]
   boxr image ls [--format table|json] [--quiet] [--filter KEY=VALUE]
   boxr image inspect NAME:TAG
@@ -2392,6 +2392,49 @@ func parseTmpfsMount(value string) (container.TmpfsMount, error) {
 	return mount, nil
 }
 
+
+func pullRegistryImage(reference, platform, authFile string) (imageStore.Image, registry.Artifact, error) {
+	var stored imageStore.Image
+	var artifact registry.Artifact
+
+	credentials, err := registry.ResolveCredentials(reference, authFile, registry.Credentials{
+		Username: os.Getenv("BOXR_REGISTRY_USERNAME"),
+		Password: os.Getenv("BOXR_REGISTRY_PASSWORD"),
+	})
+	if err != nil {
+		return stored, artifact, fmt.Errorf("registry credentials: %w", err)
+	}
+	artifact, err = registry.Pull(context.Background(), reference, platform, credentials)
+	if err != nil {
+		return stored, artifact, err
+	}
+	defer artifact.Cleanup()
+
+	staging, err := os.MkdirTemp("", "boxr-image-pull-*")
+	if err != nil {
+		return stored, artifact, fmt.Errorf("create staging directory: %w", err)
+	}
+	defer os.RemoveAll(staging)
+
+	rootPath := filepath.Join(staging, "rootfs")
+	if err := os.Mkdir(rootPath, 0700); err != nil {
+		return stored, artifact, fmt.Errorf("create rootfs: %w", err)
+	}
+	for index, layer := range artifact.Layers {
+		if err := imageStore.ApplyLayerArchive(rootPath, layer.Path); err != nil {
+			return stored, artifact, fmt.Errorf("apply layer %d: %w", index+1, err)
+		}
+	}
+	stored, err = imageStore.ImportRootFSWithConfig(rootPath, artifact.Reference, artifact.OS, artifact.Architecture, artifact.Variant, imageStore.ImageRuntimeConfig{
+		Env: artifact.RuntimeConfig.Env, Entrypoint: artifact.RuntimeConfig.Entrypoint, Cmd: artifact.RuntimeConfig.Cmd,
+		WorkingDir: artifact.RuntimeConfig.WorkingDir, User: artifact.RuntimeConfig.User, Labels: artifact.RuntimeConfig.Labels,
+	})
+	if err != nil {
+		return stored, artifact, fmt.Errorf("import into local image store: %w", err)
+	}
+	return stored, artifact, nil
+}
+
 func runImage(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "Usage: boxr image build|pull|push|import|ls|inspect|verify|audit|diff|sbom|lock|verify-lock|du|save|load|unpack|rm|prune ...")
@@ -2520,50 +2563,42 @@ func runImage(args []string, stdout, stderr io.Writer) int {
 		if err := flags.Parse(args[1:]); err != nil {
 			return 2
 		}
-		if flags.NArg() != 1 {
-			fmt.Fprintln(stderr, "Usage: boxr image pull [--platform linux/amd64[/VARIANT]] [--authfile PATH] REGISTRY/IMAGE[:TAG|@sha256:DIGEST]")
+		if flags.NArg() == 0 {
+			fmt.Fprintln(stderr, "Usage: boxr image pull [--platform linux/amd64[/VARIANT]] [--authfile PATH] IMAGE [IMAGE ...]")
 			return 2
 		}
-		credentials, err := registry.ResolveCredentials(flags.Arg(0), *authFile, registry.Credentials{
-			Username: os.Getenv("BOXR_REGISTRY_USERNAME"),
-			Password: os.Getenv("BOXR_REGISTRY_PASSWORD"),
-		})
-		if err != nil {
-			fmt.Fprintf(stderr, "boxr image pull: registry credentials: %v\n", err)
-			return 1
-		}
-		artifact, err := registry.Pull(context.Background(), flags.Arg(0), *platform, credentials)
-		if err != nil {
-			fmt.Fprintf(stderr, "boxr image pull: %v\n", err)
-			return 1
-		}
-		defer artifact.Cleanup()
-		staging, err := os.MkdirTemp("", "boxr-image-pull-*")
-		if err != nil {
-			fmt.Fprintf(stderr, "boxr image pull: create staging directory: %v\n", err)
-			return 1
-		}
-		defer os.RemoveAll(staging)
-		rootPath := filepath.Join(staging, "rootfs")
-		if err := os.Mkdir(rootPath, 0700); err != nil {
-			fmt.Fprintf(stderr, "boxr image pull: create rootfs: %v\n", err)
-			return 1
-		}
-		for index, layer := range artifact.Layers {
-			if err := imageStore.ApplyLayerArchive(rootPath, layer.Path); err != nil {
-				fmt.Fprintf(stderr, "boxr image pull: apply layer %d: %v\n", index+1, err)
-				return 1
+
+		seen := make(map[string]struct{}, flags.NArg())
+		uniqueReferences := 0
+		failedReferences := 0
+		for _, reference := range flags.Args() {
+			parsed, err := registry.ParseReference(reference)
+			if err != nil {
+				uniqueReferences++
+				failedReferences++
+				fmt.Fprintf(stderr, "boxr image pull: %s: %v\n", reference, err)
+				continue
 			}
+			canonical := parsed.Canonical()
+			if _, exists := seen[canonical]; exists {
+				fmt.Fprintf(stdout, "skipped duplicate reference %s (%s)\n", reference, canonical)
+				continue
+			}
+			seen[canonical] = struct{}{}
+			uniqueReferences++
+
+			image, artifact, err := pullRegistryImage(reference, *platform, *authFile)
+			if err != nil {
+				failedReferences++
+				fmt.Fprintf(stderr, "boxr image pull: %s: %v\n", reference, err)
+				continue
+			}
+			fmt.Fprintf(stdout, "pulled %s (%s; %s/%s; %d bytes)\n", image.Reference, artifact.ManifestDigest, artifact.OS, artifact.Architecture, artifact.LayerBytes)
 		}
-		image, err := imageStore.ImportRootFSWithConfig(rootPath, artifact.Reference, artifact.OS, artifact.Architecture, artifact.Variant, imageStore.ImageRuntimeConfig{
-			Env: artifact.RuntimeConfig.Env, Entrypoint: artifact.RuntimeConfig.Entrypoint, Cmd: artifact.RuntimeConfig.Cmd,
-			WorkingDir: artifact.RuntimeConfig.WorkingDir, User: artifact.RuntimeConfig.User, Labels: artifact.RuntimeConfig.Labels,
-		})
-		if err != nil {
-			fmt.Fprintf(stderr, "boxr image pull: import into local image store: %v\n", err)
+		if failedReferences > 0 {
+			fmt.Fprintf(stderr, "boxr image pull: %d of %d unique image reference(s) failed\n", failedReferences, uniqueReferences)
 			return 1
 		}
-		fmt.Fprintf(stdout, "pulled %s (%s; %s/%s; %d bytes)\n", image.Reference, artifact.ManifestDigest, artifact.OS, artifact.Architecture, artifact.LayerBytes)
 		return 0
 	case "import":
 		if len(args) != 3 {

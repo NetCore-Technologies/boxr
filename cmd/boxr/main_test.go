@@ -201,6 +201,104 @@ func TestImagePullRequiresReference(t *testing.T) {
 	}
 }
 
+
+func TestImagePullBatchContinuesAfterFailureAndDeduplicates(t *testing.T) {
+	var tarData bytes.Buffer
+	tarWriter := tar.NewWriter(&tarData)
+	content := []byte("batch pull integration fixture\n")
+	if err := tarWriter.WriteHeader(&tar.Header{Name: "etc/boxr-release", Mode: 0644, Size: int64(len(content)), Typeflag: tar.TypeReg, ModTime: time.Unix(0, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tarWriter.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := tarWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	var layer bytes.Buffer
+	gzipWriter := gzip.NewWriter(&layer)
+	if _, err := gzipWriter.Write(tarData.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	layerDigest := testSHA256(layer.Bytes())
+	diffSum := sha256.Sum256(tarData.Bytes())
+	diffID := "sha256:" + hex.EncodeToString(diffSum[:])
+	configData, err := json.Marshal(map[string]any{
+		"os": "linux", "architecture": runtime.GOARCH,
+		"rootfs": map[string]any{"type": "layers", "diff_ids": []string{diffID}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configDigest := testSHA256(configData)
+	manifestData, err := json.Marshal(map[string]any{
+		"schemaVersion": 2,
+		"mediaType":     "application/vnd.oci.image.manifest.v1+json",
+		"config":        map[string]any{"mediaType": "application/vnd.oci.image.config.v1+json", "digest": configDigest, "size": len(configData)},
+		"layers":        []any{map[string]any{"mediaType": "application/vnd.boxr.rootfs.v1.tar+gzip", "digest": layerDigest, "size": layer.Len()}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestDigest := testSHA256(manifestData)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v2/team/app/manifests/v1", "/v2/team/worker/manifests/v1":
+			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			w.Header().Set("Docker-Content-Digest", manifestDigest)
+			_, _ = w.Write(manifestData)
+		case "/v2/team/app/blobs/" + configDigest, "/v2/team/worker/blobs/" + configDigest:
+			_, _ = w.Write(configData)
+		case "/v2/team/app/blobs/" + layerDigest, "/v2/team/worker/blobs/" + layerDigest:
+			_, _ = w.Write(layer.Bytes())
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("BOXR_IMAGE_DIR", filepath.Join(t.TempDir(), "images"))
+	host := strings.TrimPrefix(server.URL, "http://")
+	first := host + "/team/app:v1"
+	missing := host + "/team/missing:v1"
+	second := host + "/team/worker:v1"
+	authFile := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authFile, []byte(`{"auths":{}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	code := run([]string{"pull", "--platform", "linux/" + runtime.GOARCH, "--authfile", authFile, first, missing, first, second}, &out, &errOut)
+	if code != 1 {
+		t.Fatalf("batch pull returned %d, want 1: stdout=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	if strings.Count(out.String(), "pulled ") != 2 {
+		t.Fatalf("batch pull should import both available images: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "skipped duplicate reference "+first) {
+		t.Fatalf("duplicate image reference was not skipped: %q", out.String())
+	}
+	if !strings.Contains(errOut.String(), missing) || !strings.Contains(errOut.String(), "1 of 3 unique image reference(s) failed") {
+		t.Fatalf("failed image and aggregate status were not reported: %q", errOut.String())
+	}
+
+	var listOut, listErr bytes.Buffer
+	if code := run([]string{"image", "ls", "--quiet"}, &listOut, &listErr); code != 0 {
+		t.Fatalf("image ls returned %d: %s", code, listErr.String())
+	}
+	if !strings.Contains(listOut.String(), "/team/app:v1") || !strings.Contains(listOut.String(), "/team/worker:v1") {
+		t.Fatalf("successful batch images are missing from the local store: %q", listOut.String())
+	}
+	if strings.Contains(listOut.String(), "/team/missing:v1") {
+		t.Fatalf("failed image was unexpectedly imported: %q", listOut.String())
+	}
+}
+
 func testSHA256(data []byte) string {
 	sum := sha256.Sum256(data)
 	return "sha256:" + hex.EncodeToString(sum[:])
