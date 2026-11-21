@@ -64,3 +64,23 @@ func TestEnsureVolumeMountpointsCreatesDirectoriesAndRejectsEscapingSymlinks(t *
 		t.Fatal("volume mountpoint followed a symlink outside the image root")
 	}
 }
+
+func TestImportRootFSWithConfigCreatesDeclaredVolumeDirectories(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if err := os.Mkdir(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ImportRootFSWithConfig(root, "registry.example/team/imported-volume-metadata:v1", "linux", "amd64", "", ImageRuntimeConfig{
+		Cmd:     []string{"/bin/app"},
+		Volumes: map[string]struct{}{"/var/lib/service/data": {}, "/cache": {}},
+	})
+	if err != nil {
+		t.Fatalf("import image with declared volumes: %v", err)
+	}
+	for _, target := range []string{"/var/lib/service/data", "/cache"} {
+		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(target)))
+		if err != nil || !info.IsDir() {
+			t.Fatalf("image volume directory %s: info=%v err=%v", target, info, err)
+		}
+	}
+}

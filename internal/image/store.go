@@ -234,6 +234,13 @@ func ImportRootFSWithConfig(source, reference, osName, architecture, variant str
 	if sourceInfo.Mode()&os.ModeSymlink != 0 || !sourceInfo.IsDir() {
 		return result, fmt.Errorf("image rootfs must be a real directory, not a symlink")
 	}
+	volumeTargets := make([]string, 0, len(runtimeConfig.Volumes))
+	for target := range runtimeConfig.Volumes {
+		volumeTargets = append(volumeTargets, target)
+	}
+	if err := EnsureVolumeMountpoints(source, volumeTargets); err != nil {
+		return result, fmt.Errorf("prepare image VOLUME mountpoints: %w", err)
+	}
 	manifestRoot, err := rootfs.PackTarGz(source, archivePath)
 	if err != nil {
 		return result, fmt.Errorf("pack image rootfs: %w", err)
