@@ -64,11 +64,13 @@ func (s *Server) handleVolumes(writer http.ResponseWriter, request *http.Request
 		writeError(writer, http.StatusInternalServerError, fmt.Errorf("inspect volume users: %w", err))
 		return
 	}
-	result := make([]dockerVolumeResponse, 0, len(items))
-	for _, item := range items {
-		if !matchesDockerVolumeFilters(item, filters, records) {
-			continue
-		}
+	filtered, err := filterDockerVolumes(items, filters, records)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	result := make([]dockerVolumeResponse, 0, len(filtered))
+	for _, item := range filtered {
 		result = append(result, dockerVolume(item))
 	}
 	writeJSON(writer, http.StatusOK, dockerVolumeListResponse{
@@ -76,37 +78,48 @@ func (s *Server) handleVolumes(writer http.ResponseWriter, request *http.Request
 	})
 }
 
-func matchesDockerVolumeFilters(item volume.Volume, filters map[string][]string, records []state.Record) bool {
-	for key, values := range filters {
-		matched := false
-		for _, value := range values {
-			switch key {
-			case "name":
-				matched = matched || strings.Contains(item.Name, value)
-			case "label":
-				label, expected, hasValue := strings.Cut(value, "=")
-				actual, exists := item.Labels[label]
-				matched = matched || (exists && (!hasValue || actual == expected))
-			case "driver":
-				matched = matched || value == "local"
-			case "scope":
-				matched = matched || value == "local"
-			case "dangling":
-				wanted, err := parseBooleanFilter(value)
-				if err == nil {
+func filterDockerVolumes(items []volume.Volume, filters map[string][]string, records []state.Record) ([]volume.Volume, error) {
+	result := make([]volume.Volume, 0, len(items))
+	for _, item := range items {
+		include := true
+		for key, values := range filters {
+			if len(values) == 0 {
+				return nil, fmt.Errorf("volume filter %q must contain at least one value", key)
+			}
+			matched := false
+			for _, value := range values {
+				switch key {
+				case "name":
+					matched = matched || strings.Contains(item.Name, value)
+				case "label":
+					label, expected, hasValue := strings.Cut(value, "=")
+					actual, exists := item.Labels[label]
+					matched = matched || (exists && (!hasValue || actual == expected))
+				case "driver":
+					matched = matched || value == "local"
+				case "scope":
+					matched = matched || value == "local"
+				case "dangling":
+					wanted, err := parseBooleanFilter(value)
+					if err != nil {
+						return nil, err
+					}
 					matched = matched || wanted != dockerVolumeReferenced(item.Path, records)
+				default:
+					return nil, fmt.Errorf("unsupported volume filter %q", key)
 				}
-			default:
-				return false
+			}
+			if !matched {
+				include = false
+				break
 			}
 		}
-		if !matched {
-			return false
+		if include {
+			result = append(result, item)
 		}
 	}
-	return true
+	return result, nil
 }
-
 func parseBooleanFilter(value string) (bool, error) {
 	switch strings.ToLower(value) {
 	case "1", "true":
