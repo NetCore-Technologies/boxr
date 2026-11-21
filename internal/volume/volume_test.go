@@ -172,7 +172,6 @@ func TestCreateRejectsInvalidLabels(t *testing.T) {
 	}
 }
 
-
 func TestCreateAnonymousVolumePersistsAnonymousIdentity(t *testing.T) {
 	useTempData(t)
 	created, err := CreateAnonymous(map[string]string{"purpose": "engine-api"})
