@@ -49,12 +49,13 @@ type CopyInstruction struct {
 // ImageRuntimeConfig stores the standard runtime defaults represented by the
 // image config. Environment entries are not printed by the default inspect UI.
 type ImageRuntimeConfig struct {
-	Env        []string          `json:"Env,omitempty"`
-	Entrypoint []string          `json:"Entrypoint,omitempty"`
-	Cmd        []string          `json:"Cmd,omitempty"`
-	WorkingDir string            `json:"WorkingDir,omitempty"`
-	User       string            `json:"User,omitempty"`
-	Labels     map[string]string `json:"Labels,omitempty"`
+	Env        []string            `json:"Env,omitempty"`
+	Entrypoint []string            `json:"Entrypoint,omitempty"`
+	Cmd        []string            `json:"Cmd,omitempty"`
+	WorkingDir string              `json:"WorkingDir,omitempty"`
+	User       string              `json:"User,omitempty"`
+	Labels     map[string]string   `json:"Labels,omitempty"`
+	Volumes    map[string]struct{} `json:"Volumes,omitempty"`
 }
 
 // LoadBuildSpec reads a bounded strict JSON recipe. Unknown fields and trailing
@@ -122,6 +123,14 @@ func ValidateBuildSpec(spec BuildSpec) error {
 	}
 	if spec.Config.WorkingDir != "" && (!filepath.IsAbs(spec.Config.WorkingDir) || hasParentTraversal(spec.Config.WorkingDir) || strings.ContainsRune(spec.Config.WorkingDir, '\x00')) {
 		return fmt.Errorf("image WorkingDir must be absolute and cannot contain '..'")
+	}
+	if len(spec.Config.Volumes) > 64 {
+		return fmt.Errorf("image config supports at most 64 declared volumes")
+	}
+	for target := range spec.Config.Volumes {
+		if !path.IsAbs(target) || target == "/" || path.Clean(target) != target || strings.ContainsAny(target, "\x00\r\n") {
+			return fmt.Errorf("image volume target %q must be a clean absolute non-root path", target)
+		}
 	}
 	if strings.ContainsAny(spec.Config.User, "\x00\r\n") || len(spec.Config.User) > 256 {
 		return fmt.Errorf("invalid image User value")
@@ -566,6 +575,7 @@ func inheritBuildRuntimeConfig(base, overrides ImageRuntimeConfig) ImageRuntimeC
 		WorkingDir: base.WorkingDir,
 		User:       base.User,
 		Labels:     make(map[string]string, len(base.Labels)+len(overrides.Labels)),
+		Volumes:    cloneBuildVolumes(base.Volumes),
 	}
 	if overrides.Entrypoint != nil {
 		result.Entrypoint = cloneBuildStrings(overrides.Entrypoint)
@@ -587,6 +597,26 @@ func inheritBuildRuntimeConfig(base, overrides ImageRuntimeConfig) ImageRuntimeC
 	}
 	if len(result.Labels) == 0 {
 		result.Labels = nil
+	}
+	for target := range overrides.Volumes {
+		if result.Volumes == nil {
+			result.Volumes = make(map[string]struct{})
+		}
+		result.Volumes[target] = struct{}{}
+	}
+	if len(result.Volumes) == 0 {
+		result.Volumes = nil
+	}
+	return result
+}
+
+func cloneBuildVolumes(values map[string]struct{}) map[string]struct{} {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make(map[string]struct{}, len(values))
+	for target := range values {
+		result[target] = struct{}{}
 	}
 	return result
 }

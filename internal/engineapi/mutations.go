@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -621,8 +622,20 @@ func (s *Server) handleContainerCreate(writer http.ResponseWriter, request *http
 	})
 }
 
-func createContainerRecord(name string, input dockerCreateRequest) (state.Record, error) {
+func createContainerRecord(name string, input dockerCreateRequest) (result state.Record, resultErr error) {
 	var empty state.Record
+	anonymousVolumeNames := make([]string, 0)
+	anonymousVolumesCommitted := false
+	defer func() {
+		if anonymousVolumesCommitted {
+			return
+		}
+		for index := len(anonymousVolumeNames) - 1; index >= 0; index-- {
+			if removeErr := volume.Remove(anonymousVolumeNames[index]); removeErr != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("roll back anonymous volume %q: %w", anonymousVolumeNames[index], removeErr))
+			}
+		}
+	}()
 	if strings.TrimSpace(input.Image) == "" {
 		return empty, fmt.Errorf("Image is required; the image must already exist in the local Boxr image store")
 	}
@@ -641,9 +654,6 @@ func createContainerRecord(name string, input dockerCreateRequest) (state.Record
 	}
 	if input.Tty || input.OpenStdin || input.StdinOnce || input.AttachStdin || input.AttachStdout || input.AttachStderr {
 		return empty, fmt.Errorf("interactive create/attach settings are not supported; use boxr exec -it after the container starts")
-	}
-	if len(input.Volumes) > 0 {
-		return empty, fmt.Errorf("Config.Volumes and automatic anonymous volumes are not supported; use a pre-created Boxr volume through the native deployment workflow")
 	}
 	if len(input.Healthcheck) > 0 && string(input.Healthcheck) != "null" {
 		return empty, fmt.Errorf("Docker Healthcheck configuration is not implemented by Engine API create")
@@ -686,6 +696,16 @@ func createContainerRecord(name string, input dockerCreateRequest) (state.Record
 	if err := options.ApplyResourceProfile(); err != nil {
 		return empty, err
 	}
+	declaredVolumeTargets, err := dockerConfigVolumeTargets(input.Volumes, image.RuntimeConfig.Volumes)
+	if err != nil {
+		return empty, fmt.Errorf("validate Docker Config.Volumes: %w", err)
+	}
+	anonymousMounts, createdVolumeNames, err := createDockerConfigVolumes(declaredVolumeTargets, options)
+	if err != nil {
+		return empty, err
+	}
+	anonymousVolumeNames = append(anonymousVolumeNames, createdVolumeNames...)
+	options.BindMounts = append(options.BindMounts, anonymousMounts...)
 	command := append([]string(nil), input.Cmd...)
 	if len(image.RuntimeConfig.Entrypoint) > 0 {
 		if len(command) == 0 {
@@ -747,7 +767,92 @@ func createContainerRecord(name string, input dockerCreateRequest) (state.Record
 		}
 		return empty, fmt.Errorf("copy image data into Docker volumes: %w", err)
 	}
+	anonymousVolumesCommitted = true
 	return record, nil
+}
+
+// dockerConfigVolumeTargets merges image-declared and create-request volumes.
+// Docker represents each Config.Volumes entry as an empty JSON object.
+func dockerConfigVolumeTargets(requested map[string]json.RawMessage, imageVolumes map[string]struct{}) ([]string, error) {
+	targets := make(map[string]struct{}, len(requested)+len(imageVolumes))
+	add := func(rawTarget string) error {
+		target, err := validateDockerMountTarget(rawTarget)
+		if err != nil {
+			return fmt.Errorf("invalid declared volume target %q: %w", rawTarget, err)
+		}
+		targets[target] = struct{}{}
+		if len(targets) > maxDockerEngineMountCount {
+			return fmt.Errorf("Docker Config.Volumes supports at most %d unique targets", maxDockerEngineMountCount)
+		}
+		return nil
+	}
+	for target, raw := range requested {
+		value := bytes.TrimSpace(raw)
+		if !bytes.Equal(value, []byte("{}")) && !bytes.Equal(value, []byte("null")) {
+			return nil, fmt.Errorf("Config.Volumes entry %q must be an empty object", target)
+		}
+		if err := add(target); err != nil {
+			return nil, err
+		}
+	}
+	for target := range imageVolumes {
+		if err := add(target); err != nil {
+			return nil, err
+		}
+	}
+	result := make([]string, 0, len(targets))
+	for target := range targets {
+		result = append(result, target)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+// createDockerConfigVolumes prepares anonymous local volumes declared by image
+// metadata or the Docker create request. Explicit mounts at the same target
+// take precedence, matching Docker's container-create behaviour.
+func createDockerConfigVolumes(targets []string, options container.Options) ([]container.BindMount, []string, error) {
+	explicitTargets := make(map[string]bool, len(options.BindMounts)+len(options.TmpfsMounts))
+	for _, mount := range options.BindMounts {
+		explicitTargets[filepath.Clean(mount.Target)] = true
+	}
+	for _, mount := range options.TmpfsMounts {
+		explicitTargets[filepath.Clean(mount.Target)] = true
+	}
+
+	var selected []string
+	for _, target := range targets {
+		if !explicitTargets[filepath.Clean(target)] {
+			selected = append(selected, target)
+		}
+	}
+	candidateMounts := append([]container.BindMount(nil), options.BindMounts...)
+	for _, target := range selected {
+		candidateMounts = append(candidateMounts, container.BindMount{
+			Source: "/boxr-anonymous-volume-validation", Target: target,
+		})
+	}
+	if err := validateUniqueDockerMountTargets(candidateMounts, options.TmpfsMounts); err != nil {
+		return nil, nil, fmt.Errorf("validate Docker declared volume mounts: %w", err)
+	}
+
+	mounts := make([]container.BindMount, 0, len(selected))
+	created := make([]string, 0, len(selected))
+	for _, target := range selected {
+		item, err := volume.CreateAnonymous(nil)
+		if err != nil {
+			var cleanupErr error
+			for index := len(created) - 1; index >= 0; index-- {
+				cleanupErr = errors.Join(cleanupErr, volume.Remove(created[index]))
+			}
+			return nil, nil, errors.Join(fmt.Errorf("create anonymous volume for %s: %w", target, err), cleanupErr)
+		}
+		created = append(created, item.Name)
+		mounts = append(mounts, container.BindMount{
+			Source: item.Path, Target: target, VolumeName: item.Name, CopyUp: true,
+		})
+	}
+	return mounts, created, nil
 }
 
 // copyUpDockerVolumes applies Docker's default initial-volume population only

@@ -1272,9 +1272,14 @@ func dockerImageConfig(config imageStore.ImageRuntimeConfig) map[string]any {
 	for key, value := range config.Labels {
 		labels[key] = value
 	}
+	volumes := make(map[string]struct{}, len(config.Volumes))
+	for target := range config.Volumes {
+		volumes[target] = struct{}{}
+	}
 	return map[string]any{
 		"Env": env, "Cmd": command, "Entrypoint": entrypoint,
 		"WorkingDir": config.WorkingDir, "User": config.User, "Labels": labels,
+		"Volumes": volumes,
 	}
 }
 

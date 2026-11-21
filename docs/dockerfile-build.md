@@ -5,7 +5,7 @@ Boxr can build a bounded Dockerfile subset, including multi-stage builds and art
 - Multiple `FROM` stages using `scratch`, a previously declared stage, or a base image already pulled into Boxr's local image store. Stage aliases are supported.
 - Local-context `COPY` and `ADD` (including JSON form and `COPY .`), with paths kept inside the build context. Local ADD files/directories are copied; plain and gzip tar archives are automatically extracted.
 - `COPY --from=SOURCE` from an earlier named or numbered stage, or from a verified external image already present in the local store; external images are never pulled implicitly. `COPY --chmod=MODE` supports bounded octal file permissions (000–0777). Setuid, setgid, sticky and symbolic modes are rejected.
-- `RUN` in shell or exec form, `WORKDIR`, `ENV`, `LABEL`, `USER`, and shell/exec forms of `CMD` and `ENTRYPOINT`.
+- `RUN` in shell or exec form, `WORKDIR`, `ENV`, `LABEL`, `USER`, Dockerfile `VOLUME` declarations (shell and JSON forms), and shell/exec forms of `CMD` and `ENTRYPOINT`. Declared volumes are preserved as image metadata and become anonymous persistent volumes by default when a container is created; an explicit mount at the same target takes precedence.
 - Bounded `.dockerignore` filtering. Negation patterns and advanced Docker ignore semantics are rejected.
 
 ```dockerfile

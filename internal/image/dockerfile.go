@@ -407,7 +407,36 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 				env:  mergeBuildEnvironment(argEnv, spec.Config.Env),
 				user: currentUser,
 			})
-		case "ONBUILD", "HEALTHCHECK", "EXPOSE", "VOLUME", "STOPSIGNAL", "SHELL":
+		case "VOLUME":
+			var targets []string
+			if strings.HasPrefix(expanded, "[") {
+				if err := json.Unmarshal([]byte(expanded), &targets); err != nil {
+					return fmt.Errorf("line %d: invalid JSON VOLUME instruction: %w", lineNumber, err)
+				}
+			} else {
+				var err error
+				targets, err = dockerfileWords(expanded)
+				if err != nil {
+					return fmt.Errorf("line %d: parse VOLUME: %w", lineNumber, err)
+				}
+			}
+			if len(targets) == 0 {
+				return fmt.Errorf("line %d: VOLUME expects one or more absolute container paths", lineNumber)
+			}
+			if spec.Config.Volumes == nil {
+				spec.Config.Volumes = make(map[string]struct{})
+			}
+			for _, target := range targets {
+				if !path.IsAbs(target) || target == "/" || path.Clean(target) != target || strings.ContainsAny(target, "\x00\r\n") {
+					return fmt.Errorf("line %d: VOLUME target %q must be a clean absolute non-root path", lineNumber, target)
+				}
+				spec.Config.Volumes[target] = struct{}{}
+				if len(spec.Config.Volumes) > 64 {
+					return fmt.Errorf("line %d: Dockerfile declares more than 64 volumes", lineNumber)
+				}
+			}
+
+		case "ONBUILD", "HEALTHCHECK", "EXPOSE", "STOPSIGNAL", "SHELL":
 			return fmt.Errorf("line %d: Dockerfile instruction %s is not supported yet", lineNumber, instruction)
 		default:
 			return fmt.Errorf("line %d: unknown Dockerfile instruction %s", lineNumber, instruction)
