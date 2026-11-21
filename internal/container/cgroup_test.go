@@ -198,6 +198,33 @@ func TestConfigureCgroupOptionsAtWritesExtendedResourceControls(t *testing.T) {
 	}
 }
 
+func TestConfigureCgroupEnabledContainerEnablesAvailableStatsControllers(t *testing.T) {
+	root := newExtendedCgroupFixture(t)
+	if err := os.WriteFile(filepath.Join(root, "cgroup.controllers"), []byte("cpu memory pids"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "boxr", "cgroup.controllers"), []byte("cpu memory pids"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cleanup, err := configureCgroupOptionsAt(root, 5160, Options{CgroupEnabled: true})
+	if err != nil {
+		t.Fatalf("configure default Docker cgroup: %v", err)
+	}
+	defer cleanup()
+
+	control, err := os.ReadFile(filepath.Join(root, "boxr", "cgroup.subtree_control"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(control), "+cpu +memory +pids"; got != want {
+		t.Fatalf("optional stats controllers = %q, want %q", got, want)
+	}
+	child := filepath.Join(root, "boxr", "5160")
+	if _, err := os.Stat(filepath.Join(child, "cgroup.procs")); err != nil {
+		t.Fatalf("default Docker cgroup was not created: %v", err)
+	}
+}
+
 func TestConfigureCgroupOptionsAtRejectsInvalidExtendedValues(t *testing.T) {
 	for name, options := range map[string]Options{
 		"negative memory high": {MemoryHighBytes: -1},
