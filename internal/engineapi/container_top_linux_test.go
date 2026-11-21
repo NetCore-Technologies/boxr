@@ -20,6 +20,9 @@ func writeProcFixture(t *testing.T, root string, pid, ppid int, comm string, nsP
 		}
 	}
 	fields := make([]string, 20)
+	for index := range fields {
+		fields[index] = "0"
+	}
 	fields[0] = "S"
 	fields[1] = strconv.Itoa(ppid)
 	fields[4] = "0"
@@ -128,6 +131,9 @@ func TestFormatProcessCPUPercentUsesLifetimeAverageAndBoundsOutput(t *testing.T)
 
 func TestParseDockerTopProcStatHandlesClosingParenthesisInCommand(t *testing.T) {
 	fields := make([]string, 20)
+	for index := range fields {
+		fields[index] = "0"
+	}
 	fields[0], fields[1], fields[11], fields[12], fields[19] = "S", "7", "12", "8", "99"
 	got, err := parseDockerTopProcStat("100 (name ) with ) parens) " + strings.Join(fields, " "))
 	if err != nil {
