@@ -466,3 +466,172 @@ func verifyDockerContainerPID(record state.Record) error {
 	}
 	return nil
 }
+
+
+type dockerNetworkPruneResponse struct {
+	NetworksDeleted []string `json:"NetworksDeleted"`
+}
+
+func (s *Server) handleNetworkPrune(writer http.ResponseWriter, request *http.Request) {
+	s.networkMu.Lock()
+	defer s.networkMu.Unlock()
+
+	filters, err := parseFilters(request.URL.Query().Get("filters"))
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	now := time.Now()
+	if err := validateDockerNetworkPruneFilters(filters, now); err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	items, err := boxrnetwork.List()
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, fmt.Errorf("list networks for prune: %w", err))
+		return
+	}
+	records, err := state.List(true)
+	if err != nil {
+		writeError(writer, http.StatusInternalServerError, fmt.Errorf("inspect container network references: %w", err))
+		return
+	}
+	result := dockerNetworkPruneResponse{NetworksDeleted: make([]string, 0)}
+	for _, item := range items {
+		if item.ContainerCount > 0 || dockerNetworkReferencedByRecords(item, records) {
+			continue
+		}
+		matched, err := matchesDockerNetworkPruneFilters(item, filters, now)
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, err)
+			return
+		}
+		if !matched {
+			continue
+		}
+		if err := s.removeNetwork(item.Name); err != nil {
+			writeError(writer, http.StatusInternalServerError, fmt.Errorf("remove unused network %q: %w", item.Name, err))
+			return
+		}
+		result.NetworksDeleted = append(result.NetworksDeleted, item.Name)
+	}
+	writeJSON(writer, http.StatusOK, result)
+}
+
+func dockerNetworkReferencedByRecords(item boxrnetwork.Summary, records []state.Record) bool {
+	for _, record := range records {
+		if record.Options.NetworkName == item.Name || record.Options.NetworkName == item.ID {
+			return true
+		}
+		// The implicit Docker bridge is a live reference even when the caller
+		// did not explicitly name it in HostConfig.NetworkMode.
+		if item.Name == "bridge" && record.Options.NetworkMode == "bridge" && record.Options.NetworkName == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func validateDockerNetworkPruneFilters(filters map[string][]string, now time.Time) error {
+	for key, values := range filters {
+		switch key {
+		case "until":
+			if len(values) == 0 {
+				return fmt.Errorf("network prune filter until must contain at least one timestamp")
+			}
+			for _, value := range values {
+				if _, err := parseDockerNetworkUntil(value, now); err != nil {
+					return fmt.Errorf("invalid network prune until filter %q: %w", value, err)
+				}
+			}
+		case "label", "label!":
+			if len(values) == 0 {
+				return fmt.Errorf("network prune filter %s must contain at least one value", key)
+			}
+			for _, value := range values {
+				labelKey, _, _ := strings.Cut(value, "=")
+				if strings.TrimSpace(labelKey) == "" || len(labelKey) > 128 {
+					return fmt.Errorf("invalid network label filter %q", value)
+				}
+			}
+		default:
+			return fmt.Errorf("unsupported network prune filter %q", key)
+		}
+	}
+	return nil
+}
+
+func matchesDockerNetworkPruneFilters(item boxrnetwork.Summary, filters map[string][]string, now time.Time) (bool, error) {
+	for key, values := range filters {
+		matched := false
+		switch key {
+		case "until":
+			for _, value := range values {
+				cutoff, err := parseDockerNetworkUntil(value, now)
+				if err != nil {
+					return false, err
+				}
+				if item.CreatedAt.Before(cutoff) {
+					matched = true
+					break
+				}
+			}
+		case "label", "label!":
+			negate := key == "label!"
+			for _, value := range values {
+				labelKey, expected, hasValue := strings.Cut(value, "=")
+				actual, exists := item.Labels[labelKey]
+				valueMatches := exists && (!hasValue || actual == expected)
+				if negate {
+					valueMatches = !valueMatches
+				}
+				if valueMatches {
+					matched = true
+					break
+				}
+			}
+		default:
+			return false, fmt.Errorf("unsupported network prune filter %q", key)
+		}
+		if !matched {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func parseDockerNetworkUntil(value string, now time.Time) (time.Time, error) {
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
+		return time.Unix(seconds, 0), nil
+	}
+	if secondsText, fraction, ok := strings.Cut(value, "."); ok && fraction != "" && len(fraction) <= 9 {
+		seconds, secErr := strconv.ParseInt(secondsText, 10, 64)
+		nanoseconds, nanoErr := strconv.ParseUint(fraction, 10, 32)
+		if secErr == nil && nanoErr == nil {
+			for digits := len(fraction); digits < 9; digits++ {
+				nanoseconds *= 10
+			}
+			if seconds < 0 && nanoseconds > 0 {
+				return time.Unix(seconds-1, int64(1_000_000_000-nanoseconds)), nil
+			}
+			return time.Unix(seconds, int64(nanoseconds)), nil
+		}
+	}
+	if duration, err := time.ParseDuration(value); err == nil {
+		return now.Add(-duration), nil
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed, nil
+	}
+	for _, layout := range []string{
+		"2006-01-02T15:04:05.999999999",
+		"2006-01-02T15:04:05",
+		"2006-01-02T15:04",
+		"2006-01-02",
+	} {
+		if parsed, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("expected Unix timestamp, RFC3339 timestamp, local date/time, or Go duration")
+}
