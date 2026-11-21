@@ -313,6 +313,120 @@ func ExportArchive(name, archivePath string) (Archive, error) {
 }
 
 
+
+type copyUpDirectoryMode struct {
+	path string
+	mode os.FileMode
+}
+
+// copyUpRootFSTree copies a verified image subtree without following symlinks.
+// Symlink targets are preserved byte-for-byte: after the volume is mounted,
+// absolute and relative targets must retain their container-root semantics.
+// Special files are rejected, and traversal is bounded before data is copied.
+func copyUpRootFSTree(source, destination string) (int64, int64, error) {
+	var entries, totalBytes int64
+	var directories []copyUpDirectoryMode
+
+	err := filepath.WalkDir(source, func(sourcePath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if sourcePath == source {
+			return nil
+		}
+		entries++
+		if entries > rootfs.DefaultMaxFiles {
+			return fmt.Errorf("image mount source exceeds the %d-entry copy-up limit", rootfs.DefaultMaxFiles)
+		}
+
+		relative, err := filepath.Rel(source, sourcePath)
+		if err != nil {
+			return fmt.Errorf("resolve image mount source entry: %w", err)
+		}
+		if relative == "." || !filepath.IsLocal(relative) {
+			return fmt.Errorf("image mount source contains a non-local path %q", relative)
+		}
+		targetPath := filepath.Join(destination, relative)
+		info, err := os.Lstat(sourcePath)
+		if err != nil {
+			return fmt.Errorf("inspect image mount source entry %s: %w", relative, err)
+		}
+
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			linkTarget, err := os.Readlink(sourcePath)
+			if err != nil {
+				return fmt.Errorf("read image symlink %s: %w", relative, err)
+			}
+			if err := os.Symlink(linkTarget, targetPath); err != nil {
+				return fmt.Errorf("copy image symlink %s: %w", relative, err)
+			}
+		case info.IsDir():
+			if err := os.Mkdir(targetPath, 0700); err != nil {
+				return fmt.Errorf("stage image directory %s: %w", relative, err)
+			}
+			directories = append(directories, copyUpDirectoryMode{path: targetPath, mode: info.Mode().Perm()})
+		case info.Mode().IsRegular():
+			if info.Size() < 0 || info.Size() > rootfs.DefaultMaxBytes-totalBytes {
+				return fmt.Errorf("image mount source exceeds the %d-byte copy-up limit", rootfs.DefaultMaxBytes)
+			}
+			input, err := os.Open(sourcePath)
+			if err != nil {
+				return fmt.Errorf("open image file %s: %w", relative, err)
+			}
+			openedInfo, statErr := input.Stat()
+			if statErr != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
+				closeErr := input.Close()
+				return errors.Join(
+					fmt.Errorf("image file %s changed while preparing volume copy-up", relative),
+					statErr,
+					closeErr,
+				)
+			}
+			output, err := os.OpenFile(targetPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			if err != nil {
+				closeErr := input.Close()
+				return errors.Join(fmt.Errorf("create staged image file %s: %w", relative, err), closeErr)
+			}
+			written, copyErr := io.CopyN(output, input, info.Size())
+			syncErr := output.Sync()
+			modeErr := output.Chmod(info.Mode().Perm())
+			outputCloseErr := output.Close()
+			inputCloseErr := input.Close()
+			if copyErr != nil || syncErr != nil || modeErr != nil || outputCloseErr != nil || inputCloseErr != nil {
+				return errors.Join(
+					fmt.Errorf("copy image file %s", relative),
+					copyErr,
+					syncErr,
+					modeErr,
+					outputCloseErr,
+					inputCloseErr,
+				)
+			}
+			if written != info.Size() {
+				return fmt.Errorf("image file %s changed size during volume copy-up", relative)
+			}
+			totalBytes += written
+		default:
+			return fmt.Errorf("image mount source contains unsupported special file %s", relative)
+		}
+		return nil
+	})
+	if err != nil {
+		return entries, totalBytes, err
+	}
+
+	// Set directory permissions after populating children, because an image
+	// may contain read-only directories that would otherwise block staging.
+	for index := len(directories) - 1; index >= 0; index-- {
+		directory := directories[index]
+		if err := os.Chmod(directory.path, directory.mode); err != nil {
+			return entries, totalBytes, fmt.Errorf("restore image directory mode for %s: %w", directory.path, err)
+		}
+	}
+	return entries, totalBytes, nil
+}
+
 // CopyUpFromRootFS populates an empty managed volume from a directory in a
  // verified image rootfs. Non-empty volumes are never modified. The source is
  // archived and safely extracted using the rootfs package's path, symlink and
@@ -340,31 +454,18 @@ func CopyUpFromRootFS(name, rootPath, mountTarget string) error {
 	if !exists {
 		return nil
 	}
-	manifest, err := rootfs.Inspect(source)
-	if err != nil {
-		return fmt.Errorf("inspect image mount source: %w", err)
-	}
-	entryCount := manifest.Files + manifest.Directories + manifest.Symlinks
-	if entryCount == 0 {
-		return nil
-	}
-	if entryCount > rootfs.DefaultMaxFiles || manifest.Bytes > rootfs.DefaultMaxBytes {
-		return fmt.Errorf("image mount source exceeds copy-up limits (%d entries, %d bytes)", rootfs.DefaultMaxFiles, rootfs.DefaultMaxBytes)
-	}
-
 	staging, err := os.MkdirTemp(filepath.Dir(item.Path), ".boxr-volume-copy-up-*")
 	if err != nil {
 		return fmt.Errorf("create volume copy-up staging directory: %w", err)
 	}
 	defer os.RemoveAll(staging)
 
-	archivePath := filepath.Join(staging, "image-path.tar.gz")
-	if _, err := rootfs.PackTarGz(source, archivePath); err != nil {
-		return fmt.Errorf("archive image mount source: %w", err)
-	}
 	extractedPath := filepath.Join(staging, "contents")
-	if _, err := rootfs.ExtractTarGz(archivePath, extractedPath, rootfs.Limits{}); err != nil {
-		return fmt.Errorf("safely extract image mount source: %w", err)
+	if err := os.Mkdir(extractedPath, 0700); err != nil {
+		return fmt.Errorf("create staged volume copy-up tree: %w", err)
+	}
+	if _, _, err := copyUpRootFSTree(source, extractedPath); err != nil {
+		return fmt.Errorf("copy image mount source into staging: %w", err)
 	}
 	stagedEntries, err := os.ReadDir(extractedPath)
 	if err != nil {
