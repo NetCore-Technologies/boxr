@@ -3350,6 +3350,17 @@ func TestDockerContainerListSizeReportsBaseAndWritableLayerBytes(t *testing.T) {
 	if item["SizeRw"] != float64(6) || item["SizeRootFs"] != float64(10) {
 		t.Fatalf("Docker container size = SizeRw:%v SizeRootFs:%v, want 6/10", item["SizeRw"], item["SizeRootFs"])
 	}
+	response = engineAPIRequest(server, http.MethodGet, "/v1.45/containers/"+record.ID+"/json?size=1")
+	if response.Code != http.StatusOK {
+		t.Fatalf("sized inspect status=%d body=%s", response.Code, response.Body.String())
+	}
+	var inspected map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &inspected); err != nil {
+		t.Fatal(err)
+	}
+	if inspected["SizeRw"] != float64(6) || inspected["SizeRootFs"] != float64(10) {
+		t.Fatalf("Docker inspect size = SizeRw:%v SizeRootFs:%v, want 6/10", inspected["SizeRw"], inspected["SizeRootFs"])
+	}
 	response = engineAPIRequest(server, http.MethodGet, "/v1.45/containers/json?all=1")
 	if response.Code != http.StatusOK {
 		t.Fatalf("ordinary list status=%d body=%s", response.Code, response.Body.String())
