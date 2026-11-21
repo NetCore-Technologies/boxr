@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -2151,5 +2152,164 @@ func TestEngineAPIImageArchiveEndpointsRejectInvalidInput(t *testing.T) {
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("invalid quiet parameter status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func dockerBuildTestContext(t *testing.T, files map[string][]byte) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	writer := tar.NewWriter(&buffer)
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		data := files[name]
+		header := &tar.Header{
+			Name: name, Mode: 0644, Size: int64(len(data)),
+			Typeflag: tar.TypeReg, Format: tar.FormatUSTAR,
+		}
+		if err := writer.WriteHeader(header); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return append([]byte(nil), buffer.Bytes()...)
+}
+
+func TestEngineAPIDockerBuildCreatesAndTagsVerifiedImage(t *testing.T) {
+	server := setupEngineAPITest(t)
+	contextArchive := dockerBuildTestContext(t, map[string][]byte{
+		"Dockerfile": []byte("FROM scratch\nARG BUILD_VERSION\nCOPY app /usr/bin/app\nENV BUILD_VERSION=$BUILD_VERSION\nLABEL org.example.builder=boxr\n"),
+		"app":        []byte("built through Docker Engine API\n"),
+	})
+	query := url.Values{}
+	query.Add("t", "registry.example/team/boxr-build:v1")
+	query.Add("t", "registry.example/team/boxr-build:stable")
+	query.Set("platform", "linux/amd64")
+	query.Set("buildargs", `{"BUILD_VERSION":"1.2.3"}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1.45/build?"+query.Encode(), bytes.NewReader(contextArchive))
+	request.Header.Set("Content-Type", "application/x-tar")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("Docker build status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "Successfully built") ||
+		!strings.Contains(response.Body.String(), "Successfully tagged registry.example/team/boxr-build:v1") ||
+		!strings.Contains(response.Body.String(), "Successfully tagged registry.example/team/boxr-build:stable") {
+		t.Fatalf("Docker build stream = %s", response.Body.String())
+	}
+	primary, err := imageStore.Verify("registry.example/team/boxr-build:v1")
+	if err != nil {
+		t.Fatalf("inspect primary built image: %v", err)
+	}
+	alias, err := imageStore.Verify("registry.example/team/boxr-build:stable")
+	if err != nil {
+		t.Fatalf("inspect tagged built image: %v", err)
+	}
+	if primary.Digest != alias.Digest {
+		t.Fatalf("tagged images differ: primary=%s alias=%s", primary.Digest, alias.Digest)
+	}
+	if primary.RuntimeConfig.Env == nil || !strings.Contains(strings.Join(primary.RuntimeConfig.Env, "\n"), "BUILD_VERSION=1.2.3") {
+		t.Fatalf("build arg was not applied to Dockerfile ENV: %+v", primary.RuntimeConfig.Env)
+	}
+	if primary.RuntimeConfig.Labels["org.example.builder"] != "boxr" {
+		t.Fatalf("Dockerfile labels = %+v", primary.RuntimeConfig.Labels)
+	}
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if _, err := imageStore.Unpack(primary.Reference, root); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "usr", "bin", "app")); err != nil || string(data) != "built through Docker Engine API\n" {
+		t.Fatalf("built rootfs file = %q, err=%v", data, err)
+	}
+}
+
+func TestEngineAPIDockerBuildProtectsInUseTagsAndSupportsQuiet(t *testing.T) {
+	server := setupEngineAPITest(t)
+	reference := "registry.example/team/boxr-build-protected:v1"
+	contextArchive := dockerBuildTestContext(t, map[string][]byte{
+		"Dockerfile": []byte("FROM scratch\nCOPY app /app\n"),
+		"app":        []byte("first version\n"),
+	})
+	buildRequest := func(tag string, context []byte, quiet bool) *httptest.ResponseRecorder {
+		query := url.Values{}
+		query.Set("t", tag)
+		if quiet {
+			query.Set("q", "1")
+		}
+		request := httptest.NewRequest(http.MethodPost, "/v1.45/build?"+query.Encode(), bytes.NewReader(context))
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		return response
+	}
+	response := buildRequest(reference, contextArchive, true)
+	if response.Code != http.StatusOK || response.Body.Len() != 0 {
+		t.Fatalf("quiet Docker build status=%d body=%s", response.Code, response.Body.String())
+	}
+	before, err := imageStore.Verify(reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := state.Create("build-tag-user", []string{"/app"}, container.Options{}, map[string]string{"io.boxr.image": reference})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.RemoveCreated(record.ID)
+	changedContext := dockerBuildTestContext(t, map[string][]byte{
+		"Dockerfile": []byte("FROM scratch\nCOPY app /app\n"),
+		"app":        []byte("second version\n"),
+	})
+	response = buildRequest(reference, changedContext, false)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("build replacing an in-use tag status=%d body=%s", response.Code, response.Body.String())
+	}
+	after, err := imageStore.Verify(reference)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Digest != before.Digest {
+		t.Fatalf("in-use image tag was replaced: before=%s after=%s", before.Digest, after.Digest)
+	}
+}
+
+func TestEngineAPIDockerBuildRejectsInvalidQueriesAndUnsafeContexts(t *testing.T) {
+	server := setupEngineAPITest(t)
+	safeContext := dockerBuildTestContext(t, map[string][]byte{"Dockerfile": []byte("FROM scratch\n")})
+	for _, query := range []string{
+		"/v1.45/build",
+		"/v1.45/build?t=",
+		"/v1.45/build?t=invalid%20reference",
+		"/v1.45/build?t=demo%3Alatest&dockerfile=..%2Foutside",
+		"/v1.45/build?t=demo%3Alatest&networkmode=bridge",
+		"/v1.45/build?t=demo%3Alatest&pull=1",
+		"/v1.45/build?t=demo%3Alatest&nocache=1",
+		"/v1.45/build?t=demo%3Alatest&unknown=value",
+		"/v1.45/build?t=demo%3Alatest&buildargs=not-json",
+	} {
+		request := httptest.NewRequest(http.MethodPost, query, bytes.NewReader(safeContext))
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("%s: status=%d body=%s", query, response.Code, response.Body.String())
+		}
+	}
+
+	unsafeContext := dockerBuildTestContext(t, map[string][]byte{
+		"../escape": []byte("outside"),
+		"Dockerfile": []byte("FROM scratch\n"),
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1.45/build?t=demo%3Alatest", bytes.NewReader(unsafeContext))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("traversal build context status=%d body=%s", response.Code, response.Body.String())
 	}
 }
