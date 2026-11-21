@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	maxContainerTopProcesses = 4096
+	maxContainerTopProcesses  = 4096
 	maxContainerProcFileBytes = 1 << 20
-	procClockTicksPerSecond = 100
+	procClockTicksPerSecond   = 100
 )
 
 type dockerTopProcess struct {
@@ -198,10 +198,10 @@ func readContainerProcessAt(procRoot string, pid int) (dockerTopProcess, error) 
 }
 
 type dockerTopProcStat struct {
-	comm string
-	ppid int
+	comm    string
+	ppid    int
 	cpuTime uint64
-	start uint64
+	start   uint64
 }
 
 func parseDockerTopProcStat(value string) (dockerTopProcStat, error) {
@@ -251,10 +251,10 @@ func parseDockerTopProcStatus(value string, fallbackPID int) (uint32, int, error
 		fields := strings.Fields(field)
 		switch key {
 		case "Uid":
-			if len(fields) < 1 {
-				return 0, 0, fmt.Errorf("missing UID in /proc status")
+			if len(fields) < 2 {
+				return 0, 0, fmt.Errorf("missing effective UID in /proc status")
 			}
-			parsed, err := strconv.ParseUint(fields[0], 10, 32)
+			parsed, err := strconv.ParseUint(fields[1], 10, 32)
 			if err != nil {
 				return 0, 0, fmt.Errorf("invalid UID in /proc status")
 			}

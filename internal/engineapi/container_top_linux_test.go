@@ -28,7 +28,7 @@ func writeProcFixture(t *testing.T, root string, pid, ppid int, comm string, nsP
 	if err := os.WriteFile(filepath.Join(base, "stat"), []byte(strconv.Itoa(pid)+" ("+comm+") "+strings.Join(fields, " ")), 0600); err != nil {
 		t.Fatal(err)
 	}
-	status := "Name:\t"+comm+"\nUid:\t"+strconv.FormatUint(uint64(uid),10)+" "+strconv.FormatUint(uint64(uid),10)+" "+strconv.FormatUint(uint64(uid),10)+" "+strconv.FormatUint(uint64(uid),10)+"\nNSpid:\t"+strconv.Itoa(nsPID)+"\n"
+	status := "Name:\t"+comm+"\nUid:\t"+strconv.FormatUint(uint64(uid), 10)+" "+strconv.FormatUint(uint64(uid), 10)+" "+strconv.FormatUint(uint64(uid), 10)+" "+strconv.FormatUint(uint64(uid), 10)+"\nNSpid:\t"+strconv.Itoa(nsPID)+"\n"
 	if err := os.WriteFile(filepath.Join(base, "status"), []byte(status), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -78,6 +78,16 @@ func TestReadContainerProcessTreeMapsPIDsAndBoundsCPUTime(t *testing.T) {
 	}
 	if got := formatProcessCPUTime(processes[0].cpuTime); got != "00:00:01" {
 		t.Fatalf("CPU time=%q, want 00:00:01", got)
+	}
+}
+
+func TestParseDockerTopProcStatusUsesEffectiveUID(t *testing.T) {
+	uid, pid, err := parseDockerTopProcStatus("Uid:\t1000 1001 1002 1003\nNSpid:\t44 2\n", 999)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uid != 1001 || pid != 2 {
+		t.Fatalf("effective UID/PID = %d/%d, want 1001/2", uid, pid)
 	}
 }
 
