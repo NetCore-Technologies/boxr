@@ -1,7 +1,6 @@
 package engineapi
 
 import (
-	"errors"
 	"archive/tar"
 	"bufio"
 	"bytes"
@@ -12,6 +11,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
