@@ -607,7 +607,7 @@ func TestComposeInterpolationDoesNotRewriteYAMLKeysOrSingleQuotedScalars(t *test
 		t.Fatal(err)
 	}
 	text := string(encoded)
-	if !strings.Contains(text, "literal:$IMAGE") || !strings.Contains(text, "$KEY: value") || !strings.Contains(text, "VALUE: expanded") {
+	if !strings.Contains(text, "literal:$IMAGE") || !strings.Contains(text, "$KEY: value") || !strings.Contains(text, `VALUE: "expanded"`) {
 		t.Fatalf("interpolation changed literal values or keys unexpectedly:\n%s", text)
 	}
 }

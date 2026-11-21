@@ -839,7 +839,7 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 830. unsupported Docker Engine restart attach image volume network mutation and TCP listener operations are explicitly outside the API contract
 831. Engine API creates containers from verified local images using a strict supported Docker create subset
 832. Engine API container create supports validated structured bind volume and tmpfs mounts with explicit unsupported-option rejection
-842. Engine API maps Docker HostConfig.ShmSize to a bounded private /dev/shm tmpfs with duplicate-target rejection
+833. Engine API maps Docker HostConfig.ShmSize to a bounded private /dev/shm tmpfs with duplicate-target rejection
 834. Engine API starts created containers through the native Boxr detached supervisor
 835. Engine API gracefully stops containers with a bounded timeout and SIGKILL fallback
 836. Engine API sends validated Docker kill signals only to process-identity-verified running containers
@@ -909,7 +909,7 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 900. Engine API containers retain a private immutable image rootfs snapshot across stops, survive local image-tag deletion, and remove owned snapshots with container deletion
 901. Engine API volume mounts populate empty pre-created local volumes from the immutable image rootfs by default and honor Docker VolumeOptions.NoCopy
 
-902. Compose YAML supports bounded Docker-style variable interpolation using project .env values and process-environment overrides
+902. Compose YAML supports bounded Docker-style environment variable interpolation with project .env defaults and process-environment precedence
 903. Linux cgroup v2 freezer transitions verify cgroup membership and kernel frozen state before reporting pause or unpause success
 904. Failed cgroup freezer transitions restore the previous freeze state and confirm rollback
 905. Container pause and unpause persist process-identity-checked lifecycle states and events with rollback on persistence failure
