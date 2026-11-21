@@ -86,7 +86,7 @@ func TestDockerContainerCommitSnapshotsWritableLayerAndConfig(t *testing.T) {
 		t.Fatalf("committed image labels = %#v", image.RuntimeConfig.Labels)
 	}
 	unpacked := filepath.Join(t.TempDir(), "unpacked")
-	if err := imageStore.Unpack(image.Reference, unpacked); err != nil {
+	if _, err := imageStore.Unpack(image.Reference, unpacked); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(unpacked, "etc", "boxr", "committed.conf"))
