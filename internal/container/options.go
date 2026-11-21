@@ -42,6 +42,8 @@ type Options struct {
 	CgroupEnabled       bool               `json:"cgroupEnabled,omitempty"`
 	Workdir             string             `json:"workdir,omitempty"`
 	Env                 []string           `json:"env,omitempty"`
+	OpenStdin           bool               `json:"openStdin,omitempty"`
+	StdinOnce           bool               `json:"stdinOnce,omitempty"`
 	ClearEnv            bool               `json:"-"`
 	RootFS              string             `json:"rootfs,omitempty"`
 	OverlayDir          string             `json:"overlayDir,omitempty"`
@@ -300,6 +302,9 @@ func (e *ExitError) Error() string {
 // Validate rejects configurations that cannot be represented safely by the
 // runtime. It does not check privileges or mutate the host.
 func (o Options) Validate() error {
+	if o.StdinOnce && !o.OpenStdin {
+		return fmt.Errorf("stdin-once requires open-stdin")
+	}
 	if err := ValidateUserSpecForNamespace(o.User, o.UserNamespace); err != nil {
 		return fmt.Errorf("user: %w", err)
 	}
