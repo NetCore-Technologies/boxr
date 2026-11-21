@@ -270,6 +270,87 @@ func TestDockerEngineExecResizeValidatesDimensionsAndSessionState(t *testing.T) 
 	}
 }
 
+func TestDockerEngineExecSessionCanBeDeletedAfterCompletion(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record := execAPITestContainer(t, server)
+	response := postDockerExecCreate(t, server, record.ID, dockerExecCreateConfig{Cmd: []string{"/bin/true"}})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("exec create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created struct{ Id string }
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	originalRunner := dockerExecRunner
+	t.Cleanup(func() { dockerExecRunner = originalRunner })
+	dockerExecRunner = func(_ context.Context, _ string, _ dockerExecCreateConfig, _ io.Reader, _, _ io.Writer, onStart func(int), _ func(*os.File)) (int, error) {
+		onStart(7654)
+		return 0, nil
+	}
+	start := httptest.NewRecorder()
+	server.ServeHTTP(start, httptest.NewRequest(http.MethodPost, "/exec/"+created.Id+"/start", strings.NewReader("{}")))
+	if start.Code != http.StatusOK {
+		t.Fatalf("exec start status=%d body=%s", start.Code, start.Body.String())
+	}
+	deleted := engineAPIRequest(server, http.MethodDelete, "/exec/"+created.Id)
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("exec delete status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+	inspect := engineAPIRequest(server, http.MethodGet, "/exec/"+created.Id+"/json")
+	if inspect.Code != http.StatusNotFound {
+		t.Fatalf("deleted exec inspect status=%d body=%s", inspect.Code, inspect.Body.String())
+	}
+}
+
+func TestDockerEngineExecRunningSessionCannotBeDeleted(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record := execAPITestContainer(t, server)
+	response := postDockerExecCreate(t, server, record.ID, dockerExecCreateConfig{Cmd: []string{"/bin/long-task"}})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("exec create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created struct{ Id string }
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	originalRunner := dockerExecRunner
+	t.Cleanup(func() { dockerExecRunner = originalRunner })
+	started := make(chan struct{})
+	release := make(chan struct{})
+	dockerExecRunner = func(_ context.Context, _ string, _ dockerExecCreateConfig, _ io.Reader, _, _ io.Writer, onStart func(int), _ func(*os.File)) (int, error) {
+		onStart(8765)
+		close(started)
+		<-release
+		return 0, nil
+	}
+	startDone := make(chan struct{})
+	go func() {
+		request := httptest.NewRequest(http.MethodPost, "/exec/"+created.Id+"/start", strings.NewReader(`{"Detach":true}`))
+		server.ServeHTTP(httptest.NewRecorder(), request)
+		close(startDone)
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("exec runner did not start")
+	}
+	deleted := engineAPIRequest(server, http.MethodDelete, "/exec/"+created.Id)
+	if deleted.Code != http.StatusConflict {
+		close(release)
+		t.Fatalf("running exec delete status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+	close(release)
+	select {
+	case <-startDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("detached exec did not complete")
+	}
+	deleted = engineAPIRequest(server, http.MethodDelete, "/exec/"+created.Id)
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("completed exec delete status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+}
+
 func TestDockerEngineExecDetachedSessionCanBeInspectedWhileRunning(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record := execAPITestContainer(t, server)
