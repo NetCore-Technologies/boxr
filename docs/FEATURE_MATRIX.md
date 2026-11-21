@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 868 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 873 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 
 ## Implemented capabilities
@@ -875,3 +875,8 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 866. Engine API removes named volumes only when no persisted container references them
 867. Engine API container create resolves pre-created Boxr named volumes from Docker HostConfig.Binds
 868. Engine API container inspect reports named volume type name driver and Docker-compatible Binds
+869. Engine API lists managed bridge networks with Docker name driver scope and label filters
+870. Engine API creates IPv4 bridge networks with validated IPAM options and managed NAT controls
+871. Engine API inspects managed bridge network subnet gateway bridge interface and labels
+872. Engine API deletes managed bridge networks only when no containers remain attached
+873. managed bridge networks persist validated Docker-compatible network labels
