@@ -35,7 +35,82 @@ const (
 
 var (
 	storeMu       sync.Mutex
-	networkNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,30}$`)
+	networkNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,30}// Package network manages local Linux bridge networks for Boxr containers.
+// It uses the host iproute2 and iptables tools; creating or attaching networks
+// requires the privileges needed to manage links, network namespaces and rules.
+package network
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/manit6752025/boxr/internal/container"
+)
+
+const (
+	storeVersion    = 1
+	maxStoreBytes   = 4 << 20
+	maxNetworkCount = 128
+)
+
+var (
+	storeMu       sync.Mutex
+	)
+	auxAddressNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}// Package network manages local Linux bridge networks for Boxr containers.
+// It uses the host iproute2 and iptables tools; creating or attaching networks
+// requires the privileges needed to manage links, network namespaces and rules.
+package network
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/manit6752025/boxr/internal/container"
+)
+
+const (
+	storeVersion    = 1
+	maxStoreBytes   = 4 << 20
+	maxNetworkCount = 128
+)
+
+var (
+	storeMu       sync.Mutex
+	)
 )
 
 // Network is the persistent identity and IPAM state of one bridge network.
@@ -46,8 +121,9 @@ type Network struct {
 	Driver       string                   `json:"driver"`
 	Bridge       string                   `json:"bridge"`
 	Subnet       string                   `json:"subnet"`
-	IPRange      string                   `json:"ipRange,omitempty"`
-	Gateway      string                   `json:"gateway"`
+	IPRange            string            `json:"ipRange,omitempty"`
+	AuxiliaryAddresses map[string]string `json:"auxiliaryAddresses,omitempty"`
+	Gateway            string                   `json:"gateway"`
 	NAT          bool                     `json:"nat"`
 	CreatedAt    time.Time                `json:"createdAt"`
 	Allocations  map[string]string        `json:"allocations,omitempty"`
@@ -64,8 +140,9 @@ type PortMapping = container.PortMapping
 // CreateOptions configures an IPv4 bridge and whether it receives outbound NAT.
 type CreateOptions struct {
 	Subnet  string
-	IPRange string
-	Gateway string
+	IPRange            string
+	AuxiliaryAddresses map[string]string
+	Gateway            string
 	Bridge  string
 	NAT     bool
 	Labels  map[string]string
@@ -94,8 +171,9 @@ type Summary struct {
 	Driver         string            `json:"driver"`
 	Bridge         string            `json:"bridge"`
 	Subnet         string            `json:"subnet"`
-	IPRange        string            `json:"ipRange,omitempty"`
-	Gateway        string            `json:"gateway"`
+	IPRange            string            `json:"ipRange,omitempty"`
+	AuxiliaryAddresses map[string]string `json:"auxiliaryAddresses,omitempty"`
+	Gateway            string            `json:"gateway"`
 	NAT            bool              `json:"nat"`
 	ContainerCount int               `json:"containerCount"`
 	CreatedAt      time.Time         `json:"createdAt"`
@@ -302,6 +380,10 @@ func validateStoredNetworks(networks []Network) error {
 			}
 			allocationPool = pool
 		}
+		reservedAddresses, err := validateAuxiliaryAddresses(prefix, gateway, network.AuxiliaryAddresses)
+		if err != nil {
+			return fmt.Errorf("network store contains invalid auxiliary addresses for %q: %w", network.Name, err)
+		}
 		for _, previous := range prefixes {
 			if prefixesOverlap(prefix, previous) {
 				return fmt.Errorf("network store contains overlapping IPv4 subnets")
@@ -319,7 +401,7 @@ func validateStoredNetworks(networks []Network) error {
 			if containerID == "" || strings.ContainsAny(containerID, "/\\\x00") ||
 				err != nil || !address.Is4() || !prefix.Contains(address) || !allocationPool.Contains(address) ||
 				address == gateway || address == prefix.Addr() || address == broadcastAddress(prefix) ||
-				address == allocationPool.Addr() || address == broadcastAddress(allocationPool) {
+				address == allocationPool.Addr() || address == broadcastAddress(allocationPool) || reservedAddresses[addressText] != "" {
 				return fmt.Errorf("network store contains an invalid IPAM allocation for %q", network.Name)
 			}
 			if _, exists := allocated[addressText]; exists {
@@ -486,6 +568,9 @@ func CreateWithRunner(ctx context.Context, name string, options CreateOptions, r
 		}
 		allocationRange = pool.String()
 	}
+	if _, err := validateAuxiliaryAddresses(prefix, gateway, options.AuxiliaryAddresses); err != nil {
+		return empty, err
+	}
 	unlock, err := lockStore()
 	if err != nil {
 		return empty, err
@@ -529,8 +614,9 @@ func CreateWithRunner(ctx context.Context, name string, options CreateOptions, r
 		Driver:      "bridge",
 		Bridge:      bridge,
 		Subnet:      prefix.String(),
-		IPRange:     allocationRange,
-		Gateway:     gateway.String(),
+		IPRange:            allocationRange,
+		AuxiliaryAddresses: cloneNetworkLabels(options.AuxiliaryAddresses),
+		Gateway:            gateway.String(),
 		NAT:         options.NAT,
 		CreatedAt:   time.Now().UTC(),
 		Allocations: make(map[string]string),
@@ -1168,6 +1254,7 @@ func InspectDetails(name string) (Network, error) {
 	}
 	item := current.Networks[index]
 	item.Labels = cloneNetworkLabels(item.Labels)
+	item.AuxiliaryAddresses = cloneNetworkLabels(item.AuxiliaryAddresses)
 	if len(item.Allocations) > 0 {
 		item.Allocations = make(map[string]string, len(item.Allocations))
 		for id, address := range current.Networks[index].Allocations {
@@ -1237,7 +1324,8 @@ func RemoveWithRunner(ctx context.Context, name string, runner Runner) error {
 func summarize(network Network) Summary {
 	return Summary{
 		ID: network.ID, Name: network.Name, Driver: network.Driver,
-		Bridge: network.Bridge, Subnet: network.Subnet, IPRange: network.IPRange, Gateway: network.Gateway,
+		Bridge: network.Bridge, Subnet: network.Subnet, IPRange: network.IPRange,
+		AuxiliaryAddresses: cloneNetworkLabels(network.AuxiliaryAddresses), Gateway: network.Gateway,
 		NAT: network.NAT, ContainerCount: len(network.Allocations), CreatedAt: network.CreatedAt,
 		Labels: cloneNetworkLabels(network.Labels),
 	}
@@ -1303,6 +1391,25 @@ func allocationPrefix(network Network) (netip.Prefix, error) {
 	return parseIPv4IPRange(subnet, network.IPRange)
 }
 
+func validateAuxiliaryAddresses(subnet netip.Prefix, gateway netip.Addr, addresses map[string]string) (map[string]string, error) {
+	reserved := make(map[string]string, len(addresses))
+	for name, value := range addresses {
+		if !auxAddressNameRE.MatchString(name) {
+			return nil, fmt.Errorf("auxiliary address name %q is invalid", name)
+		}
+		address, err := netip.ParseAddr(value)
+		if err != nil || !address.Is4() || address.String() != value || !subnet.Contains(address) ||
+			address == subnet.Addr() || address == broadcastAddress(subnet) || address == gateway {
+			return nil, fmt.Errorf("auxiliary address %q must be a usable canonical IPv4 address in subnet %s", value, subnet)
+		}
+		if previous, exists := reserved[value]; exists {
+			return nil, fmt.Errorf("auxiliary address %s is assigned to both %q and %q", value, previous, name)
+		}
+		reserved[value] = name
+	}
+	return reserved, nil
+}
+
 func allocateEndpointAddress(network Network, requested string) (string, error) {
 	if requested == "" {
 		return allocateAddress(network)
@@ -1322,6 +1429,11 @@ func allocateEndpointAddress(network Network, requested string) (string, error) 
 	gateway, err := netip.ParseAddr(network.Gateway)
 	if err != nil || address == gateway {
 		return "", fmt.Errorf("requested endpoint IPv4 address %s conflicts with the network gateway", requested)
+	}
+	for name, reserved := range network.AuxiliaryAddresses {
+		if reserved == requested {
+			return "", fmt.Errorf("requested endpoint IPv4 address %s is reserved as auxiliary address %q", requested, name)
+		}
 	}
 	for containerID, allocated := range network.Allocations {
 		if allocated == requested {
@@ -1354,8 +1466,11 @@ func allocateAddress(network Network) (string, error) {
 	first := binary.BigEndian.Uint32(networkBytes[:])
 	lastBytes := broadcastAddress(prefix).As4()
 	last := binary.BigEndian.Uint32(lastBytes[:])
-	used := make(map[string]struct{}, len(network.Allocations)+1)
+	used := make(map[string]struct{}, len(network.Allocations)+len(network.AuxiliaryAddresses)+1)
 	used[gateway.String()] = struct{}{}
+	for _, value := range network.AuxiliaryAddresses {
+		used[value] = struct{}{}
+	}
 	for _, value := range network.Allocations {
 		used[value] = struct{}{}
 	}
