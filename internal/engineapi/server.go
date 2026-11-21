@@ -769,6 +769,11 @@ func (s *Server) handleContainers(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
+	filterTimes, err := resolveDockerContainerFilterTimes(filters)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
 	networkAttachments, err := s.containerNetworkAttachments(records)
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, err)
@@ -779,7 +784,7 @@ func (s *Server) handleContainers(writer http.ResponseWriter, request *http.Requ
 		if !all && record.Status != "running" && record.Status != "paused" && record.Status != "restarting" {
 			continue
 		}
-		if !matchesContainerFilters(record, filters, networkAttachments[record.ID]) {
+		if !matchesContainerFiltersWithTimes(record, filters, networkAttachments[record.ID], filterTimes) {
 			continue
 		}
 		image := record.Labels["io.boxr.image"]
@@ -870,7 +875,53 @@ func parseFilters(raw string) (map[string][]string, error) {
 	return result, nil
 }
 
+var dockerContainerFilterKeys = map[string]struct{}{
+	"ancestor": {}, "before": {}, "exited": {}, "expose": {}, "health": {},
+	"id": {}, "label": {}, "label!": {}, "name": {}, "network": {},
+	"publish": {}, "since": {}, "status": {}, "volume": {},
+}
+
+type dockerContainerFilterTimes struct {
+	before []time.Time
+	since  []time.Time
+}
+
+func resolveDockerContainerFilterTimes(filters map[string][]string) (dockerContainerFilterTimes, error) {
+	var result dockerContainerFilterTimes
+	for key, values := range filters {
+		if _, supported := dockerContainerFilterKeys[key]; !supported {
+			return result, fmt.Errorf("unsupported container filter %q", key)
+		}
+		for _, value := range values {
+			if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value {
+				return result, fmt.Errorf("container filter %q contains an empty or whitespace-padded value", key)
+			}
+			if key != "before" && key != "since" {
+				continue
+			}
+			reference, err := state.Get(value)
+			if err != nil {
+				return result, fmt.Errorf("resolve %s container %q: %w", key, value, err)
+			}
+			if key == "before" {
+				result.before = append(result.before, reference.CreatedAt)
+			} else {
+				result.since = append(result.since, reference.CreatedAt)
+			}
+		}
+	}
+	return result, nil
+}
+
 func matchesContainerFilters(record state.Record, filters map[string][]string, networkAttachments ...map[string]any) bool {
+	var attachedNetworks map[string]any
+	if len(networkAttachments) > 0 {
+		attachedNetworks = networkAttachments[0]
+	}
+	return matchesContainerFiltersWithTimes(record, filters, attachedNetworks, dockerContainerFilterTimes{})
+}
+
+func matchesContainerFiltersWithTimes(record state.Record, filters map[string][]string, attachedNetworks map[string]any, referenceTimes dockerContainerFilterTimes) bool {
 	var attachedNetworks map[string]any
 	if len(networkAttachments) > 0 {
 		attachedNetworks = networkAttachments[0]
@@ -882,6 +933,28 @@ func matchesContainerFilters(record state.Record, filters map[string][]string, n
 			for _, value := range values {
 				if value == containerState(record) {
 					matched = true
+				}
+			}
+			if !matched {
+				return false
+			}
+		case "before":
+			matched := false
+			for _, createdAt := range referenceTimes.before {
+				if record.CreatedAt.Before(createdAt) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return false
+			}
+		case "since":
+			matched := false
+			for _, createdAt := range referenceTimes.since {
+				if !record.CreatedAt.Before(createdAt) {
+					matched = true
+					break
 				}
 			}
 			if !matched {
