@@ -63,6 +63,7 @@ type PortMapping = container.PortMapping
 // CreateOptions configures an IPv4 bridge and whether it receives outbound NAT.
 type CreateOptions struct {
 	Subnet  string
+	IPRange string
 	Gateway string
 	Bridge  string
 	NAT     bool
@@ -92,6 +93,7 @@ type Summary struct {
 	Driver         string            `json:"driver"`
 	Bridge         string            `json:"bridge"`
 	Subnet         string            `json:"subnet"`
+	IPRange        string            `json:"ipRange,omitempty"`
 	Gateway        string            `json:"gateway"`
 	NAT            bool              `json:"nat"`
 	ContainerCount int               `json:"containerCount"`
@@ -291,6 +293,12 @@ func validateStoredNetworks(networks []Network) error {
 		if err != nil || prefix.String() != network.Subnet || gateway.String() != network.Gateway {
 			return fmt.Errorf("network store contains invalid subnet or gateway for %q", network.Name)
 		}
+		if network.IPRange != "" {
+			pool, err := parseIPv4IPRange(prefix, network.IPRange)
+			if err != nil || pool.String() != network.IPRange {
+				return fmt.Errorf("network store contains an invalid IPAM allocation range for %q", network.Name)
+			}
+		}
 		for _, previous := range prefixes {
 			if prefixesOverlap(prefix, previous) {
 				return fmt.Errorf("network store contains overlapping IPv4 subnets")
@@ -465,6 +473,13 @@ func CreateWithRunner(ctx context.Context, name string, options CreateOptions, r
 	if err != nil {
 		return empty, err
 	}
+	var allocationRange netip.Prefix
+	if options.IPRange != "" {
+		allocationRange, err = parseIPv4IPRange(prefix, options.IPRange)
+		if err != nil {
+			return empty, err
+		}
+	}
 	unlock, err := lockStore()
 	if err != nil {
 		return empty, err
@@ -508,6 +523,7 @@ func CreateWithRunner(ctx context.Context, name string, options CreateOptions, r
 		Driver:      "bridge",
 		Bridge:      bridge,
 		Subnet:      prefix.String(),
+		IPRange:     allocationRange.String(),
 		Gateway:     gateway.String(),
 		NAT:         options.NAT,
 		CreatedAt:   time.Now().UTC(),
@@ -1215,7 +1231,7 @@ func RemoveWithRunner(ctx context.Context, name string, runner Runner) error {
 func summarize(network Network) Summary {
 	return Summary{
 		ID: network.ID, Name: network.Name, Driver: network.Driver,
-		Bridge: network.Bridge, Subnet: network.Subnet, Gateway: network.Gateway,
+		Bridge: network.Bridge, Subnet: network.Subnet, IPRange: network.IPRange, Gateway: network.Gateway,
 		NAT: network.NAT, ContainerCount: len(network.Allocations), CreatedAt: network.CreatedAt,
 		Labels: cloneNetworkLabels(network.Labels),
 	}
@@ -1261,6 +1277,26 @@ func prefixesOverlap(left, right netip.Prefix) bool {
 	return left.Contains(right.Addr()) || right.Contains(left.Addr())
 }
 
+func parseIPv4IPRange(subnet netip.Prefix, value string) (netip.Prefix, error) {
+	pool, err := netip.ParsePrefix(value)
+	if err != nil || !pool.Addr().Is4() || pool != pool.Masked() || pool.Bits() < subnet.Bits() ||
+		!subnet.Contains(pool.Addr()) || !subnet.Contains(broadcastAddress(pool)) {
+		return netip.Prefix{}, fmt.Errorf("IPAM IPRange %q must be a canonical IPv4 range contained by subnet %s", value, subnet)
+	}
+	return pool, nil
+}
+
+func allocationPrefix(network Network) (netip.Prefix, error) {
+	if network.IPRange == "" {
+		return netip.ParsePrefix(network.Subnet)
+	}
+	subnet, err := netip.ParsePrefix(network.Subnet)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	return parseIPv4IPRange(subnet, network.IPRange)
+}
+
 func allocateEndpointAddress(network Network, requested string) (string, error) {
 	if requested == "" {
 		return allocateAddress(network)
@@ -1272,6 +1308,10 @@ func allocateEndpointAddress(network Network, requested string) (string, error) 
 	prefix, err := netip.ParsePrefix(network.Subnet)
 	if err != nil || !prefix.Contains(address) || address == prefix.Addr() || address == broadcastAddress(prefix) {
 		return "", fmt.Errorf("requested endpoint IPv4 address %s is outside usable subnet %s", requested, network.Subnet)
+	}
+	pool, err := allocationPrefix(network)
+	if err != nil || !pool.Contains(address) || address == pool.Addr() || address == broadcastAddress(pool) {
+		return "", fmt.Errorf("requested endpoint IPv4 address %s is outside usable IPAM range %s", requested, network.IPRange)
 	}
 	gateway, err := netip.ParseAddr(network.Gateway)
 	if err != nil || address == gateway {
@@ -1299,7 +1339,10 @@ func validateEndpointMAC(value string) error {
 }
 
 func allocateAddress(network Network) (string, error) {
-	prefix, _ := netip.ParsePrefix(network.Subnet)
+	prefix, err := allocationPrefix(network)
+	if err != nil {
+		return "", fmt.Errorf("network %q has an invalid IPAM range: %w", network.Name, err)
+	}
 	gateway, _ := netip.ParseAddr(network.Gateway)
 	networkBytes := prefix.Addr().As4()
 	first := binary.BigEndian.Uint32(networkBytes[:])
