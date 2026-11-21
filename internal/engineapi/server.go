@@ -2051,7 +2051,29 @@ func dockerStatsBlockIO(counters map[string]string) map[string]any {
 	for device := range counters {
 		devices = append(devices, device)
 	}
-	sort.Strings(devices)
+	parseDevice := func(device string) (int64, int64, bool) {
+		majorText, minorText, ok := strings.Cut(device, ":")
+		if !ok {
+			return 0, 0, false
+		}
+		major, majorErr := strconv.ParseInt(majorText, 10, 64)
+		minor, minorErr := strconv.ParseInt(minorText, 10, 64)
+		return major, minor, majorErr == nil && minorErr == nil
+	}
+	sort.Slice(devices, func(i, j int) bool {
+		leftMajor, leftMinor, leftOK := parseDevice(devices[i])
+		rightMajor, rightMinor, rightOK := parseDevice(devices[j])
+		if leftOK != rightOK {
+			return leftOK
+		}
+		if !leftOK {
+			return devices[i] < devices[j]
+		}
+		if leftMajor != rightMajor {
+			return leftMajor < rightMajor
+		}
+		return leftMinor < rightMinor
+	})
 	for _, device := range devices {
 		raw := counters[device]
 		majorText, minorText, ok := strings.Cut(device, ":")
