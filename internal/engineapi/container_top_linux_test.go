@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeProcFixture(t *testing.T, root string, pid, ppid int, comm string, nsPID int, uid uint32, start, user, system uint64, children string, command string) {
