@@ -669,6 +669,9 @@ func dockerNetworkAttachmentsFromNetworks(networks []boxrnetwork.Network, record
 		knownContainers[record.ID] = struct{}{}
 	}
 	result := make(map[string]map[string]any, len(records))
+	for _, record := range records {
+		result[record.ID] = make(map[string]any)
+	}
 	for _, network := range networks {
 		if len(network.Allocations) == 0 {
 			continue
