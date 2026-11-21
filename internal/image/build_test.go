@@ -149,7 +149,6 @@ func TestBuildDockerfileMultiStageCopiesArtifactsFromNamedAndIndexedStages(t *te
 	}
 }
 
-
 func TestBuildCopiesFilesAndPersistsRuntimeConfig(t *testing.T) {
 	useStore(t)
 	contextDir := t.TempDir()

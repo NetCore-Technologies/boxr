@@ -53,7 +53,6 @@ func TestParseDockerfileRejectsUnsupportedInstructionsAndUnresolvedStageCopies(t
 	}
 }
 
-
 func TestBuildDockerfileUsesDockerignoreAndPersistsConfig(t *testing.T) {
 	useStore(t)
 	contextDir := t.TempDir()

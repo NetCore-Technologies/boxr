@@ -174,7 +174,6 @@ func BuildForPlatform(contextDir, specPath, reference, platform string) (Image, 
 	return buildWithSpec(contextDir, spec, reference, platform, ".boxrignore")
 }
 
-
 // buildDockerfileStages evaluates a multi-stage Dockerfile in declaration
 // order. Intermediate filesystems remain private temporary directories; only
 // the final stage is committed to the local image store.
@@ -738,7 +737,6 @@ func resolveRootfsTarget(root, target string) (string, error) {
 	}
 	return resolved, nil
 }
-
 
 // validateBuildCopySource rejects symlinks in every path component before
 // opening a build-context or stage-root source. Symlinks inside a copied

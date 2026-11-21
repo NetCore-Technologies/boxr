@@ -155,7 +155,7 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 			if fromSeen {
 				stages = append(stages, dockerfileStage{
 					name: currentStageName, base: spec.Base, config: spec.Config,
-					steps: append([]dockerfileStep(nil), spec.dockerfileSteps...),
+					steps:      append([]dockerfileStep(nil), spec.dockerfileSteps...),
 					hasWorkdir: spec.dockerfileHasWorkdir,
 				})
 				spec.Config = ImageRuntimeConfig{}
@@ -259,9 +259,9 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 				if instructionName == "ADD" && isRemoteDockerfileSource(source) {
 					return fmt.Errorf("line %d: remote ADD sources are not supported; download the file explicitly into the build context", lineNumber)
 				}
-					if strings.TrimSpace(source) == "" {
-						return fmt.Errorf("line %d: %s source must not be empty", lineNumber, instructionName)
-					}
+				if strings.TrimSpace(source) == "" {
+					return fmt.Errorf("line %d: %s source must not be empty", lineNumber, instructionName)
+				}
 				cleanSource := path.Clean(source)
 				if copyFrom == "" {
 					if strings.HasPrefix(cleanSource, "/") || cleanSource == ".." || strings.HasPrefix(cleanSource, "../") {
@@ -451,7 +451,7 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 	if len(stages) > 0 {
 		stages = append(stages, dockerfileStage{
 			name: currentStageName, base: spec.Base, config: spec.Config,
-			steps: append([]dockerfileStep(nil), spec.dockerfileSteps...),
+			steps:      append([]dockerfileStep(nil), spec.dockerfileSteps...),
 			hasWorkdir: spec.dockerfileHasWorkdir,
 		})
 	}
