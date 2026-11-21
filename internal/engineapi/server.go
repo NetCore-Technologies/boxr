@@ -279,6 +279,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 				return
 			}
 			s.handleExecInspect(writer, execID)
+		case "resize":
+			if !requireMethod(writer, request, http.MethodPost) {
+				return
+			}
+			s.handleExecResize(writer, request, execID)
 		default:
 			writeError(writer, http.StatusNotFound, fmt.Errorf("exec endpoint not found"))
 		}
