@@ -28,7 +28,7 @@ func writeProcFixture(t *testing.T, root string, pid, ppid int, comm string, nsP
 	if err := os.WriteFile(filepath.Join(base, "stat"), []byte(strconv.Itoa(pid)+" ("+comm+") "+strings.Join(fields, " ")), 0600); err != nil {
 		t.Fatal(err)
 	}
-	status := "Name:\t"+comm+"\nUid:\t"+strconv.FormatUint(uint64(uid), 10)+" "+strconv.FormatUint(uint64(uid), 10)+" "+strconv.FormatUint(uint64(uid), 10)+" "+strconv.FormatUint(uint64(uid), 10)+"\nNSpid:\t"+strconv.Itoa(nsPID)+"\n"
+	status := "Name:\t" + comm + "\nUid:\t" + strconv.FormatUint(uint64(uid), 10) + " " + strconv.FormatUint(uint64(uid), 10) + " " + strconv.FormatUint(uint64(uid), 10) + " " + strconv.FormatUint(uint64(uid), 10) + "\nNSpid:\t" + strconv.Itoa(nsPID) + "\n"
 	if err := os.WriteFile(filepath.Join(base, "status"), []byte(status), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestFormatProcessCPUPercentUsesLifetimeAverageAndBoundsOutput(t *testing.T)
 func TestParseDockerTopProcStatHandlesClosingParenthesisInCommand(t *testing.T) {
 	fields := make([]string, 20)
 	fields[0], fields[1], fields[11], fields[12], fields[19] = "S", "7", "12", "8", "99"
-	got, err := parseDockerTopProcStat("100 (name ) with ) parens) "+strings.Join(fields, " "))
+	got, err := parseDockerTopProcStat("100 (name ) with ) parens) " + strings.Join(fields, " "))
 	if err != nil {
 		t.Fatal(err)
 	}

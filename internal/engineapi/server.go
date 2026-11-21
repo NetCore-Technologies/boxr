@@ -1559,10 +1559,10 @@ func dockerStatsSnapshotWithPrevious(record state.Record, previous *dockerStatsS
 
 func dockerStatsCPUUsage(stats state.Stats) map[string]any {
 	return map[string]any{
-		"total_usage": stats.CPUUsageUsec * 1000,
+		"total_usage":         stats.CPUUsageUsec * 1000,
 		"usage_in_kernelmode": stats.CPUSystemUsec * 1000,
-		"usage_in_usermode": stats.CPUUserUsec * 1000,
-		"percpu_usage": []int64{},
+		"usage_in_usermode":   stats.CPUUserUsec * 1000,
+		"percpu_usage":        []int64{},
 	}
 }
 
@@ -1591,9 +1591,9 @@ func dockerStatsBlockIO(counters map[string]string) map[string]any {
 			}
 		}
 		for _, operation := range []struct {
-			name string
+			name  string
 			bytes string
-			ios string
+			ios   string
 		}{{name: "Read", bytes: "rbytes", ios: "rios"}, {name: "Write", bytes: "wbytes", ios: "wios"}} {
 			serviceBytes = append(serviceBytes, map[string]any{
 				"major": major, "minor": minor, "op": operation.name, "value": values[operation.bytes],
@@ -1605,12 +1605,12 @@ func dockerStatsBlockIO(counters map[string]string) map[string]any {
 	}
 	return map[string]any{
 		"io_service_bytes_recursive": serviceBytes,
-		"io_serviced_recursive": serviced,
-		"io_service_time_recursive": []any{},
-		"io_wait_time_recursive": []any{},
-		"io_merged_recursive": []any{},
-		"io_time_recursive": []any{},
-		"sectors_recursive": []any{},
+		"io_serviced_recursive":      serviced,
+		"io_service_time_recursive":  []any{},
+		"io_wait_time_recursive":     []any{},
+		"io_merged_recursive":        []any{},
+		"io_time_recursive":          []any{},
+		"sectors_recursive":          []any{},
 	}
 }
 
@@ -1833,7 +1833,7 @@ func (s *Server) handleEvents(writer http.ResponseWriter, request *http.Request)
 				// Preserve legacy aliases for older Docker Engine API clients.
 				"status": action, "id": event.ID,
 				"scope": "local",
-				"time": event.Time.Unix(), "timeNano": event.Time.UnixNano(),
+				"time":  event.Time.Unix(), "timeNano": event.Time.UnixNano(),
 			}
 			if json.NewEncoder(writer).Encode(payload) != nil {
 				return false

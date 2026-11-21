@@ -92,7 +92,7 @@ func (s *Server) handleContainerTop(writer http.ResponseWriter, _ *http.Request,
 		})
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"Titles": []string{"UID", "PID", "PPID", "C", "STIME", "TTY", "TIME", "CMD"},
+		"Titles":    []string{"UID", "PID", "PPID", "C", "STIME", "TTY", "TIME", "CMD"},
 		"Processes": rows,
 	})
 }
@@ -187,16 +187,16 @@ func readContainerProcessAt(procRoot string, pid int) (dockerTopProcess, error) 
 		return result, fmt.Errorf("process %d exited or was reused while inspecting", pid)
 	}
 	return dockerTopProcess{
-		hostPID: pid,
+		hostPID:    pid,
 		threadPIDs: threadPIDs,
-		pid: namespacePID,
-		ppid: parsed.ppid,
-		uid: uid,
-		comm: parsed.comm,
-		command: command,
-		tty: tty,
-		cpuTime: parsed.cpuTime,
-		start: parsed.start,
+		pid:        namespacePID,
+		ppid:       parsed.ppid,
+		uid:        uid,
+		comm:       parsed.comm,
+		command:    command,
+		tty:        tty,
+		cpuTime:    parsed.cpuTime,
+		start:      parsed.start,
 	}, nil
 }
 
@@ -214,7 +214,7 @@ func parseDockerTopProcStat(value string) (dockerTopProcStat, error) {
 	if open < 1 || close <= open || close+1 >= len(value) {
 		return result, fmt.Errorf("malformed /proc stat record")
 	}
-	result.comm = value[open+1:close]
+	result.comm = value[open+1 : close]
 	fields := strings.Fields(value[close+1:])
 	if len(fields) <= 19 || fields[0] == "Z" || fields[0] == "X" {
 		return result, fmt.Errorf("process is gone or /proc stat is incomplete")

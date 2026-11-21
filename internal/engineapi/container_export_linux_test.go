@@ -78,7 +78,7 @@ func TestDockerContainerExportExcludesMountedVolumeContents(t *testing.T) {
 	_, err := imageStore.ImportRootFSWithConfig(root, "export-volume-base:latest", "linux", "amd64", "",
 		imageStore.ImageRuntimeConfig{
 			Entrypoint: []string{"/bin/app"},
-			Volumes: map[string]struct{}{"/data": {}},
+			Volumes:    map[string]struct{}{"/data": {}},
 		})
 	if err != nil {
 		t.Fatal(err)

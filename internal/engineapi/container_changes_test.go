@@ -60,13 +60,13 @@ func TestScanDockerOverlayChangesReportsAddedChangedAndDeletedPaths(t *testing.T
 		got[change.Path] = change.Kind
 	}
 	want := map[string]int{
-		"/changed.txt":   0,
-		"/added.txt":     1,
-		"/deleted.txt":   2,
-		"/opaque":        0,
+		"/changed.txt":    0,
+		"/added.txt":      1,
+		"/deleted.txt":    2,
+		"/opaque":         0,
 		"/opaque/new.txt": 1,
 		"/opaque/old.txt": 2,
-		"/brand-new": 1,
+		"/brand-new":      1,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("changes = %#v, want %#v", got, want)

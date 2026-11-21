@@ -23,7 +23,7 @@ func TestDockerStatsSnapshotUsesDistinctPreviousCounters(t *testing.T) {
 	current := state.Stats{
 		CPUUsageUsec: 250, CPUUserUsec: 180, CPUSystemUsec: 70,
 		SystemCPUUsageNS: 1_500_000_000,
-		CPUPeriods: 1000, CPUThrottledPeriods: 42, CPUThrottledUsec: 900,
+		CPUPeriods:       1000, CPUThrottledPeriods: 42, CPUThrottledUsec: 900,
 		MemoryCurrent: 4096, MemoryMax: "max", SystemMemoryTotalBytes: 1 << 30,
 		MemoryStats: map[string]int64{
 			"anon": 2048, "file": 1024, "max_usage": 8192, "oom": 1,
@@ -82,8 +82,8 @@ func TestDockerStatsSnapshotUsesDistinctPreviousCounters(t *testing.T) {
 
 func TestDockerStatsBlockIOConvertsCgroupCounters(t *testing.T) {
 	result := dockerStatsBlockIO(map[string]string{
-		"8:0": "rbytes=4096 wbytes=2048 rios=4 wios=2",
-		"253:1": "rbytes=0 wbytes=8192 rios=0 wios=8",
+		"8:0":     "rbytes=4096 wbytes=2048 rios=4 wios=2",
+		"253:1":   "rbytes=0 wbytes=8192 rios=0 wios=8",
 		"invalid": "rbytes=10 wbytes=20 rios=1 wios=2",
 	})
 	serviceBytes := result["io_service_bytes_recursive"].([]map[string]any)

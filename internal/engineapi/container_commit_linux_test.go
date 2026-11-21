@@ -52,7 +52,7 @@ func TestDockerContainerCommitSnapshotsWritableLayerAndConfig(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(upper, "etc", "boxr"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(upper, "etc", "boxr", "committed.conf"), []byte("committed=true" + string([]byte{10})), 0640); err != nil {
+	if err := os.WriteFile(filepath.Join(upper, "etc", "boxr", "committed.conf"), []byte("committed=true"+string([]byte{10})), 0640); err != nil {
 		t.Fatal(err)
 	}
 
@@ -93,7 +93,7 @@ func TestDockerContainerCommitSnapshotsWritableLayerAndConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "committed=true" + string([]byte{10}) {
+	if string(data) != "committed=true"+string([]byte{10}) {
 		t.Fatalf("committed writable-layer content = %q", data)
 	}
 }
@@ -116,7 +116,7 @@ func TestDockerContainerCommitExcludesDeclaredVolumeContents(t *testing.T) {
 	_, err := imageStore.ImportRootFSWithConfig(root, "volume-commit-base:latest", "linux", "amd64", "",
 		imageStore.ImageRuntimeConfig{
 			Entrypoint: []string{"/bin/app"},
-			Volumes: map[string]struct{}{"/data": {}},
+			Volumes:    map[string]struct{}{"/data": {}},
 		})
 	if err != nil {
 		t.Fatal(err)

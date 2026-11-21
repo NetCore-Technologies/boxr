@@ -77,4 +77,3 @@ func resizeDockerExecTTY(terminal *os.File, rows, columns uint16) error {
 	}
 	return pty.Setsize(terminal, &pty.Winsize{Rows: rows, Cols: columns})
 }
-

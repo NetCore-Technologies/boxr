@@ -41,9 +41,9 @@ func TestCleanDockerArchivePath(t *testing.T) {
 
 func TestDockerArchivePathFlags(t *testing.T) {
 	tests := []struct {
-		input          string
-		wantPath       string
-		contentsOnly   bool
+		input             string
+		wantPath          string
+		contentsOnly      bool
 		directoryExpected bool
 	}{
 		{input: "etc/passwd", wantPath: "etc/passwd"},
@@ -170,7 +170,7 @@ func TestDockerOverlayArchiveMergesUpperAndHonoursWhiteouts(t *testing.T) {
 	lower := t.TempDir()
 	upper := t.TempDir()
 	for name, data := range map[string]string{
-		"base.txt": "base",
+		"base.txt":    "base",
 		"replace.txt": "old",
 		"removed.txt": "removed",
 	} {

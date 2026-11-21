@@ -211,9 +211,9 @@ func TestDockerEngineExecInteractiveTTYUsesHijackedRawStream(t *testing.T) {
 
 	inspect := engineAPIRequest(server, http.MethodGet, "/exec/"+created.Id+"/json")
 	var result struct {
-		Running  bool
-		ExitCode *int
-		Pid      int
+		Running       bool
+		ExitCode      *int
+		Pid           int
 		ProcessConfig struct {
 			TTY bool `json:"tty"`
 		}
@@ -531,4 +531,3 @@ func TestDockerEngineExecInheritsContainerUser(t *testing.T) {
 		t.Fatalf("inherited exec user=%q, want 1001:100", session.Config.User)
 	}
 }
-
