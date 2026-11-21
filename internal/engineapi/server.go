@@ -773,7 +773,7 @@ func (s *Server) handleContainers(writer http.ResponseWriter, request *http.Requ
 		if !all && record.Status != "running" && record.Status != "paused" && record.Status != "restarting" {
 			continue
 		}
-		if !matchesContainerFilters(record, filters) {
+		if !matchesContainerFilters(record, filters, networkAttachments[record.ID]) {
 			continue
 		}
 		image := record.Labels["io.boxr.image"]
@@ -864,7 +864,11 @@ func parseFilters(raw string) (map[string][]string, error) {
 	return result, nil
 }
 
-func matchesContainerFilters(record state.Record, filters map[string][]string) bool {
+func matchesContainerFilters(record state.Record, filters map[string][]string, networkAttachments ...map[string]any) bool {
+	var attachedNetworks map[string]any
+	if len(networkAttachments) > 0 {
+		attachedNetworks = networkAttachments[0]
+	}
 	for key, values := range filters {
 		switch key {
 		case "status":
@@ -904,6 +908,68 @@ func matchesContainerFilters(record state.Record, filters map[string][]string) b
 				actual, exists := record.Labels[key]
 				if exists && (!hasValue || actual == wanted) {
 					matched = true
+				}
+			}
+			if !matched {
+				return false
+			}
+		case "label!":
+			for _, value := range values {
+				key, excluded, hasValue := strings.Cut(value, "=")
+				actual, exists := record.Labels[key]
+				if exists && (!hasValue || actual == excluded) {
+					return false
+				}
+			}
+		case "exited":
+			if record.ExitCode == nil {
+				return false
+			}
+			matched := false
+			for _, value := range values {
+				if value == strconv.Itoa(*record.ExitCode) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return false
+			}
+		case "health":
+			actual := "none"
+			if record.Health != nil && record.Health.Status != "" {
+				actual = record.Health.Status
+			}
+			matched := false
+			for _, value := range values {
+				if value == actual {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return false
+			}
+		case "network":
+			matched := false
+			for _, value := range values {
+				for name, rawEndpoint := range attachedNetworks {
+					if name == value {
+						matched = true
+						break
+					}
+					endpoint, ok := rawEndpoint.(map[string]any)
+					if !ok {
+						continue
+					}
+					networkID, _ := endpoint["NetworkID"].(string)
+					if networkID != "" && strings.HasPrefix(networkID, value) {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					break
 				}
 			}
 			if !matched {
