@@ -734,6 +734,9 @@ func validateDockerBindSource(path string) error {
 		}
 		walked = append(walked, part)
 		current := strings.Join(walked, string(filepath.Separator))
+		if !filepath.IsLocal(current) {
+			return fmt.Errorf("bind source contains a non-local path component")
+		}
 		info, err := root.Lstat(current)
 		if err != nil {
 			return fmt.Errorf("inspect bind source component %s: %w", current, err)
