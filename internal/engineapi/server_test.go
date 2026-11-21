@@ -1276,7 +1276,7 @@ func TestDockerCreatePersistsVerifiedImageRootFSForContainerLifetime(t *testing.
 	const reference = "registry.example/team/persistent-rootfs:v1"
 	importEngineAPITestImage(t, reference)
 
-	request := httptest.NewRequest(http.MethodPost, "/v1.45/containers/create?name=persistent-rootfs", strings.NewReader(`{"Image":"`+reference+`"}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1.45/containers/create?name=persistent-rootfs", strings.NewReader(`{"Image":"`+reference+`","User":"1001:100"}`))
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated {
@@ -1291,6 +1291,9 @@ func TestDockerCreatePersistsVerifiedImageRootFSForContainerLifetime(t *testing.
 	record, err := state.Get(created.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if record.Options.User != "1001:100" {
+		t.Fatalf("container User=%q, want 1001:100", record.Options.User)
 	}
 	expected, err := state.ManagedRootFSDir(record.ID)
 	if err != nil {
@@ -1318,6 +1321,9 @@ func TestDockerCreatePersistsVerifiedImageRootFSForContainerLifetime(t *testing.
 	}
 	if err := json.Unmarshal(data, &saved); err != nil {
 		t.Fatal(err)
+	}
+	if saved.Options.User != "1001:100" {
+		t.Fatalf("saved start configuration User=%q, want 1001:100", saved.Options.User)
 	}
 	if saved.Options.RootFS != expected {
 		t.Fatalf("saved start configuration RootFS=%q, want %q", saved.Options.RootFS, expected)

@@ -8,7 +8,6 @@ import (
 	"github.com/manit6752025/boxr/internal/state"
 )
 
-
 func (s *Server) resumePausedContainer(record state.Record) error {
 	if record.Status != "paused" {
 		return fmt.Errorf("container %s is not paused", record.ID)
