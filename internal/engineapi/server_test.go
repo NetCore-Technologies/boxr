@@ -2232,7 +2232,7 @@ func TestDockerNetworkCreateRejectsUnsupportedModesAndOptions(t *testing.T) {
 		"internal":          `{"Name":"unsupported","Driver":"bridge","Internal":true,"IPAM":{"Config":[{"Subnet":"172.28.40.0/24"}]}}`,
 		"ipv6":              `{"Name":"unsupported","Driver":"bridge","EnableIPv6":true,"IPAM":{"Config":[{"Subnet":"172.28.40.0/24"}]}}`,
 		"empty ipam":        `{"Name":"unsupported","Driver":"bridge","IPAM":{"Config":[]}}`,
-		"ip range":          `{"Name":"unsupported","Driver":"bridge","IPAM":{"Config":[{"Subnet":"172.28.40.0/24","IPRange":"172.28.40.128/25"}]}}`,
+		"auxiliary addresses": `{"Name":"unsupported","Driver":"bridge","IPAM":{"Config":[{"Subnet":"172.28.40.0/24","AuxiliaryAddresses":{"reserved":"172.28.40.10"}}]}}`,
 		"unknown option":    `{"Name":"unsupported","Driver":"bridge","IPAM":{"Config":[{"Subnet":"172.28.40.0/24"}]},"Options":{"unsafe":"true"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -2264,7 +2264,7 @@ func TestDockerNetworkConnectDisconnectAndInspectEndpoint(t *testing.T) {
 	server.verifyNetworkPID = func(state.Record) error { return nil }
 
 	createRequest := httptest.NewRequest(http.MethodPost, "/v1.45/networks/create", strings.NewReader(
-		`{"Name":"connect-test","Driver":"bridge","IPAM":{"Config":[{"Subnet":"172.29.41.0/24","Gateway":"172.29.41.1"}]},"Options":{"com.docker.network.bridge.enable_ip_masquerade":"false"}}`,
+		`{"Name":"connect-test","Driver":"bridge","IPAM":{"Config":[{"Subnet":"172.29.41.0/24","IPRange":"172.29.41.128/25","Gateway":"172.29.41.1"}]},"Options":{"com.docker.network.bridge.enable_ip_masquerade":"false"}}`,
 	))
 	createResponse := httptest.NewRecorder()
 	server.ServeHTTP(createResponse, createRequest)
@@ -2293,7 +2293,7 @@ func TestDockerNetworkConnectDisconnectAndInspectEndpoint(t *testing.T) {
 	}()
 
 	connectRequest := httptest.NewRequest(http.MethodPost, "/v1.45/networks/"+networkCreated.ID+"/connect",
-		strings.NewReader(`{"Container":"`+record.ID+`","EndpointConfig":{}}`))
+		strings.NewReader(`{"Container":"`+record.ID+`","EndpointConfig":{"IPAMConfig":{"IPv4Address":"172.29.41.133"},"MacAddress":"02:aa:bb:cc:dd:ee"}}`))
 	connectResponse := httptest.NewRecorder()
 	server.ServeHTTP(connectResponse, connectRequest)
 	if connectResponse.Code != http.StatusOK {
@@ -2309,8 +2309,12 @@ func TestDockerNetworkConnectDisconnectAndInspectEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	endpoint, ok := inspected.Containers[record.ID]
-	if !ok || endpoint["Name"] != "/network-client" || endpoint["IPv4Address"] != "172.29.41.2/24" {
+	if !ok || endpoint["Name"] != "/network-client" || endpoint["IPv4Address"] != "172.29.41.133/24" ||
+		endpoint["MacAddress"] != "02:aa:bb:cc:dd:ee" || len(endpoint["EndpointID"]) != 64 {
 		t.Fatalf("network inspect endpoint = %#v", inspected.Containers)
+	}
+	if len(inspected.IPAM.Config) != 1 || inspected.IPAM.Config[0].IPRange != "172.29.41.128/25" {
+		t.Fatalf("network inspect IPAM range = %#v", inspected.IPAM.Config)
 	}
 
 	disconnectRequest := httptest.NewRequest(http.MethodPost, "/v1.45/networks/"+networkCreated.ID+"/disconnect",
@@ -2327,8 +2331,9 @@ func TestDockerNetworkConnectDisconnectAndInspectEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(details.Allocations) != 0 {
-		t.Fatalf("disconnect did not persist IPAM release: %+v", details.Allocations)
+	if len(details.Allocations) != 0 || len(details.MACAddresses) != 0 || len(details.EndpointIDs) != 0 {
+		t.Fatalf("disconnect did not persist endpoint release: allocations=%+v MACs=%+v IDs=%+v",
+			details.Allocations, details.MACAddresses, details.EndpointIDs)
 	}
 	inspectResponse = engineAPIRequest(server, http.MethodGet, "/v1.45/networks/"+networkCreated.ID)
 	if inspectResponse.Code != http.StatusOK {
