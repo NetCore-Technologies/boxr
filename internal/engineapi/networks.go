@@ -27,16 +27,16 @@ type dockerNetworkIPAM struct {
 }
 
 type dockerNetworkCreateRequest struct {
-	Name          string            `json:"Name"`
-	CheckDuplicate bool             `json:"CheckDuplicate"`
-	Driver        string            `json:"Driver"`
-	Internal      bool              `json:"Internal"`
-	Attachable    bool              `json:"Attachable"`
-	Ingress       bool              `json:"Ingress"`
-	EnableIPv6    bool              `json:"EnableIPv6"`
-	IPAM          dockerNetworkIPAM `json:"IPAM"`
-	Options       map[string]string `json:"Options"`
-	Labels        map[string]string `json:"Labels"`
+	Name           string            `json:"Name"`
+	CheckDuplicate bool              `json:"CheckDuplicate"`
+	Driver         string            `json:"Driver"`
+	Internal       bool              `json:"Internal"`
+	Attachable     bool              `json:"Attachable"`
+	Ingress        bool              `json:"Ingress"`
+	EnableIPv6     bool              `json:"EnableIPv6"`
+	IPAM           dockerNetworkIPAM `json:"IPAM"`
+	Options        map[string]string `json:"Options"`
+	Labels         map[string]string `json:"Labels"`
 }
 
 type dockerNetworkIPAMResponse struct {
@@ -52,7 +52,7 @@ type dockerNetworkResponse struct {
 	Scope      string                       `json:"Scope"`
 	Driver     string                       `json:"Driver"`
 	EnableIPv6 bool                         `json:"EnableIPv6"`
-	IPAM       dockerNetworkIPAMResponse   `json:"IPAM"`
+	IPAM       dockerNetworkIPAMResponse    `json:"IPAM"`
 	Internal   bool                         `json:"Internal"`
 	Attachable bool                         `json:"Attachable"`
 	Ingress    bool                         `json:"Ingress"`
@@ -69,7 +69,7 @@ type dockerNetworkCreateResponse struct {
 
 func dockerNetwork(item boxrnetwork.Summary) dockerNetworkResponse {
 	options := map[string]string{
-		"com.docker.network.bridge.name":                  item.Bridge,
+		"com.docker.network.bridge.name":                 item.Bridge,
 		"com.docker.network.bridge.enable_ip_masquerade": strconv.FormatBool(item.NAT),
 	}
 	return dockerNetworkResponse{
