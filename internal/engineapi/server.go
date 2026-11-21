@@ -163,6 +163,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		s.handleContainer(writer, request, remainder)
+	case path == "/images/prune":
+		if !requireMethod(writer, request, http.MethodPost) {
+			return
+		}
+		s.handleImagePrune(writer, request)
 	case path == "/images/load":
 		if !requireMethod(writer, request, http.MethodPost) {
 			return
