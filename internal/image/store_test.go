@@ -732,3 +732,48 @@ func TestSaveDockerManyDeduplicatesImagesAndLayers(t *testing.T) {
 		t.Fatalf("loaded references = %v, want %v", loadedReferences, wantTags)
 	}
 }
+
+func TestRemoveManyIsAtomicWhenAnyReferenceIsMissing(t *testing.T) {
+	useStore(t)
+	root := newRoot(t)
+	first, err := ImportRootFS(root, "demo:first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Tag("demo:first", "demo:alias"); err != nil {
+		t.Fatal(err)
+	}
+	secondRoot := newRoot(t)
+	if err := os.WriteFile(filepath.Join(secondRoot, "bin", "hello"), []byte("second image\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	second, err := ImportRootFS(secondRoot, "demo:second")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RemoveMany([]string{"demo:first", "demo:missing"}); err == nil {
+		t.Fatal("RemoveMany accepted a set containing a missing reference")
+	}
+	for _, reference := range []string{"demo:first", "demo:alias", "demo:second"} {
+		if _, err := Verify(reference); err != nil {
+			t.Fatalf("reference %s changed after rejected batch removal: %v", reference, err)
+		}
+	}
+
+	if err := RemoveMany([]string{"demo:first", "demo:alias"}); err != nil {
+		t.Fatalf("RemoveMany: %v", err)
+	}
+	if _, err := Inspect("demo:first"); err == nil {
+		t.Fatal("primary reference remains after successful batch removal")
+	}
+	if _, err := Inspect("demo:alias"); err == nil {
+		t.Fatal("alias reference remains after successful batch removal")
+	}
+	if remaining, err := Verify("demo:second"); err != nil || remaining.Digest != second.Digest {
+		t.Fatalf("unrelated reference changed: image=%+v err=%v", remaining, err)
+	}
+	if first.Digest == second.Digest {
+		t.Fatal("test fixtures unexpectedly share an image digest")
+	}
+}
