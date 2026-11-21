@@ -276,3 +276,13 @@ func TestDockerContainerUpdatePreservesExplicitUnlimitedSwap(t *testing.T) {
 		t.Fatalf("explicit unlimited swap was not preserved: %+v", applied)
 	}
 }
+
+func TestDockerOptionsAcceptsUnlimitedPIDLimit(t *testing.T) {
+	options, err := dockerOptions(dockerHostConfig{PidsLimit: -1})
+	if err != nil {
+		t.Fatalf("dockerOptions with unlimited PidsLimit: %v", err)
+	}
+	if options.PidsLimit != 0 {
+		t.Fatalf("PidsLimit=-1 should map to unlimited cgroup setting, got %d", options.PidsLimit)
+	}
+}

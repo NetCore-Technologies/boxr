@@ -984,8 +984,11 @@ func dockerOptions(host dockerHostConfig) (container.Options, error) {
 		RestartMaxRetries: host.RestartPolicy.MaximumRetryCount,
 		DropCapabilities:  append([]string(nil), host.CapDrop...),
 	}
-	if host.Memory < 0 || host.MemoryReservation < 0 || host.MemorySwap < -1 || host.NanoCPUs < 0 || host.PidsLimit < 0 {
-		return options, fmt.Errorf("Docker memory, CPU and PID limits must not be negative (MemorySwap also accepts -1 for unlimited)")
+	if host.Memory < 0 || host.MemoryReservation < 0 || host.MemorySwap < -1 || host.NanoCPUs < 0 || host.PidsLimit < -1 {
+		return options, fmt.Errorf("Docker memory, CPU and PID limits must not be negative (MemorySwap and PidsLimit also accept -1 for unlimited)")
+	}
+	if options.PidsLimit == -1 {
+		options.PidsLimit = 0
 	}
 	if host.NanoCPUs > 0 {
 		options.CPUs = float64(host.NanoCPUs) / 1e9
