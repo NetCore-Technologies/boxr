@@ -724,6 +724,15 @@ func createContainerRecord(name string, input dockerCreateRequest) (state.Record
 		_ = state.RemoveCreated(record.ID)
 		return empty, fmt.Errorf("unpack verified image into persistent container rootfs: %w", err)
 	}
+	if err := copyUpDockerVolumes(options.BindMounts, rootPath); err != nil {
+		cleanupErr := state.RemoveManagedRootFS(record.ID)
+		removeErr := state.RemoveCreated(record.ID)
+		return empty, errors.Join(
+			fmt.Errorf("copy image data into Docker volumes: %w", err),
+			cleanupErr,
+			removeErr,
+		)
+	}
 	record, err = state.ConfigureManagedRootFS(record.ID, rootPath)
 	if err != nil {
 		cleanupErr := state.RemoveManagedRootFS(record.ID)
@@ -742,6 +751,43 @@ func createContainerRecord(name string, input dockerCreateRequest) (state.Record
 		return empty, fmt.Errorf("configure persistent container writable layer: %w", err)
 	}
 	return record, nil
+}
+
+// copyUpDockerVolumes applies Docker's default initial-volume population only
+// to empty, Boxr-managed volumes. A live Boxr container may be writing to a
+// volume outside the volume package's mutex, so refuse copy-up while one is
+// using that path.
+func copyUpDockerVolumes(mounts []container.BindMount, rootPath string) error {
+	var selected []container.BindMount
+	for _, mount := range mounts {
+		if mount.VolumeName != "" && mount.CopyUp {
+			selected = append(selected, mount)
+		}
+	}
+	if len(selected) == 0 {
+		return nil
+	}
+
+	records, err := state.List(true)
+	if err != nil {
+		return fmt.Errorf("inspect existing container volume users: %w", err)
+	}
+	for _, mount := range selected {
+		for _, record := range records {
+			if record.Status != "running" && record.Status != "restarting" {
+				continue
+			}
+			for _, activeMount := range record.Options.BindMounts {
+				if filepath.Clean(activeMount.Source) == filepath.Clean(mount.Source) {
+					return fmt.Errorf("volume %q is already in use by running container %s; refusing initial copy-up", mount.VolumeName, record.ID)
+				}
+			}
+		}
+		if err := volume.CopyUpFromRootFS(mount.VolumeName, rootPath, mount.Target); err != nil {
+			return fmt.Errorf("copy image path %s into volume %q: %w", mount.Target, mount.VolumeName, err)
+		}
+	}
+	return nil
 }
 
 func dockerOptions(host dockerHostConfig) (container.Options, error) {
@@ -880,6 +926,8 @@ func parseDockerBindPaths(source, rawTarget string, readOnly bool) (container.Bi
 			return result, fmt.Errorf("resolve named volume %q: %w", source, err)
 		}
 		result.Source = item.Path
+		result.VolumeName = source
+		result.CopyUp = true
 	}
 	return result, nil
 }
@@ -960,11 +1008,9 @@ func parseDockerMounts(rawMounts []json.RawMessage) ([]container.BindMount, []co
 			if mount.Source == "" {
 				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].Source must name a pre-created Boxr volume", index)
 			}
-			if mount.VolumeOptions == nil || !mount.VolumeOptions.NoCopy {
-				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].VolumeOptions.NoCopy must be true because volume copy-up is not implemented", index)
-			}
-			if len(mount.VolumeOptions.Labels) > 0 || mount.VolumeOptions.Subpath != "" || mount.VolumeOptions.DriverConfig != nil {
-				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].VolumeOptions supports only NoCopy=true", index)
+			if mount.VolumeOptions != nil &&
+				(len(mount.VolumeOptions.Labels) > 0 || mount.VolumeOptions.Subpath != "" || mount.VolumeOptions.DriverConfig != nil) {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].VolumeOptions supports only NoCopy", index)
 			}
 			if err := volume.ValidateName(mount.Source); err != nil {
 				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].Source is not a valid Boxr volume name: %w", index, err)
@@ -976,6 +1022,7 @@ func parseDockerMounts(rawMounts []json.RawMessage) ([]container.BindMount, []co
 			if err != nil {
 				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d]: %w", index, err)
 			}
+			parsed.CopyUp = mount.VolumeOptions == nil || !mount.VolumeOptions.NoCopy
 			binds = append(binds, parsed)
 		case "tmpfs":
 			if mount.Source != "" {
