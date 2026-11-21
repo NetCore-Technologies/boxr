@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -753,8 +754,86 @@ func dockerContainerNetworkSettings(record state.Record, ports map[string][]map[
 	return settings
 }
 
+const maxDockerSizeWalkEntries = 1 << 20
+
+func dockerDirectoryLogicalSize(root string, missingIsZero bool) (int64, error) {
+	if root == "" {
+		return 0, nil
+	}
+	info, err := os.Lstat(root)
+	if err != nil {
+		if missingIsZero && errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("inspect filesystem size root: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return 0, fmt.Errorf("filesystem size root %q must be a real directory", root)
+	}
+	var total int64
+	var entries int
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		entries++
+		if entries > maxDockerSizeWalkEntries {
+			return fmt.Errorf("filesystem size walk exceeded %d entries", maxDockerSizeWalkEntries)
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		fileInfo, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !fileInfo.Mode().IsRegular() {
+			return nil
+		}
+		size := fileInfo.Size()
+		if size < 0 || total > int64(^uint64(0)>>1)-size {
+			return fmt.Errorf("filesystem size overflow while inspecting %q", path)
+		}
+		total += size
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("measure filesystem tree %q: %w", root, err)
+	}
+	return total, nil
+}
+
+// dockerContainerSize reports logical bytes in the immutable base rootfs and
+// Boxr's OverlayFS upper layer. Symlinks and special files are never followed.
+func dockerContainerSize(record state.Record) (sizeRW, sizeRootFS int64, err error) {
+	if record.Options.RootFS != "" {
+		sizeRootFS, err = dockerDirectoryLogicalSize(record.Options.RootFS, false)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	if record.Options.OverlayDir != "" {
+		sizeRW, err = dockerDirectoryLogicalSize(filepath.Join(record.Options.OverlayDir, "upper"), true)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	if sizeRootFS > int64(^uint64(0)>>1)-sizeRW {
+		return 0, 0, fmt.Errorf("container filesystem size overflow")
+	}
+	return sizeRW, sizeRootFS + sizeRW, nil
+}
+
 func (s *Server) handleContainers(writer http.ResponseWriter, request *http.Request) {
 	all, err := boolQuery(request, "all")
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
+	includeSize, err := boolQuery(request, "size")
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, err)
 		return
@@ -802,6 +881,15 @@ func (s *Server) handleContainers(writer http.ResponseWriter, request *http.Requ
 			"State": containerState(record), "Status": dockerStatusWithHealth(containerStatus(record), record.Health),
 			"HostConfig":      map[string]any{"NetworkMode": dockerNetworkMode(record.Options)},
 			"NetworkSettings": map[string]any{"Networks": networkAttachments[record.ID]},
+		}
+		if includeSize {
+			sizeRW, sizeRootFS, sizeErr := dockerContainerSize(record)
+			if sizeErr != nil {
+				writeError(writer, http.StatusInternalServerError, fmt.Errorf("measure container %s filesystem: %w", record.ID, sizeErr))
+				return
+			}
+			item["SizeRw"] = sizeRW
+			item["SizeRootFs"] = sizeRootFS
 		}
 		result = append(result, item)
 	}
