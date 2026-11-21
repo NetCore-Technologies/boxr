@@ -257,6 +257,41 @@ func TestLoadDockerSaveRejectsDiffIDMismatchBeforePublishing(t *testing.T) {
 	}
 }
 
+func TestApplyLayerArchiveDoesNotFollowExistingSymlinkParents(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	sentinel := filepath.Join(outside, "sentinel")
+	if err := os.WriteFile(sentinel, []byte("outside stays untouched"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "pivot")); err != nil {
+		t.Skipf("symlinks are unavailable: %v", err)
+	}
+
+	layer, _ := dockerTestLayer(t, dockerTestEntry{
+		name: "pivot/payload",
+		data: []byte("confined to rootfs"),
+	})
+	archive := filepath.Join(t.TempDir(), "layer.tar")
+	if err := os.WriteFile(archive, layer, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyLayerArchive(root, archive); err != nil {
+		t.Fatalf("apply layer with a symlink parent: %v", err)
+	}
+	if data, err := os.ReadFile(sentinel); err != nil || string(data) != "outside stays untouched" {
+		t.Fatalf("symlink parent changed an external file: %q, %v", data, err)
+	}
+	info, err := os.Lstat(filepath.Join(root, "pivot"))
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("symlink parent was not safely replaced by a directory: info=%v err=%v", info, err)
+	}
+	payload, err := os.ReadFile(filepath.Join(root, "pivot", "payload"))
+	if err != nil || string(payload) != "confined to rootfs" {
+		t.Fatalf("payload was not created inside rootfs: %q, %v", payload, err)
+	}
+}
+
 func TestExtractDockerArchiveRejectsSymlinksAndTraversal(t *testing.T) {
 	for _, entry := range []dockerTestEntry{
 		{name: "../escape", data: []byte("no")},
