@@ -34,6 +34,7 @@ type Server struct {
 	version          string
 	imageMu          sync.Mutex
 	volumeMu         sync.Mutex
+	containerPruneMu sync.Mutex
 	networkMu        sync.Mutex
 	execMu           sync.Mutex
 	execSessions     map[string]*dockerExecSession
@@ -110,6 +111,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		s.handleContainerCreate(writer, request)
+	case path == "/containers/prune":
+		if !requireMethod(writer, request, http.MethodPost) {
+			return
+		}
+		s.handleContainerPrune(writer, request)
 	case path == "/containers/json":
 		if !requireMethod(writer, request, http.MethodGet) {
 			return
