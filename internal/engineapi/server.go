@@ -1486,6 +1486,13 @@ func dockerStatsSnapshotWithPrevious(record state.Record, previous *dockerStatsS
 	if err != nil {
 		return nil, dockerStatsSample{}, err
 	}
+	return dockerStatsSnapshotFromStats(record, stats, previous)
+}
+
+// dockerStatsSnapshotFromStats converts one cgroup snapshot into Docker's stats
+// schema. Keeping conversion separate from host I/O makes counter handling
+// deterministic and lets the compatibility schema be tested with fixtures.
+func dockerStatsSnapshotFromStats(record state.Record, stats state.Stats, previous *dockerStatsSample) (map[string]any, dockerStatsSample, error) {
 	now := time.Now().UTC()
 	memoryLimit := stats.SystemMemoryTotalBytes
 	if value, parseErr := strconv.ParseInt(stats.MemoryMax, 10, 64); parseErr == nil && value > 0 {
