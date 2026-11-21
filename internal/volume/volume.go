@@ -491,33 +491,92 @@ func CopyUpFromRootFS(name, rootPath, mountTarget string) error {
 		}
 	}
 
-	var published []string
+	if err := publishCopyUpTree(extractedPath, item.Path); err != nil {
+		return fmt.Errorf("publish staged volume copy-up: %w", err)
+	}
+	return nil
+}
+
+// publishCopyUpTree publishes staged entries with no-replace filesystem
+// operations. Rollback removes only paths created by this call and never
+// recursively deletes a directory that another process may have populated.
+func publishCopyUpTree(source, destination string) error {
+	var created []string
 	rollback := func() error {
 		var rollbackErr error
-		for _, path := range published {
-			rollbackErr = errors.Join(rollbackErr, os.RemoveAll(path))
+		for index := len(created) - 1; index >= 0; index-- {
+			rollbackErr = errors.Join(rollbackErr, os.Remove(created[index]))
 		}
 		return rollbackErr
 	}
-	for _, entry := range stagedEntries {
-		sourcePath := filepath.Join(extractedPath, entry.Name())
-		destination := filepath.Join(item.Path, entry.Name())
-		if err := os.Rename(sourcePath, destination); err != nil {
-			return errors.Join(
-				fmt.Errorf("publish volume copy-up entry %s: %w", entry.Name(), err),
-				rollback(),
-			)
+
+	var publishEntry func(string, string) error
+	publishEntry = func(sourcePath, destinationPath string) error {
+		info, err := os.Lstat(sourcePath)
+		if err != nil {
+			return fmt.Errorf("inspect staged entry %s: %w", sourcePath, err)
 		}
-		published = append(published, destination)
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			linkTarget, err := os.Readlink(sourcePath)
+			if err != nil {
+				return fmt.Errorf("read staged symlink %s: %w", sourcePath, err)
+			}
+			if err := os.Symlink(linkTarget, destinationPath); err != nil {
+				return fmt.Errorf("publish staged symlink %s: %w", destinationPath, err)
+			}
+			created = append(created, destinationPath)
+		case info.IsDir():
+			if err := os.Mkdir(destinationPath, 0700); err != nil {
+				return fmt.Errorf("publish staged directory %s without replacement: %w", destinationPath, err)
+			}
+			created = append(created, destinationPath)
+			entries, err := os.ReadDir(sourcePath)
+			if err != nil {
+				return fmt.Errorf("read staged directory %s: %w", sourcePath, err)
+			}
+			for _, entry := range entries {
+				if err := publishEntry(
+					filepath.Join(sourcePath, entry.Name()),
+					filepath.Join(destinationPath, entry.Name()),
+				); err != nil {
+					return err
+				}
+			}
+			if err := os.Chmod(destinationPath, info.Mode().Perm()); err != nil {
+				return fmt.Errorf("restore published directory mode %s: %w", destinationPath, err)
+			}
+		case info.Mode().IsRegular():
+			if err := os.Link(sourcePath, destinationPath); err != nil {
+				return fmt.Errorf("publish staged file %s without replacement: %w", destinationPath, err)
+			}
+			created = append(created, destinationPath)
+		default:
+			return fmt.Errorf("staged volume tree contains unsupported special file %s", sourcePath)
+		}
+		return nil
 	}
-	directory, err := os.Open(item.Path)
+
+	entries, err := os.ReadDir(source)
 	if err != nil {
-		return fmt.Errorf("open copied-up volume for sync: %w", err)
+		return fmt.Errorf("read staged volume tree: %w", err)
+	}
+	for _, entry := range entries {
+		if err := publishEntry(
+			filepath.Join(source, entry.Name()),
+			filepath.Join(destination, entry.Name()),
+		); err != nil {
+			return errors.Join(err, rollback())
+		}
+	}
+	directory, err := os.Open(destination)
+	if err != nil {
+		return errors.Join(fmt.Errorf("open copied-up volume for sync: %w", err), rollback())
 	}
 	syncErr := directory.Sync()
 	closeErr := directory.Close()
 	if syncErr != nil || closeErr != nil {
-		return errors.Join(syncErr, closeErr)
+		return errors.Join(fmt.Errorf("sync copied-up volume: %w", errors.Join(syncErr, closeErr)), rollback())
 	}
 	return nil
 }
