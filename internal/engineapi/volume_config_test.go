@@ -118,7 +118,7 @@ func TestDockerConfigVolumesRejectUnsafePathsAndMalformedValues(t *testing.T) {
 		{name: "root", target: "/", value: json.RawMessage("{}")},
 		{name: "relative", target: "data", value: json.RawMessage("{}")},
 		{name: "traversal", target: "/data/../host", value: json.RawMessage("{}")},
-		{name: "non-empty config", target: "/data", value: json.RawMessage(`{"driver":"host"}`)},
+		{name: "non-empty-config", target: "/data", value: json.RawMessage(`{"driver":"host"}`)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			image := importEngineAPITestImage(t, "registry.example/team/invalid-volume-"+test.name+":v1")
@@ -216,18 +216,18 @@ func TestDockerCreateEntrypointOverrideAndExplicitClear(t *testing.T) {
 		want       []string
 	}{
 		{
-			name:       "replace image entrypoint",
+			name:       "replace-image-entrypoint",
 			entrypoint: []string{"/usr/local/bin/custom"},
 			cmd:        []string{"--custom"},
 			want:       []string{"/usr/local/bin/custom", "--custom"},
 		},
 		{
-			name:       "clear image entrypoint",
+			name:       "clear-image-entrypoint",
 			entrypoint: []string{},
 			want:       []string{"--serve"},
 		},
 		{
-			name: "inherit image entrypoint",
+			name: "inherit-image-entrypoint",
 			cmd:  []string{"--request"},
 			want: []string{"/bin/app", "--request"},
 		},

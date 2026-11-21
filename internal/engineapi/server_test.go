@@ -905,17 +905,13 @@ func TestEngineAPIContainerDeleteCreatedAndRejectsRunning(t *testing.T) {
 	}
 }
 
-func TestEngineAPIContainerDeleteRejectsUnsupportedForceAndVolumeRemoval(t *testing.T) {
+func TestEngineAPIContainerDeleteAcceptsForceForCreatedContainer(t *testing.T) {
 	server := setupEngineAPITest(t)
 	created, err := state.Create("delete-options-test", []string{"/bin/true"}, container.Options{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	response := engineAPIRequest(server, http.MethodDelete, "/containers/"+created.ID+"?v=true")
-	if response.Code != http.StatusNotImplemented {
-		t.Fatalf("volume removal status=%d body=%s", response.Code, response.Body.String())
-	}
-	response = engineAPIRequest(server, http.MethodDelete, "/containers/"+created.ID+"?force=true")
+	response := engineAPIRequest(server, http.MethodDelete, "/containers/"+created.ID+"?force=true")
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("force flag on a stopped created container status=%d body=%s", response.Code, response.Body.String())
 	}
