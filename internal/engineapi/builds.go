@@ -141,6 +141,10 @@ func parseDockerBuildOptions(query url.Values) (dockerBuildOptions, error) {
 			if enabled {
 				return options, fmt.Errorf("pull=true is not supported; pull base images explicitly before building")
 			}
+		case "rm":
+			if !enabled {
+				return options, fmt.Errorf("rm=false is not supported; Boxr always removes temporary build state")
+			}
 		}
 	}
 	version, err := singleQueryValue(query, "version")
