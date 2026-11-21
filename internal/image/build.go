@@ -50,11 +50,11 @@ type CopyInstruction struct {
 // ImageRuntimeConfig stores the standard runtime defaults represented by the
 // image config. Environment entries are not printed by the default inspect UI.
 type ImageRuntimeConfig struct {
-	Env        []string            `json:"Env,omitempty"`
-	Entrypoint []string            `json:"Entrypoint,omitempty"`
-	Cmd        []string            `json:"Cmd,omitempty"`
-	WorkingDir string              `json:"WorkingDir,omitempty"`
-	User       string              `json:"User,omitempty"`
+	Env          []string            `json:"Env,omitempty"`
+	Entrypoint   []string            `json:"Entrypoint,omitempty"`
+	Cmd          []string            `json:"Cmd,omitempty"`
+	WorkingDir   string              `json:"WorkingDir,omitempty"`
+	User         string              `json:"User,omitempty"`
 	Labels       map[string]string   `json:"Labels,omitempty"`
 	Volumes      map[string]struct{} `json:"Volumes,omitempty"`
 	ExposedPorts map[string]struct{} `json:"ExposedPorts,omitempty"`
@@ -587,11 +587,11 @@ var runDockerfileCommand = container.Run
 // allowing a child recipe to override only the fields it explicitly supplies.
 func inheritBuildRuntimeConfig(base, overrides ImageRuntimeConfig) ImageRuntimeConfig {
 	result := ImageRuntimeConfig{
-		Env:        mergeBuildEnvironment(base.Env, overrides.Env),
-		Entrypoint: cloneBuildStrings(base.Entrypoint),
-		Cmd:        cloneBuildStrings(base.Cmd),
-		WorkingDir: base.WorkingDir,
-		User:       base.User,
+		Env:          mergeBuildEnvironment(base.Env, overrides.Env),
+		Entrypoint:   cloneBuildStrings(base.Entrypoint),
+		Cmd:          cloneBuildStrings(base.Cmd),
+		WorkingDir:   base.WorkingDir,
+		User:         base.User,
 		Labels:       make(map[string]string, len(base.Labels)+len(overrides.Labels)),
 		Volumes:      cloneBuildVolumes(base.Volumes),
 		ExposedPorts: cloneBuildExposedPorts(base.ExposedPorts),

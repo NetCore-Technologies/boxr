@@ -1022,7 +1022,7 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 		"Hostname": record.Options.Hostname, "Cmd": record.Command,
 		"Image": image, "WorkingDir": record.Options.Workdir, "Labels": record.Labels,
 		"ExposedPorts": dockerContainerExposedPorts(record.Options.ExposedPorts),
-		"OpenStdin": false, "StdinOnce": false, "Tty": false,
+		"OpenStdin":    false, "StdinOnce": false, "Tty": false,
 	}
 	hostConfig := map[string]any{
 		"NetworkMode": dockerNetworkMode(record.Options), "Memory": record.Options.MemoryLimitBytes,
