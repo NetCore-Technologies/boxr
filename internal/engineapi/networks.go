@@ -272,7 +272,7 @@ func dockerNetworkWithContainers(item boxrnetwork.Network, records []state.Recor
 			name = "/" + id
 		}
 		result.Containers[id] = map[string]string{
-			"Name": name, "EndpointID": "", "MacAddress": "",
+			"Name": name, "EndpointID": item.EndpointIDs[id], "MacAddress": item.MACAddresses[id],
 			"IPv4Address": address + mask, "IPv6Address": "",
 		}
 	}
