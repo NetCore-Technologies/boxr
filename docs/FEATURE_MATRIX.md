@@ -927,3 +927,5 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 
 914. Docker network connect supports validated static IPv4 endpoint addresses and explicit unicast MAC addresses, persists them in IPAM state, and configures the container interface
 915. Docker EndpointConfig rejects unsupported aliases links IPv6 link-local addresses and driver options instead of silently dropping them
+
+916. Docker bridge IPAM persists, validates, inspects and allocates only within configured `IPRange` prefixes, including explicit static endpoint address checks
