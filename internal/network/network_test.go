@@ -851,3 +851,59 @@ func TestValidateEndpointMACRejectsUnsafeAndNonCanonicalAddresses(t *testing.T) 
 		t.Fatalf("valid globally administered unicast MAC rejected: %v", err)
 	}
 }
+
+func TestNetworkIPRangeBoundsAutomaticAndStaticAllocations(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	created, err := CreateWithRunner(context.Background(), "bounded-pool", CreateOptions{
+		Subnet: "172.30.50.0/24", IPRange: "172.30.50.128/25", Gateway: "172.30.50.1",
+	}, &fakeRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.IPRange != "172.30.50.128/25" {
+		t.Fatalf("persisted IPAM range=%q", created.IPRange)
+	}
+	automatic, err := JoinWithRunner(context.Background(), "bounded-pool", 2501, "container-auto", &fakeRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if automatic != "172.30.50.129" {
+		t.Fatalf("automatic address=%q, want first address in configured pool", automatic)
+	}
+	if _, err := JoinWithRunnerOptions(context.Background(), "bounded-pool", 2502, "container-static-outside", &fakeRunner{},
+		EndpointOptions{IPv4Address: "172.30.50.20"}); err == nil {
+		t.Fatal("static address inside subnet but outside IPRange was accepted")
+	}
+	static, err := JoinWithRunnerOptions(context.Background(), "bounded-pool", 2503, "container-static-inside", &fakeRunner{},
+		EndpointOptions{IPv4Address: "172.30.50.140"})
+	if err != nil {
+		t.Fatalf("static address inside IPRange rejected: %v", err)
+	}
+	if static != "172.30.50.140" {
+		t.Fatalf("static address=%q", static)
+	}
+	summary, err := Inspect("bounded-pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.IPRange != "172.30.50.128/25" || summary.ContainerCount != 2 {
+		t.Fatalf("bounded pool summary = %+v", summary)
+	}
+}
+
+func TestCreateRejectsInvalidOrOutOfSubnetIPRange(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	for _, value := range []string{
+		"172.30.51.0/23", "172.30.52.0/24", "172.30.51.128/25",
+		"172.30.51.128", "not-a-prefix", "172.030.051.0/25",
+	} {
+		t.Run(value, func(t *testing.T) {
+			_, err := CreateWithRunner(context.Background(), "invalid-pool", CreateOptions{
+				Subnet: "172.30.51.0/24", IPRange: value, Gateway: "172.30.51.1",
+			}, &fakeRunner{})
+			if err == nil {
+				t.Fatalf("invalid IPAM range %q was accepted", value)
+			}
+		})
+	}
+}
