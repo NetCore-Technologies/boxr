@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+
+	imageStore "github.com/manit6752025/boxr/internal/image"
 )
 
 func TestDockerImageHistoryReportsFlattenedSnapshotWithoutFabricatedSteps(t *testing.T) {
