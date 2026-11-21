@@ -2,7 +2,6 @@ package state
 
 import (
 	"bytes"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -84,9 +83,6 @@ func TestLogOffsetAndCopyFollowLargeLogsWithoutUnboundedReads(t *testing.T) {
 	}
 	largeSize := maxLogBytes + 4
 	if err := logFile.Truncate(largeSize); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := logFile.Seek(maxLogBytes, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := logFile.Write([]byte("tail")); err != nil {
