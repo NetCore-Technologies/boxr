@@ -1047,6 +1047,12 @@ func (s *Server) handleContainer(writer http.ResponseWriter, request *http.Reque
 		s.handleContainerLogs(writer, request, query)
 	case "stats":
 		s.handleContainerStats(writer, request, query)
+	case "top":
+		if request.Method != http.MethodGet {
+			writeMethodErrorFor(writer, http.MethodGet)
+			return
+		}
+		s.handleContainerTop(writer, request, query)
 	default:
 		writeError(writer, http.StatusNotFound, fmt.Errorf("container endpoint not found"))
 	}
