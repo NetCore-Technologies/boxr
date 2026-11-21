@@ -152,10 +152,6 @@ func (s *Server) handleContainerCommit(writer http.ResponseWriter, request *http
 		return
 	}
 	upperRoot := ""
-	if err := verifyDockerCommitOptionalDirectory(overlayDir); err != nil {
-		writeError(writer, http.StatusConflict, fmt.Errorf("verify container writable layer: %w", err))
-		return
-	}
 	if _, err := os.Lstat(overlayDir); err == nil {
 		upperRoot = filepath.Join(overlayDir, "upper")
 		if err := verifyDockerCommitOptionalDirectory(upperRoot); err != nil {
