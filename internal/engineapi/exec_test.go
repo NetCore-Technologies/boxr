@@ -44,6 +44,7 @@ func TestDockerEngineExecCreateStartStreamAndInspect(t *testing.T) {
 		Cmd:          []string{"/bin/example", "hello"},
 		Env:          []string{"APP_MODE=test"},
 		WorkingDir:   "/srv/app",
+		User:         "root",
 	})
 	if response.Code != http.StatusCreated {
 		t.Fatalf("exec create status=%d body=%s", response.Code, response.Body.String())
@@ -61,7 +62,7 @@ func TestDockerEngineExecCreateStartStreamAndInspect(t *testing.T) {
 	var sawConfig bool
 	dockerExecRunner = func(_ context.Context, containerID string, config dockerExecCreateConfig, stdout, stderr io.Writer, onStart func(int)) (int, error) {
 		sawConfig = containerID == record.ID && strings.Join(config.Cmd, "|") == "/bin/example|hello" &&
-			config.WorkingDir == "/srv/app" && len(config.Env) == 1 && config.Env[0] == "APP_MODE=test"
+			config.WorkingDir == "/srv/app" && config.User == "root" && len(config.Env) == 1 && config.Env[0] == "APP_MODE=test"
 		onStart(4321)
 		if _, err := io.WriteString(stdout, "exec stdout\n"); err != nil {
 			return 125, err
@@ -91,17 +92,20 @@ func TestDockerEngineExecCreateStartStreamAndInspect(t *testing.T) {
 		t.Fatalf("exec inspect status=%d body=%s", inspect.Code, inspect.Body.String())
 	}
 	var result struct {
-		ID          string
-		Running     bool
-		ExitCode    *int
-		ContainerID string
-		Pid         int
+		ID            string
+		Running       bool
+		ExitCode      *int
+		ContainerID   string
+		Pid           int
+		ProcessConfig struct {
+			User string
+		}
 	}
 	if err := json.Unmarshal(inspect.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
 	if result.ID != created.Id || result.Running || result.ExitCode == nil || *result.ExitCode != 23 ||
-		result.ContainerID != record.ID || result.Pid != 4321 {
+		result.ContainerID != record.ID || result.Pid != 4321 || result.ProcessConfig.User != "root" {
 		t.Fatalf("exec inspect result = %+v", result)
 	}
 	secondStart := engineAPIRequest(server, http.MethodPost, "/exec/"+created.Id+"/start")
@@ -182,7 +186,7 @@ func TestDockerEngineExecRejectsUnsupportedOrUnsafeCreateOptions(t *testing.T) {
 		{name: "stdin", config: dockerExecCreateConfig{AttachStdin: true, Cmd: []string{"/bin/true"}}},
 		{name: "tty", config: dockerExecCreateConfig{Tty: true, Cmd: []string{"/bin/true"}}},
 		{name: "privileged", config: dockerExecCreateConfig{Privileged: true, Cmd: []string{"/bin/true"}}},
-		{name: "user override", config: dockerExecCreateConfig{User: "root", Cmd: []string{"/bin/true"}}},
+		{name: "invalid user", config: dockerExecCreateConfig{User: "bad user", Cmd: []string{"/bin/true"}}},
 		{name: "empty command", config: dockerExecCreateConfig{}},
 		{name: "invalid environment", config: dockerExecCreateConfig{Env: []string{"BAD-KEY=value"}, Cmd: []string{"/bin/true"}}},
 		{name: "relative working directory", config: dockerExecCreateConfig{WorkingDir: "relative", Cmd: []string{"/bin/true"}}},
@@ -269,3 +273,25 @@ func decodeDockerExecFrames(t *testing.T, data []byte) (string, string) {
 	}
 	return stdout.String(), stderr.String()
 }
+
+func TestDockerEngineExecInheritsContainerUser(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record := createEngineAPITestContainer(t, "exec-user-inherit", container.Options{User: "1001:100"})
+	server.verifyExecPID = func(state.Record) error { return nil }
+	response := postDockerExecCreate(t, server, record.ID, dockerExecCreateConfig{Cmd: []string{"/bin/true"}})
+	if response.Code != http.StatusCreated {
+		t.Fatalf("exec create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created struct{ Id string }
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	session, ok := server.dockerExecSession(created.Id)
+	if !ok {
+		t.Fatal("exec session was not stored")
+	}
+	if session.Config.User != "1001:100" {
+		t.Fatalf("inherited exec user=%q, want 1001:100", session.Config.User)
+	}
+}
+

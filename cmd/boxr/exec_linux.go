@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -28,6 +29,8 @@ const maxExecEnvironmentBytes = 1 << 20
 
 type execHelperConfig struct {
 	RootFS           bool     `json:"rootFS"`
+	User             string   `json:"user,omitempty"`
+	UserNamespace    bool     `json:"userNamespace,omitempty"`
 	Workdir          string   `json:"workdir,omitempty"`
 	Command          []string `json:"command"`
 	DropCapabilities []string `json:"dropCapabilities,omitempty"`
@@ -41,8 +44,9 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("exec", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	var env, envFiles envList
-	var workdir string
+	var workdir, user string
 	var interactive, tty bool
+	flags.StringVar(&user, "user", "", "run as USER[:GROUP] inside the container")
 	flags.StringVar(&workdir, "workdir", "", "working directory inside the container")
 	flags.StringVar(&workdir, "w", "", "alias for --workdir")
 	flags.BoolVar(&interactive, "interactive", false, "keep standard input open")
@@ -53,7 +57,7 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	flags.Var(&env, "e", "alias for --env (repeatable)")
 	flags.Var(&envFiles, "env-file", "load environment assignments from a file (repeatable)")
 	flags.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: boxr exec [-i] [-t] [--workdir PATH] [--env KEY=VALUE] [--env-file PATH] CONTAINER COMMAND [ARG...]")
+		fmt.Fprintln(stderr, "Usage: boxr exec [-i] [-t] [--user USER[:GROUP]] [--workdir PATH] [--env KEY=VALUE] [--env-file PATH] CONTAINER COMMAND [ARG...]")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(expandExecShortFlags(args)); err != nil {
@@ -64,6 +68,10 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 	}
 	if flags.NArg() < 2 {
 		flags.Usage()
+		return 2
+	}
+	if err := container.ValidateUserSpec(user); err != nil {
+		fmt.Fprintf(stderr, "boxr exec: invalid --user: %v\n", err)
 		return 2
 	}
 	if workdir != "" && (!filepath.IsAbs(workdir) || strings.ContainsRune(workdir, '\x00')) {
@@ -198,8 +206,17 @@ func runExec(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	if err := container.ValidateUserSpecForNamespace(user, record.Options.UserNamespace); err != nil {
+		fmt.Fprintf(stderr, "boxr exec: invalid --user for this container: %v\n", err)
+		return 2
+	}
+	if user == "" {
+		user = record.Options.User
+	}
 	helperConfig := execHelperConfig{
 		RootFS:           record.Options.RootFS != "",
+		User:             user,
+		UserNamespace:    record.Options.UserNamespace,
 		Workdir:          workdir,
 		Command:          command,
 		DropCapabilities: append([]string(nil), record.Options.DropCapabilities...),
@@ -357,7 +374,7 @@ func expandExecShortFlags(args []string) []string {
 			return append(expanded, args[index:]...)
 		}
 		switch value {
-		case "--workdir", "-w", "--env", "-e", "--env-file":
+		case "--workdir", "-w", "--user", "--env", "-e", "--env-file":
 			expanded = append(expanded, value)
 			if index+1 < len(args) {
 				index++
@@ -366,6 +383,7 @@ func expandExecShortFlags(args []string) []string {
 			continue
 		}
 		if strings.HasPrefix(value, "--workdir=") ||
+			strings.HasPrefix(value, "--user=") ||
 			strings.HasPrefix(value, "--env=") ||
 			strings.HasPrefix(value, "--env-file=") {
 			expanded = append(expanded, value)
@@ -615,9 +633,30 @@ func runExecChild(args []string, stdout, stderr io.Writer) int {
 		NoNewPrivileges:  helperConfig.NoNewPrivileges,
 		SeccompProfile:   helperConfig.SeccompProfile,
 	}
-	if err := container.ApplyExecSecurity(security); err != nil {
+	runtime.LockOSThread()
+	if err := container.ValidateUserSpecForNamespace(helperConfig.User, helperConfig.UserNamespace); err != nil {
+		fmt.Fprintf(stderr, "boxr exec: invalid helper user: %v\n", err)
+		return 125
+	}
+	var finishUserSwitch func() error
+	preserveSetUID := false
+	if helperConfig.User != "" {
+		var err error
+		finishUserSwitch, preserveSetUID, err = container.PrepareExecUser(helperConfig.User, helperConfig.UserNamespace)
+		if err != nil {
+			fmt.Fprintf(stderr, "boxr exec: configure user %q: %v\n", helperConfig.User, err)
+			return 125
+		}
+	}
+	if err := container.ApplyExecSecurityWithUser(security, preserveSetUID); err != nil {
 		fmt.Fprintf(stderr, "boxr exec: apply container security policy: %v\n", err)
 		return 125
+	}
+	if finishUserSwitch != nil {
+		if err := finishUserSwitch(); err != nil {
+			fmt.Fprintf(stderr, "boxr exec: switch to user %q: %v\n", helperConfig.User, err)
+			return 125
+		}
 	}
 	resolved, err := findExecPath(helperConfig.Command[0], environment)
 	if err != nil {

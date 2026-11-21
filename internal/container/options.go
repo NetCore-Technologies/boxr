@@ -300,11 +300,8 @@ func (e *ExitError) Error() string {
 // Validate rejects configurations that cannot be represented safely by the
 // runtime. It does not check privileges or mutate the host.
 func (o Options) Validate() error {
-	if err := validateUserSpec(o.User); err != nil {
+	if err := ValidateUserSpecForNamespace(o.User, o.UserNamespace); err != nil {
 		return fmt.Errorf("user: %w", err)
-	}
-	if o.UserNamespace && !userSpecIsRoot(o.User) {
-		return fmt.Errorf("non-root container users are not supported with the current single-ID user namespace mapping")
 	}
 	policy := o.RestartPolicy
 	if policy == "" {
@@ -475,6 +472,23 @@ func (o Options) Validate() error {
 		if _, ok := capabilityNumber(capability); !ok && !strings.EqualFold(capability, "ALL") {
 			return fmt.Errorf("unknown Linux capability %q", capability)
 		}
+	}
+	return nil
+}
+
+// ValidateUserSpec validates a Docker/OCI USER or USER:GROUP value.
+func ValidateUserSpec(spec string) error {
+	return validateUserSpec(spec)
+}
+
+// ValidateUserSpecForNamespace validates a user specification against the
+// current user-namespace mapping, which maps only container UID/GID zero.
+func ValidateUserSpecForNamespace(spec string, userNamespace bool) error {
+	if err := validateUserSpec(spec); err != nil {
+		return err
+	}
+	if userNamespace && !userSpecIsRoot(spec) {
+		return fmt.Errorf("non-root container users are not supported with the current single-ID user namespace mapping")
 	}
 	return nil
 }

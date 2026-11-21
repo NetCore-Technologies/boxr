@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"runtime"
 	"time"
 	"unsafe"
 )
@@ -273,6 +274,11 @@ func Init(args []string) error {
 		if err := bringLoopbackUp(); err != nil {
 			return fmt.Errorf("configure loopback in private network namespace: %w", err)
 		}
+	}
+	if options.User != "" || len(options.DropCapabilities) > 0 || options.NoNewPrivileges || options.SeccompProfile != "" {
+		// Linux credential, capability and seccomp syscalls apply to the
+		// calling thread. Keep the init goroutine on that thread through exec.
+		runtime.LockOSThread()
 	}
 	var finishUserSwitch func() error
 	preserveSetUID := false

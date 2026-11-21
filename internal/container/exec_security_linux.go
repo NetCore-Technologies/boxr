@@ -7,8 +7,20 @@ import "fmt"
 // ApplyExecSecurity applies the per-process restrictions configured for the
 // existing container to an additional workload process.
 func ApplyExecSecurity(options Options) error {
+	return ApplyExecSecurityWithUser(options, false)
+}
+
+// ApplyExecSecurityWithUser applies the container security policy while
+// optionally preserving CAP_SETUID until a non-root exec user is selected.
+func ApplyExecSecurityWithUser(options Options, preserveSetUID bool) error {
 	if len(options.DropCapabilities) > 0 {
-		if err := dropLinuxCapabilities(options.DropCapabilities); err != nil {
+		var err error
+		if preserveSetUID {
+			err = dropLinuxCapabilitiesPreservingSetUID(options.DropCapabilities)
+		} else {
+			err = dropLinuxCapabilities(options.DropCapabilities)
+		}
+		if err != nil {
 			return fmt.Errorf("drop capabilities: %w", err)
 		}
 	}
@@ -23,4 +35,10 @@ func ApplyExecSecurity(options Options) error {
 		}
 	}
 	return nil
+}
+
+// PrepareExecUser resolves an exec USER against the container root filesystem.
+// The returned closure performs the final UID switch after capabilities drop.
+func PrepareExecUser(spec string, userNamespace bool) (func() error, bool, error) {
+	return prepareContainerUser(spec, userNamespace)
 }

@@ -168,6 +168,16 @@ func TestExpandExecShortFlagsSupportsDockerStyleCombinedOptions(t *testing.T) {
 			want: []string{"--workdir", "/app", "-t", "-i", "web", "/bin/sh"},
 		},
 		{
+			name: "user value before container",
+			args: []string{"--user", "1001:100", "-it", "web", "/bin/sh"},
+			want: []string{"--user", "1001:100", "-i", "-t", "web", "/bin/sh"},
+		},
+		{
+			name: "user equals form",
+			args: []string{"--user=alice", "web", "/bin/sh"},
+			want: []string{"--user=alice", "web", "/bin/sh"},
+		},
+		{
 			name: "do not rewrite command arguments",
 			args: []string{"web", "/bin/sh", "-it"},
 			want: []string{"web", "/bin/sh", "-it"},

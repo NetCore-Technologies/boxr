@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/manit6752025/boxr/internal/container"
 	"github.com/manit6752025/boxr/internal/state"
 )
 
@@ -74,6 +75,9 @@ func executeDockerExec(ctx context.Context, containerID string, config dockerExe
 		return 125, fmt.Errorf("resolve Boxr executable: %w", err)
 	}
 	arguments := []string{"exec"}
+	if config.User != "" {
+		arguments = append(arguments, "--user", config.User)
+	}
 	if config.WorkingDir != "" {
 		arguments = append(arguments, "--workdir", config.WorkingDir)
 	}
@@ -124,6 +128,13 @@ func (s *Server) handleContainerExecCreate(writer http.ResponseWriter, request *
 	if err != nil {
 		writeError(writer, http.StatusNotFound, err)
 		return
+	}
+	if err := container.ValidateUserSpecForNamespace(config.User, record.Options.UserNamespace); err != nil {
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("invalid exec User: %w", err))
+		return
+	}
+	if config.User == "" {
+		config.User = record.Options.User
 	}
 	if record.Status != "running" || record.PID <= 1 || !state.ProcessAlive(record.PID) {
 		writeError(writer, http.StatusConflict, fmt.Errorf("container %s must be running to create an exec session", record.ID))
@@ -198,8 +209,8 @@ func validateDockerExecCreateConfig(config dockerExecCreateConfig) error {
 	if config.Privileged {
 		return fmt.Errorf("Privileged exec is not supported")
 	}
-	if config.User != "" {
-		return fmt.Errorf("per-exec User overrides are not supported; exec inherits the container's configured identity")
+	if err := container.ValidateUserSpec(config.User); err != nil {
+		return fmt.Errorf("User: %w", err)
 	}
 	if config.WorkingDir != "" {
 		if !path.IsAbs(config.WorkingDir) || strings.ContainsAny(config.WorkingDir, "\x00\r\n") {
@@ -421,7 +432,7 @@ func (s *Server) handleExecInspect(writer http.ResponseWriter, id string) {
 		"ExitCode": session.ExitCode,
 		"ProcessConfig": map[string]any{
 			"privileged":  false,
-			"user":        "",
+			"user":        session.Config.User,
 			"tty":         false,
 			"entrypoint":  entrypoint,
 			"arguments":   arguments,
