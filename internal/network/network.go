@@ -38,24 +38,25 @@ var (
 	networkNameRE    = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,30}$`)
 	auxAddressNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$`)
 )
+
 // Network is the persistent identity and IPAM state of one bridge network.
 // Allocations are keyed by Boxr container ID, never by user-controlled names.
 type Network struct {
-	ID           string                   `json:"id"`
-	Name         string                   `json:"name"`
-	Driver       string                   `json:"driver"`
-	Bridge       string                   `json:"bridge"`
-	Subnet       string                   `json:"subnet"`
-	IPRange            string            `json:"ipRange,omitempty"`
-	AuxiliaryAddresses map[string]string `json:"auxiliaryAddresses,omitempty"`
+	ID                 string                   `json:"id"`
+	Name               string                   `json:"name"`
+	Driver             string                   `json:"driver"`
+	Bridge             string                   `json:"bridge"`
+	Subnet             string                   `json:"subnet"`
+	IPRange            string                   `json:"ipRange,omitempty"`
+	AuxiliaryAddresses map[string]string        `json:"auxiliaryAddresses,omitempty"`
 	Gateway            string                   `json:"gateway"`
-	NAT          bool                     `json:"nat"`
-	CreatedAt    time.Time                `json:"createdAt"`
-	Allocations  map[string]string        `json:"allocations,omitempty"`
-	MACAddresses map[string]string        `json:"macAddresses,omitempty"`
-	EndpointIDs  map[string]string        `json:"endpointIDs,omitempty"`
-	Published    map[string][]PortMapping `json:"published,omitempty"`
-	Labels       map[string]string        `json:"labels,omitempty"`
+	NAT                bool                     `json:"nat"`
+	CreatedAt          time.Time                `json:"createdAt"`
+	Allocations        map[string]string        `json:"allocations,omitempty"`
+	MACAddresses       map[string]string        `json:"macAddresses,omitempty"`
+	EndpointIDs        map[string]string        `json:"endpointIDs,omitempty"`
+	Published          map[string][]PortMapping `json:"published,omitempty"`
+	Labels             map[string]string        `json:"labels,omitempty"`
 }
 
 // PortMapping publishes one host IPv4 socket to a container IPv4 TCP or UDP port.
@@ -64,13 +65,13 @@ type PortMapping = container.PortMapping
 
 // CreateOptions configures an IPv4 bridge and whether it receives outbound NAT.
 type CreateOptions struct {
-	Subnet  string
+	Subnet             string
 	IPRange            string
 	AuxiliaryAddresses map[string]string
 	Gateway            string
-	Bridge  string
-	NAT     bool
-	Labels  map[string]string
+	Bridge             string
+	NAT                bool
+	Labels             map[string]string
 }
 
 // StaleAttachment is a managed network lease whose container is not in the
@@ -91,18 +92,18 @@ type PruneReport struct {
 
 // Summary is safe for CLI output; it omits per-container allocation identities.
 type Summary struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Driver         string            `json:"driver"`
-	Bridge         string            `json:"bridge"`
-	Subnet         string            `json:"subnet"`
+	ID                 string            `json:"id"`
+	Name               string            `json:"name"`
+	Driver             string            `json:"driver"`
+	Bridge             string            `json:"bridge"`
+	Subnet             string            `json:"subnet"`
 	IPRange            string            `json:"ipRange,omitempty"`
 	AuxiliaryAddresses map[string]string `json:"auxiliaryAddresses,omitempty"`
 	Gateway            string            `json:"gateway"`
-	NAT            bool              `json:"nat"`
-	ContainerCount int               `json:"containerCount"`
-	CreatedAt      time.Time         `json:"createdAt"`
-	Labels         map[string]string `json:"labels,omitempty"`
+	NAT                bool              `json:"nat"`
+	ContainerCount     int               `json:"containerCount"`
+	CreatedAt          time.Time         `json:"createdAt"`
+	Labels             map[string]string `json:"labels,omitempty"`
 }
 
 type store struct {
@@ -534,18 +535,18 @@ func CreateWithRunner(ctx context.Context, name string, options CreateOptions, r
 		}
 	}
 	network := Network{
-		ID:          id,
-		Name:        name,
-		Driver:      "bridge",
-		Bridge:      bridge,
-		Subnet:      prefix.String(),
+		ID:                 id,
+		Name:               name,
+		Driver:             "bridge",
+		Bridge:             bridge,
+		Subnet:             prefix.String(),
 		IPRange:            allocationRange,
 		AuxiliaryAddresses: cloneNetworkLabels(options.AuxiliaryAddresses),
 		Gateway:            gateway.String(),
-		NAT:         options.NAT,
-		CreatedAt:   time.Now().UTC(),
-		Allocations: make(map[string]string),
-		Labels:      cloneNetworkLabels(options.Labels),
+		NAT:                options.NAT,
+		CreatedAt:          time.Now().UTC(),
+		Allocations:        make(map[string]string),
+		Labels:             cloneNetworkLabels(options.Labels),
 	}
 	if err := provisionBridge(ctx, runner, network); err != nil {
 		return empty, err
