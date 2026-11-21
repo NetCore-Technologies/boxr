@@ -34,85 +34,10 @@ const (
 )
 
 var (
-	storeMu       sync.Mutex
-	networkNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,30}// Package network manages local Linux bridge networks for Boxr containers.
-// It uses the host iproute2 and iptables tools; creating or attaching networks
-// requires the privileges needed to manage links, network namespaces and rules.
-package network
-
-import (
-	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/binary"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"net"
-	"net/netip"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"regexp"
-	"sort"
-	"strings"
-	"sync"
-	"time"
-
-	"github.com/manit6752025/boxr/internal/container"
+	storeMu          sync.Mutex
+	networkNameRE    = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,30}$`)
+	auxAddressNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$`)
 )
-
-const (
-	storeVersion    = 1
-	maxStoreBytes   = 4 << 20
-	maxNetworkCount = 128
-)
-
-var (
-	storeMu       sync.Mutex
-	)
-	auxAddressNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}// Package network manages local Linux bridge networks for Boxr containers.
-// It uses the host iproute2 and iptables tools; creating or attaching networks
-// requires the privileges needed to manage links, network namespaces and rules.
-package network
-
-import (
-	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/binary"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"net"
-	"net/netip"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"regexp"
-	"sort"
-	"strings"
-	"sync"
-	"time"
-
-	"github.com/manit6752025/boxr/internal/container"
-)
-
-const (
-	storeVersion    = 1
-	maxStoreBytes   = 4 << 20
-	maxNetworkCount = 128
-)
-
-var (
-	storeMu       sync.Mutex
-	)
-)
-
 // Network is the persistent identity and IPAM state of one bridge network.
 // Allocations are keyed by Boxr container ID, never by user-controlled names.
 type Network struct {
