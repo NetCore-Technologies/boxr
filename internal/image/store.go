@@ -447,7 +447,7 @@ func Remove(reference string) error {
  // Every requested tag is validated and must exist before any reference is removed.
  // Content-addressed blobs remain in place until PruneDetailed reclaims those that
  // are no longer reachable from any surviving tag.
- func RemoveMany(references []string) error {
+func RemoveMany(references []string) error {
  	targets := make(map[string]struct{}, len(references))
  	for _, reference := range references {
  		if err := ValidateReference(reference); err != nil {
