@@ -45,8 +45,7 @@ func TestDockerExecTTYRunnerConnectsStdinAndMergesOutput(t *testing.T) {
 	var output bytes.Buffer
 	exitCode, err := runDockerExecTTY(command, dockerExecCreateConfig{
 		Tty: true, ConsoleSize: []uint{32, 100},
-	}, strings.NewReader("interactive-input
-"), &output, nil, nil)
+	}, strings.NewReader("interactive-input\n"), &output, nil, nil)
 	if err != nil {
 		t.Fatalf("run TTY exec: %v; output=%q", err, output.String())
 	}
