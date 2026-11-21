@@ -351,62 +351,62 @@ func TestLoadComposeLongFormMountsRejectUnsupportedSemantics(t *testing.T) {
 		topLevel string
 	}{
 		{
-			name: "host path auto creation",
+			name:   "host path auto creation",
 			mounts: "      - type: bind\n        source: ./config\n        target: /data\n        bind:\n          create_host_path: true",
 		},
 		{
-			name: "unsupported propagation",
+			name:   "unsupported propagation",
 			mounts: "      - type: bind\n        source: ./config\n        target: /data\n        bind:\n          propagation: rshared",
 		},
 		{
-			name: "unknown bind option",
+			name:   "unknown bind option",
 			mounts: "      - type: bind\n        source: ./config\n        target: /data\n        bind:\n          recursive: disabled",
 		},
 		{
-			name: "volume copy up",
-			mounts: "      - type: volume\n        source: data\n        target: /data",
+			name:     "volume copy up",
+			mounts:   "      - type: volume\n        source: data\n        target: /data",
 			topLevel: "volumes:\n  data:\n    external: true\n",
 		},
 		{
-			name: "volume copy up explicitly enabled",
-			mounts: "      - type: volume\n        source: data\n        target: /data\n        volume:\n          nocopy: false",
+			name:     "volume copy up explicitly enabled",
+			mounts:   "      - type: volume\n        source: data\n        target: /data\n        volume:\n          nocopy: false",
 			topLevel: "volumes:\n  data:\n    external: true\n",
 		},
 		{
-			name: "volume subpath",
-			mounts: "      - type: volume\n        source: data\n        target: /data\n        volume:\n          nocopy: true\n          subpath: child",
+			name:     "volume subpath",
+			mounts:   "      - type: volume\n        source: data\n        target: /data\n        volume:\n          nocopy: true\n          subpath: child",
 			topLevel: "volumes:\n  data:\n    external: true\n",
 		},
 		{
-			name: "tmpfs missing size",
+			name:   "tmpfs missing size",
 			mounts: "      - type: tmpfs\n        target: /run\n        tmpfs:\n          mode: 1023",
 		},
 		{
-			name: "tmpfs too large",
+			name:   "tmpfs too large",
 			mounts: "      - type: tmpfs\n        target: /run\n        tmpfs:\n          size: 2g",
 		},
 		{
-			name: "combined tmpfs limit",
+			name:   "combined tmpfs limit",
 			mounts: "      - type: tmpfs\n        target: /run/a\n        tmpfs:\n          size: 1g\n      - type: tmpfs\n        target: /run/b\n        tmpfs:\n          size: 1g\n      - type: tmpfs\n        target: /run/c\n        tmpfs:\n          size: 1g",
 		},
 		{
-			name: "tmpfs unknown option",
+			name:   "tmpfs unknown option",
 			mounts: "      - type: tmpfs\n        target: /run\n        tmpfs:\n          size: 64m\n          noexec: true",
 		},
 		{
-			name: "tmpfs marked read only",
+			name:   "tmpfs marked read only",
 			mounts: "      - type: tmpfs\n        target: /run\n        read_only: true\n        tmpfs:\n          size: 64m",
 		},
 		{
-			name: "target traversal",
+			name:   "target traversal",
 			mounts: "      - type: tmpfs\n        target: /data/../escape\n        tmpfs:\n          size: 64m",
 		},
 		{
-			name: "duplicate mount target",
+			name:   "duplicate mount target",
 			mounts: "      - type: bind\n        source: ./config\n        target: /shared\n      - type: tmpfs\n        target: /shared\n        tmpfs:\n          size: 64m",
 		},
 		{
-			name: "nested mount targets",
+			name:   "nested mount targets",
 			mounts: "      - type: bind\n        source: ./config\n        target: /workspace\n      - type: tmpfs\n        target: /workspace/cache\n        tmpfs:\n          size: 64m",
 		},
 	}

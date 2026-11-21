@@ -351,7 +351,6 @@ func parseComposeExternalVolumes(definitions map[string]composeVolume) (map[stri
 	return result, nil
 }
 
-
 const (
 	maxComposeMountCount            = 64
 	maxComposeTmpfsBytes      int64 = 1 << 30
@@ -526,7 +525,7 @@ func parseComposeTmpfsSize(value string) (int64, error) {
 	}
 	multiplier := int64(1)
 	for _, suffix := range []struct {
-		name string
+		name   string
 		factor int64
 	}{
 		{"gib", 1 << 30}, {"gb", 1 << 30}, {"gi", 1 << 30}, {"g", 1 << 30},
