@@ -34,14 +34,22 @@ func runDockerExecTTY(command *exec.Cmd, config dockerExecCreateConfig, stdin io
 	}
 	if stdin != nil {
 		go func() {
-			if _, copyErr := io.Copy(terminal, stdin); copyErr == nil {
-				// A terminal's canonical input mode interprets Ctrl-D as EOF.
-				_, _ = terminal.Write([]byte{4})
-			}
+			_, _ = io.Copy(terminal, stdin)
+			// A terminal's canonical input mode interprets Ctrl-D as EOF.
+			// Send it on both clean half-close and abrupt client disconnect so
+			// interactive workloads cannot remain stuck waiting for input.
+			_, _ = terminal.Write([]byte{4})
 		}()
 	}
 
 	_, outputErr := io.Copy(stdout, terminal)
+	if outputErr != nil && !errors.Is(outputErr, syscall.EIO) && !errors.Is(outputErr, os.ErrClosed) {
+		// A failed attached stream must not leave an orphaned interactive
+		// process waiting forever after its output consumer has disappeared.
+		if command.Process != nil {
+			_ = command.Process.Kill()
+		}
+	}
 	waitErr := command.Wait()
 	if onTTY != nil {
 		onTTY(nil)
