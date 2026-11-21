@@ -109,6 +109,31 @@ func TestDockerArchiveResolveRejectsEscapingAndLoopingSymlinks(t *testing.T) {
 	}
 }
 
+func TestDockerArchiveSymlinkTargetsCannotBypassLiveMountExclusions(t *testing.T) {
+	lower := t.TempDir()
+	upper := t.TempDir()
+	if err := os.Mkdir(filepath.Join(lower, "proc"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lower, "proc", "secret"), []byte("not mounted in this test"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/proc", filepath.Join(lower, "proc-alias")); err != nil {
+		t.Fatal(err)
+	}
+	resolvedLower, _, _, err := resolveDockerOverlayPath(lower, upper, "proc-alias/secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(lower, resolvedLower)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dockerArchivePathUsesRestrictedMount(filepath.ToSlash(relative)) {
+		t.Fatalf("symlink resolved to restricted mount path %q without being blocked", relative)
+	}
+}
+
 func TestDockerArchiveSingleRootPreservesLiteralWhiteoutFilenames(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "literal"), []byte("visible lower name"), 0600); err != nil {
