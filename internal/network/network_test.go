@@ -772,3 +772,82 @@ func TestLeaveRefusesVethWithMismatchedOwnershipAlias(t *testing.T) {
 		t.Fatalf("ownership mismatch released allocation: %+v", summary)
 	}
 }
+
+func TestJoinWithOptionsUsesStaticIPv4AndMAC(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	if _, err := CreateWithRunner(context.Background(), "static-endpoint", CreateOptions{
+		Subnet: "172.30.48.0/29",
+	}, &fakeRunner{}); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{}
+	options := EndpointOptions{
+		IPv4Address: "172.30.48.5",
+		MACAddress:  "02:aa:bb:cc:dd:ee",
+	}
+	address, err := JoinWithRunnerOptions(context.Background(), "static-endpoint", 2401, "container-static", runner, options)
+	if err != nil {
+		t.Fatalf("JoinWithRunnerOptions(): %v", err)
+	}
+	if address != options.IPv4Address {
+		t.Fatalf("allocated IPv4 address=%q, want %q", address, options.IPv4Address)
+	}
+	if len(runner.calls) != 11 || !strings.Contains(runner.calls[6], "address "+options.MACAddress) {
+		t.Fatalf("configured endpoint MAC missing from veth setup: %v", runner.calls)
+	}
+	network, err := InspectDetails("static-endpoint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if network.Allocations["container-static"] != options.IPv4Address ||
+		network.MACAddresses["container-static"] != options.MACAddress ||
+		len(network.EndpointIDs["container-static"]) != 64 {
+		t.Fatalf("persisted static endpoint metadata = %+v", network)
+	}
+
+	before := len(runner.calls)
+	if _, err := JoinWithRunnerOptions(context.Background(), "static-endpoint", 2402, "container-duplicate", runner, options); err == nil {
+		t.Fatal("duplicate static IPv4 address unexpectedly allocated")
+	}
+	if len(runner.calls) != before {
+		t.Fatalf("duplicate address touched host interfaces: %v", runner.calls[before:])
+	}
+}
+
+func TestJoinWithOptionsRejectsReservedAndOutOfSubnetIPv4Addresses(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	if _, err := CreateWithRunner(context.Background(), "static-invalid", CreateOptions{
+		Subnet: "172.30.49.0/29",
+	}, &fakeRunner{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, address := range []string{
+		"172.30.49.0", "172.30.49.1", "172.30.49.7",
+		"172.30.49.8", "172.30.49.10", "172.030.049.5", "not-an-ip",
+	} {
+		t.Run(address, func(t *testing.T) {
+			if _, err := JoinWithRunnerOptions(context.Background(), "static-invalid", 2403, "container-invalid", &fakeRunner{}, EndpointOptions{IPv4Address: address}); err == nil {
+				t.Fatalf("invalid or reserved IPv4 address %q was accepted", address)
+			}
+		})
+	}
+}
+
+func TestValidateEndpointMACRejectsUnsafeAndNonCanonicalAddresses(t *testing.T) {
+	for _, address := range []string{
+		"", "00:00:00:00:00:00", "01:00:5e:00:00:01",
+		"ff:ff:ff:ff:ff:ff", "02:aa:bb:cc:dd", "not-a-mac",
+	} {
+		t.Run(address, func(t *testing.T) {
+			if err := validateEndpointMAC(address); err == nil {
+				t.Fatalf("unsafe or malformed MAC address %q was accepted", address)
+			}
+		})
+	}
+	if err := validateEndpointMAC("02:aa:bb:cc:dd:ee"); err != nil {
+		t.Fatalf("valid locally administered unicast MAC rejected: %v", err)
+	}
+	if err := validateEndpointMAC("00:11:22:33:44:55"); err != nil {
+		t.Fatalf("valid globally administered unicast MAC rejected: %v", err)
+	}
+}
