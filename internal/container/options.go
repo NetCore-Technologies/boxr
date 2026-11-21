@@ -42,7 +42,7 @@ type Options struct {
 	CgroupEnabled       bool               `json:"cgroupEnabled,omitempty"`
 	Workdir             string             `json:"workdir,omitempty"`
 	Env                 []string           `json:"env,omitempty"`
-	TTY                 bool             `json:"tty,omitempty"`
+	TTY                 bool               `json:"tty,omitempty"`
 	OpenStdin           bool               `json:"openStdin,omitempty"`
 	StdinOnce           bool               `json:"stdinOnce,omitempty"`
 	ClearEnv            bool               `json:"-"`
