@@ -644,6 +644,12 @@ func displayName(record state.Record) string {
 	return "/" + record.ID
 }
 
+func (s *Server) containerNetworkAttachments(records []state.Record) (map[string]map[string]any, error) {
+	s.networkMu.Lock()
+	defer s.networkMu.Unlock()
+	return dockerNetworkAttachments(records)
+}
+
 func dockerNetworkAttachments(records []state.Record) (map[string]map[string]any, error) {
 	summaries, err := boxrnetwork.List()
 	if err != nil {
@@ -763,7 +769,7 @@ func (s *Server) handleContainers(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
-	networkAttachments, err := dockerNetworkAttachments(records)
+	networkAttachments, err := s.containerNetworkAttachments(records)
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, err)
 		return
@@ -1391,7 +1397,7 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 		"Tmpfs":      tmpfsHostConfig,
 		"Privileged": false, "ReadonlyRootfs": record.Options.ReadOnlyRootFS,
 	}
-	networkAttachments, err := dockerNetworkAttachments([]state.Record{record})
+	networkAttachments, err := s.containerNetworkAttachments([]state.Record{record})
 	if err != nil {
 		writeError(writer, http.StatusInternalServerError, err)
 		return
