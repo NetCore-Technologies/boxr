@@ -30,6 +30,9 @@ func (s *Server) handleContainerPauseTransition(writer http.ResponseWriter, requ
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
+	unlock := s.containerTransitions.lock(id)
+	defer unlock()
+
 	record, err := state.Get(id)
 	if err != nil {
 		writeError(writer, http.StatusNotFound, err)
