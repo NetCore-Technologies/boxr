@@ -61,7 +61,8 @@ The default API version advertised is `1.45` (minimum `1.24`). Implemented endpo
 | POST | `/containers/{id}/unpause` | Thaw a verified paused container and persist its running state |
 | GET | `/containers/{id}/logs` | Bounded tail or follow using Docker multiplex framing |
 | GET | `/containers/{id}/stats` | cgroup v2 CPU, memory and PID samples (snapshot or stream) |
-| GET | `/containers/{id}/top` | Container process table with PID/UID namespace translation and bounded `/proc` traversal |\n| POST | `/containers/create` | Create a container from a verified local image; `HostConfig.Binds` and a strict `HostConfig.Mounts` subset support existing host paths, pre-created Boxr volumes and basic tmpfs mounts |
+| GET | `/containers/{id}/top` | Container process table with PID/UID namespace translation and bounded `/proc` traversal |
+| POST | `/containers/create` | Create a container from a verified local image; `HostConfig.Binds` and a strict `HostConfig.Mounts` subset support existing host paths, pre-created Boxr volumes and basic tmpfs mounts |
 | POST | `/containers/{id}/start` | Start a created container or restart an exited/failed container through the native detached supervisor |
 | POST | `/containers/{id}/wait` | Wait for the `not-running` condition and return the persisted workload exit status |
 | POST | `/containers/{id}/rename` | Rename a container while preserving its ID and rejecting duplicate names |
