@@ -17,8 +17,8 @@ type dockerImagePruneDeleted struct {
 }
 
 type dockerImagePruneResponse struct {
-	ImagesDeleted []dockerImagePruneDeleted `json:"ImagesDeleted"`
-	SpaceReclaimed int64                    `json:"SpaceReclaimed"`
+	ImagesDeleted  []dockerImagePruneDeleted `json:"ImagesDeleted"`
+	SpaceReclaimed int64                     `json:"SpaceReclaimed"`
 }
 
 func (s *Server) handleImagePrune(writer http.ResponseWriter, request *http.Request) {
