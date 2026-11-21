@@ -107,7 +107,6 @@ func TestEngineAPIContainerPruneRemovesCreatedAndExitedButKeepsRunning(t *testin
 	}
 }
 
-
 func TestEngineAPIContainerPruneWaitsForLifecycleTransitionLock(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record := createContainerPruneRecord(t, "prune-lock", nil)

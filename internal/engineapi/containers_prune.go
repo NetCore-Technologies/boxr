@@ -44,7 +44,11 @@ func (s *Server) handleContainerPrune(writer http.ResponseWriter, request *http.
 		current, getErr := state.Get(record.ID)
 		if getErr != nil {
 			unlock()
-			continue
+			if strings.Contains(getErr.Error(), "no container matches") {
+				continue
+			}
+			writeError(writer, http.StatusInternalServerError, fmt.Errorf("re-read container %s during prune: %w", record.ID, getErr))
+			return
 		}
 		if current.Status == "running" || current.Status == "paused" || current.Status == "restarting" {
 			unlock()
@@ -75,7 +79,11 @@ func (s *Server) handleContainerPrune(writer http.ResponseWriter, request *http.
 			current, getErr := state.Get(record.ID)
 			unlock()
 			if getErr != nil {
-				continue // another operation already removed the record
+				if strings.Contains(getErr.Error(), "no container matches") {
+					continue // another operation already removed the record
+				}
+				writeError(writer, http.StatusInternalServerError, fmt.Errorf("verify container %s after prune failure: %w", record.ID, getErr))
+				return
 			}
 			if current.Status == "running" || current.Status == "paused" || current.Status == "restarting" {
 				continue
