@@ -25,6 +25,7 @@ type Stats struct {
 	CPUUserUsec        int64                `json:"cpuUserUsec,omitempty"`
 	CPUSystemUsec      int64                `json:"cpuSystemUsec,omitempty"`
 	SystemCPUUsageNS   int64                `json:"systemCpuUsageNs,omitempty"`
+	SystemMemoryTotalBytes int64             `json:"systemMemoryTotalBytes,omitempty"`
 	IOCounters         map[string]string    `json:"ioCounters,omitempty"`
 	Networks           map[string]NetworkCounters `json:"networks,omitempty"`
 	AvailableFiles     []string             `json:"availableFiles,omitempty"`
