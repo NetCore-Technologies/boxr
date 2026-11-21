@@ -289,17 +289,17 @@ func buildDockerfileStages(
 								variant = verified.Variant
 							}
 							copyRoot = filepath.Join(workspace, fmt.Sprintf("external-%03d-rootfs", len(externalImageRoots)))
-						if _, unpackErr := Unpack(step.copyFrom, copyRoot); unpackErr != nil {
-							return empty, fmt.Errorf("unpack verified COPY --from image %q: %w", step.copyFrom, unpackErr)
-						}
-						current, currentErr := Verify(step.copyFrom)
-						if currentErr != nil || current.Digest != verified.Digest {
-							if currentErr != nil {
-								return empty, fmt.Errorf("verify COPY --from image %q after unpack: %w", step.copyFrom, currentErr)
+							if _, unpackErr := Unpack(step.copyFrom, copyRoot); unpackErr != nil {
+								return empty, fmt.Errorf("unpack verified COPY --from image %q: %w", step.copyFrom, unpackErr)
 							}
-							return empty, fmt.Errorf("COPY --from image %q changed while its rootfs was being staged", step.copyFrom)
-						}
-						externalImageRoots[step.copyFrom] = copyRoot
+							current, currentErr := Verify(step.copyFrom)
+							if currentErr != nil || current.Digest != verified.Digest {
+								if currentErr != nil {
+									return empty, fmt.Errorf("verify COPY --from image %q after unpack: %w", step.copyFrom, currentErr)
+								}
+								return empty, fmt.Errorf("COPY --from image %q changed while its rootfs was being staged", step.copyFrom)
+							}
+							externalImageRoots[step.copyFrom] = copyRoot
 					}
 					}
 					copyIgnore = nil
