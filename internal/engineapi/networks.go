@@ -264,5 +264,5 @@ func (s *Server) handleNetworkDelete(writer http.ResponseWriter, name string) {
 		}
 		return
 	}
-	writeJSON(writer, http.StatusOK, []map[string]string{{"Network": name, "Deleted": name}})
+	writer.WriteHeader(http.StatusNoContent)
 }
