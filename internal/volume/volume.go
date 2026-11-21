@@ -312,8 +312,6 @@ func ExportArchive(name, archivePath string) (Archive, error) {
 	}, nil
 }
 
-
-
 type copyUpDirectoryMode struct {
 	path string
 	mode os.FileMode
