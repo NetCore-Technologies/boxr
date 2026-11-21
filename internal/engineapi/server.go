@@ -47,6 +47,7 @@ type Server struct {
 	verifyExecPID         func(state.Record) error
 	verifyUpdatePID       func(state.Record) error
 	updateCgroupResources func(int, container.Options, container.CgroupResourceUpdate) error
+	setCgroupFrozen       func(int, bool) error
 }
 
 func New(version string) *Server {
@@ -63,6 +64,7 @@ func New(version string) *Server {
 		verifyExecPID:         verifyDockerContainerPID,
 		verifyUpdatePID:       verifyDockerContainerPID,
 		updateCgroupResources: container.UpdateCgroupResources,
+		setCgroupFrozen:       container.SetCgroupFrozen,
 		execSessions:          make(map[string]*dockerExecSession),
 	}
 }
@@ -128,6 +130,30 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.handleContainers(writer, request)
 	case strings.HasPrefix(path, "/containers/"):
 		remainder := strings.TrimPrefix(path, "/containers/")
+		if strings.HasSuffix(remainder, "/pause") {
+			containerID := strings.TrimSuffix(remainder, "/pause")
+			if containerID == "" || strings.Contains(containerID, "/") {
+				writeError(writer, http.StatusNotFound, fmt.Errorf("container pause endpoint not found"))
+				return
+			}
+			if !requireMethod(writer, request, http.MethodPost) {
+				return
+			}
+			s.handleContainerPause(writer, request, containerID)
+			return
+		}
+		if strings.HasSuffix(remainder, "/unpause") {
+			containerID := strings.TrimSuffix(remainder, "/unpause")
+			if containerID == "" || strings.Contains(containerID, "/") {
+				writeError(writer, http.StatusNotFound, fmt.Errorf("container unpause endpoint not found"))
+				return
+			}
+			if !requireMethod(writer, request, http.MethodPost) {
+				return
+			}
+			s.handleContainerUnpause(writer, request, containerID)
+			return
+		}
 		if strings.HasSuffix(remainder, "/update") {
 			containerID := strings.TrimSuffix(remainder, "/update")
 			if containerID == "" || strings.Contains(containerID, "/") {

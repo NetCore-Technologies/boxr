@@ -56,6 +56,8 @@ The default API version advertised is `1.45` (minimum `1.24`). Implemented endpo
 | POST | `/containers/prune` | Remove created and stopped containers using Docker-compatible `until`, `label` and `label!` filters; running and restarting containers are protected; emits the Docker `prune` event |
 | GET | `/containers/{id}/json` | Container state, command, resource, mount and port metadata |
 | POST | `/containers/{id}/update` | Apply live cgroup v2 Memory, MemoryReservation, MemorySwap, NanoCpus and PidsLimit changes to a running container; PidsLimit accepts 0 or -1 for unlimited |
+| POST | `/containers/{id}/pause` | Freeze a verified running container using the cgroup v2 freezer and persist its paused state |
+| POST | `/containers/{id}/unpause` | Thaw a verified paused container and persist its running state |
 | GET | `/containers/{id}/logs` | Bounded tail or follow using Docker multiplex framing |
 | GET | `/containers/{id}/stats` | cgroup v2 CPU, memory and PID samples (snapshot or stream) |
 | POST | `/containers/create` | Create a container from a verified local image; `HostConfig.Binds` and a strict `HostConfig.Mounts` subset support existing host paths, pre-created Boxr volumes and basic tmpfs mounts |

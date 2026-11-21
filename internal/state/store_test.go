@@ -701,3 +701,114 @@ func TestRenamePersistsUniqueContainerNamesAndEvents(t *testing.T) {
 		t.Fatalf("unrelated container record changed: %v", err)
 	}
 }
+
+func TestSetPausedRequiresSameLiveProcessAndRecordsEvents(t *testing.T) {
+	useTempState(t)
+	created, err := Create("pause-state", []string{"/bin/sleep", "30"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Start(created.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	running, err := Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if running.ProcessStartTicks == 0 {
+		t.Skip("current platform does not expose process start ticks")
+	}
+	if err := SetPaused(running.ID, running.PID, running.ProcessStartTicks, true); err != nil {
+		t.Fatalf("SetPaused(true): %v", err)
+	}
+	paused, err := Get(running.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paused.Status != "paused" || paused.PID != running.PID || paused.ProcessStartTicks != running.ProcessStartTicks {
+		t.Fatalf("paused record lost process identity: %+v", paused)
+	}
+	if err := SetPaused(paused.ID, paused.PID, paused.ProcessStartTicks, true); err == nil {
+		t.Fatal("repeated pause was accepted as a valid state transition")
+	}
+	if err := SetPaused(paused.ID, paused.PID, paused.ProcessStartTicks+1, false); err == nil {
+		t.Fatal("unpause accepted a stale process start time")
+	}
+	if err := SetPaused(paused.ID, paused.PID, paused.ProcessStartTicks, false); err != nil {
+		t.Fatalf("SetPaused(false): %v", err)
+	}
+	resumed, err := Get(running.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Status != "running" || resumed.PID != running.PID || resumed.ProcessStartTicks != running.ProcessStartTicks {
+		t.Fatalf("resumed record lost process identity: %+v", resumed)
+	}
+	events, err := Events(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actions []string
+	for _, event := range events {
+		if event.ID == running.ID {
+			actions = append(actions, event.Action)
+		}
+	}
+	if len(actions) < 3 || actions[len(actions)-2] != "pause" || actions[len(actions)-1] != "unpause" {
+		t.Fatalf("pause lifecycle events = %v", actions)
+	}
+}
+
+func TestSetPausedRejectsPendingStopAndRollsBackFailedEventWrite(t *testing.T) {
+	dir := useTempState(t)
+	created, err := Create("pause-stop", []string{"/bin/sleep", "30"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Start(created.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	running, err := Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if running.ProcessStartTicks == 0 {
+		t.Skip("current platform does not expose process start ticks")
+	}
+	if err := RequestStop(running.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetPaused(running.ID, running.PID, running.ProcessStartTicks, true); err == nil {
+		t.Fatal("pause accepted while a stop is pending")
+	}
+	if err := CancelStopRequest(running.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	originalEventsPath := filepath.Join(dir, "events.saved")
+	if err := os.Rename(eventsPath, originalEventsPath); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(outside, []byte("preserve this file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, eventsPath); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := SetPaused(running.ID, running.PID, running.ProcessStartTicks, true); err == nil {
+		t.Fatal("pause succeeded while the event log path was unsafe")
+	}
+	after, err := Get(running.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Status != "running" {
+		t.Fatalf("failed event write left persisted status %q", after.Status)
+	}
+	got, err := os.ReadFile(outside)
+	if err != nil || string(got) != "preserve this file" {
+		t.Fatalf("event target was changed: %q, %v", got, err)
+	}
+}
