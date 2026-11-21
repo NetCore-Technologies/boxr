@@ -155,7 +155,9 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case strings.HasPrefix(path, "/images/"):
 		remainder := strings.TrimPrefix(path, "/images/")
 		if strings.HasSuffix(remainder, "/tag") {
-			if !requireMethod(writer, request, http.MethodPost) { return }
+			if !requireMethod(writer, request, http.MethodPost) {
+				return
+			}
 			s.handleImageTag(writer, request, strings.TrimSuffix(remainder, "/tag"))
 			return
 		}
