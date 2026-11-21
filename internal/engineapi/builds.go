@@ -95,8 +95,14 @@ func parseDockerBuildOptions(query url.Values) (dockerBuildOptions, error) {
 	if networkMode != "" {
 		options.network = networkMode
 	}
+	// Docker clients commonly send "default" even when the caller did not
+	// request network access. Map that default to Boxr's isolated builder;
+	// host networking remains an explicit opt-in.
+	if options.network == "default" {
+		options.network = "none"
+	}
 	if options.network != "none" && options.network != "host" {
-		return options, fmt.Errorf("Docker build networkmode must be none or host")
+		return options, fmt.Errorf("Docker build networkmode must be default, none or host")
 	}
 
 	quietValue, err := singleQueryValue(query, "q")
