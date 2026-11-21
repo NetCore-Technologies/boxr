@@ -34,6 +34,12 @@ func openEngineContainerStdinBridge(id string, stdinOnce bool) (io.Reader, func(
 	if err != nil {
 		return nil, nil, fmt.Errorf("listen for container stdin: %w", err)
 	}
+	unixListener, ok := listener.(*net.UnixListener)
+	if !ok {
+		_ = listener.Close()
+		return nil, nil, fmt.Errorf("container stdin listener is not a Unix socket")
+	}
+	unixListener.SetUnlinkOnClose(false)
 	socketInfo, err := os.Lstat(socketPath)
 	if err != nil || socketInfo.Mode()&os.ModeSocket == 0 {
 		_ = listener.Close()
