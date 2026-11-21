@@ -3660,6 +3660,12 @@ var implementedFeatures = []string{
 	"native restart command stops then starts an image-backed container with a bounded graceful timeout",
 	"Engine API start endpoint restarts stopped image-backed containers through the native detached supervisor",
 	"Engine API restart endpoint performs a bounded graceful stop and launches the same saved container again",
+	"Engine API lists local named volumes with name label driver scope and dangling filters",
+	"Engine API creates local named volumes with validated labels and the local driver",
+	"Engine API inspects named volume metadata and the private mountpoint",
+	"Engine API removes named volumes only when no persisted container references them",
+	"Engine API container create resolves pre-created Boxr named volumes from Docker HostConfig.Binds",
+	"Engine API container inspect reports named volume type name driver and Docker-compatible Binds",
 }
 
 func printFeatures(stdout io.Writer) {
