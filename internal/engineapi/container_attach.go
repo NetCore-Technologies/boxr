@@ -50,6 +50,13 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
+	outputStream := byte(1)
+	if !stdout && stderr {
+		// Combined output cannot be separated, but Docker clients requesting
+		// stderr alone still need to receive the persisted combined stream.
+		outputStream = 2
+	}
+	outputEnabled := stdout || stderr
 	stream, err := boolQuery(request, "stream")
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, err)
@@ -70,8 +77,8 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 	writer.Header().Set("Content-Type", "application/vnd.docker.raw-stream")
 	writer.Header().Set("Cache-Control", "no-cache")
 	writer.WriteHeader(http.StatusOK)
-	if logs && stdout && len(data) > 0 {
-		if err := writeLogFrame(writer, data, 1); err != nil {
+	if logs && outputEnabled && len(data) > 0 {
+		if err := writeLogFrame(writer, data, outputStream); err != nil {
 			return
 		}
 	}
@@ -100,8 +107,8 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 				// client was attached. CopyLogFrom resumes from byte zero.
 				offset = next
 			} else if next > offset {
-				if stdout && buffer.Len() > 0 {
-					if err := writeLogFrame(writer, []byte(buffer.String()), 1); err != nil {
+				if outputEnabled && buffer.Len() > 0 {
+					if err := writeLogFrame(writer, []byte(buffer.String()), outputStream); err != nil {
 						return
 					}
 				}
