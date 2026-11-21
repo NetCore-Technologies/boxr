@@ -64,6 +64,66 @@ func TestDockerArchivePathFlags(t *testing.T) {
 	}
 }
 
+func TestDockerArchiveResolveFollowsInRootSymlinks(t *testing.T) {
+	lower := t.TempDir()
+	upper := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(lower, "real", "nested"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lower, "real", "nested", "data.txt"), []byte("safe"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real", filepath.Join(lower, "relative-link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/real", filepath.Join(lower, "absolute-link")); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{"relative-link/nested/data.txt", "absolute-link/nested/data.txt"} {
+		lowerPath, _, info, err := resolveDockerOverlayPath(lower, upper, query)
+		if err != nil {
+			t.Fatalf("resolve %q: %v", query, err)
+		}
+		if !info.Mode().IsRegular() || filepath.Clean(lowerPath) != filepath.Join(lower, "real", "nested", "data.txt") {
+			t.Fatalf("resolve %q = (%q, %v)", query, lowerPath, info.Mode())
+		}
+	}
+}
+
+func TestDockerArchiveResolveRejectsEscapingAndLoopingSymlinks(t *testing.T) {
+	lower := t.TempDir()
+	upper := t.TempDir()
+	if err := os.Symlink("../../host-secret", filepath.Join(lower, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("loop-b", filepath.Join(lower, "loop-a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("loop-a", filepath.Join(lower, "loop-b")); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{"escape", "loop-a"} {
+		if _, _, _, err := resolveDockerOverlayPath(lower, upper, query); err == nil {
+			t.Errorf("resolve %q unexpectedly succeeded", query)
+		}
+	}
+}
+
+func TestDockerArchiveNoOverwriteRejectsDirectoryTypeMismatch(t *testing.T) {
+	stage := t.TempDir()
+	lower := t.TempDir()
+	upper := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stage, "existing-dir"), []byte("file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(lower, "existing-dir"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateDockerArchiveNoOverwrite(stage, lower, upper, ""); err == nil {
+		t.Fatal("expected file-over-directory overwrite to be rejected")
+	}
+}
+
 func TestDockerOverlayArchiveMergesUpperAndHonoursWhiteouts(t *testing.T) {
 	lower := t.TempDir()
 	upper := t.TempDir()
