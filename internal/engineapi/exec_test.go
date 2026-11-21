@@ -343,7 +343,24 @@ func TestDockerEngineExecRunningSessionCannotBeDeleted(t *testing.T) {
 	select {
 	case <-startDone:
 	case <-time.After(2 * time.Second):
-		t.Fatal("detached exec did not complete")
+		t.Fatal("detached exec start endpoint did not return")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		session, exists := server.dockerExecSession(created.Id)
+		if !exists {
+			t.Fatal("exec session disappeared before deletion")
+		}
+		session.mu.Lock()
+		running := session.Running
+		session.mu.Unlock()
+		if !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("detached exec runner did not finish")
+		}
+		time.Sleep(time.Millisecond)
 	}
 	deleted = engineAPIRequest(server, http.MethodDelete, "/exec/"+created.Id)
 	if deleted.Code != http.StatusOK {
