@@ -834,6 +834,8 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 	startedAny := false
 	var runErr error
 	for {
+		var healthCancel context.CancelFunc
+		var healthDone <-chan struct{}
 		runErr = container.RunWithHooks(commandArgs[0], commandArgs[1:], opts, container.Hooks{
 			Stdout: io.MultiWriter(stdout, combinedLog),
 			Stderr: io.MultiWriter(stderr, combinedLog),
@@ -851,6 +853,9 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 				return nil
 			},
 			OnReady: func(pid int) {
+				if container.HealthcheckEnabled(opts.Healthcheck) && healthCancel == nil {
+					healthCancel, healthDone = startContainerHealthMonitor(record.ID, opts.Healthcheck)
+				}
 				if detachedReadyWriter != nil && !detachedReadySent {
 					_, _ = fmt.Fprintf(detachedReadyWriter, "READY %s %d\n", record.ID, pid)
 					detachedReadySent = true
@@ -859,6 +864,11 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 				}
 			},
 			OnExit: func(_ int, executionErr error) error {
+				if healthCancel != nil {
+					healthCancel()
+					<-healthDone
+					healthCancel = nil
+				}
 				var networkErr error
 				if opts.NetworkMode == "bridge" || opts.NetworkMode == "none" {
 					networkErr = boxrnetwork.LeaveAll(record.ID)
