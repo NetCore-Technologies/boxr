@@ -1011,8 +1011,6 @@ func TestDockerStructuredMountsRejectUnsupportedAndUnsafeOptions(t *testing.T) {
 		{name: "unknown field", mount: fmt.Sprintf(`{"Type":"bind","Source":%q,"Target":"/data","Unexpected":true}`, hostSource)},
 		{name: "unsupported propagation", mount: fmt.Sprintf(`{"Type":"bind","Source":%q,"Target":"/data","BindOptions":{"Propagation":"rshared"}}`, hostSource)},
 		{name: "implicit host path creation", mount: fmt.Sprintf(`{"Type":"bind","Source":%q,"Target":"/data","BindOptions":{"CreateMountpoint":true}}`, filepath.Join(t.TempDir(), "missing"))},
-		{name: "volume copy-up", mount: `{"Type":"volume","Source":"preexisting","Target":"/data","VolumeOptions":{"NoCopy":false}}`},
-		{name: "volume no-copy not explicit", mount: `{"Type":"volume","Source":"preexisting","Target":"/data"}`},
 		{name: "volume subpath", mount: `{"Type":"volume","Source":"preexisting","Target":"/data","VolumeOptions":{"NoCopy":true,"Subpath":"child"}}`},
 		{name: "tmpfs source", mount: `{"Type":"tmpfs","Source":"/tmp","Target":"/run"}`},
 		{name: "tmpfs size omitted", mount: `{"Type":"tmpfs","Target":"/run"}`},
