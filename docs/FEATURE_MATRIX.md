@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 873 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 880 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 
 ## Implemented capabilities
@@ -880,3 +880,10 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 871. Engine API inspects managed bridge network subnet gateway bridge interface and labels
 872. Engine API deletes managed bridge networks only when no containers remain attached
 873. managed bridge networks persist validated Docker-compatible network labels
+874. Engine API creates anonymous local volumes when the create request omits Name
+875. Engine API prunes unused anonymous volumes by default with Docker-compatible label filters
+876. Engine API prunes unused named volumes when the all filter is true
+877. Engine API prunes unused managed bridge networks with label and until filters
+878. Engine API protects persisted container network references during network pruning
+879. Engine API exports one or more verified local image tags as Docker-save archives
+880. Engine API imports Docker-save archives after tag preflight and protects images referenced by containers
