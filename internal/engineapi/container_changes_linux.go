@@ -4,6 +4,7 @@ package engineapi
 
 import (
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -107,10 +108,6 @@ func walkDockerOverlayChanges(lower, upper, relative string, changes map[string]
 	if err != nil {
 		return err
 	}
-	lowerEntries, err := readOverlayDirectory(lower)
-	if err != nil {
-		return err
-	}
 
 	upperNames := make(map[string]struct{}, len(upperEntries))
 	for _, entry := range upperEntries {
@@ -121,7 +118,7 @@ func walkDockerOverlayChanges(lower, upper, relative string, changes map[string]
 	for _, entry := range upperEntries {
 		name := entry.Name()
 		upperPath := filepath.Join(upper, name)
-		if name == ".wh..wh..opq" && isOverlayOpaqueMarker(upperPath, entry) {
+		if name == ".wh..wh..opq" && isOverlayOpaqueMarker(entry) {
 			opaque = true
 			continue
 		}
@@ -170,6 +167,10 @@ func walkDockerOverlayChanges(lower, upper, relative string, changes map[string]
 	}
 
 	if opaque {
+		lowerEntries, err := readOverlayDirectory(lower)
+		if err != nil {
+			return err
+		}
 		for _, entry := range lowerEntries {
 			name := entry.Name()
 			if _, present := upperNames[name]; present {
@@ -192,20 +193,44 @@ func readOverlayDirectory(path string) ([]fs.DirEntry, error) {
 	if path == "" {
 		return nil, nil
 	}
-	info, err := os.Lstat(path)
+	before, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+	if before.Mode()&os.ModeSymlink != 0 || !before.IsDir() {
 		return nil, nil
 	}
-	entries, err := os.ReadDir(path)
+	directory, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("read OverlayFS comparison directory %q: %w", path, err)
+		return nil, fmt.Errorf("open OverlayFS comparison directory %q: %w", path, err)
 	}
+	defer directory.Close()
+	after, err := directory.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect OverlayFS comparison directory %q: %w", path, err)
+	}
+	if !os.SameFile(before, after) || !after.IsDir() {
+		return nil, fmt.Errorf("OverlayFS comparison directory %q changed while opening", path)
+	}
+
+	entries := make([]fs.DirEntry, 0, 64)
+	for {
+		batch, readErr := directory.ReadDir(512)
+		entries = append(entries, batch...)
+		if len(entries) > maxDockerDiffEntries {
+			return nil, fmt.Errorf("OverlayFS directory %q exceeds %d entries", path, maxDockerDiffEntries)
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("read OverlayFS comparison directory %q: %w", path, readErr)
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	return entries, nil
 }
 
@@ -229,7 +254,7 @@ func overlayWhiteout(path string, entry fs.DirEntry, info fs.FileInfo) (string, 
 	return "", false
 }
 
-func isOverlayOpaqueMarker(path string, entry fs.DirEntry) bool {
+func isOverlayOpaqueMarker(entry fs.DirEntry) bool {
 	info, err := entry.Info()
 	return err == nil && info.Mode().IsRegular() && info.Size() == 0
 }
