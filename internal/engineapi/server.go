@@ -155,6 +155,18 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			s.handleContainerUnpause(writer, request, containerID)
 			return
 		}
+		if strings.HasSuffix(remainder, "/changes") {
+			containerID := strings.TrimSuffix(remainder, "/changes")
+			if containerID == "" || strings.Contains(containerID, "/") {
+				writeError(writer, http.StatusNotFound, fmt.Errorf("container changes endpoint not found"))
+				return
+			}
+			if !requireMethod(writer, request, http.MethodGet) {
+				return
+			}
+			s.handleContainerChanges(writer, request, containerID)
+			return
+		}
 		if strings.HasSuffix(remainder, "/update") {
 			containerID := strings.TrimSuffix(remainder, "/update")
 			if containerID == "" || strings.Contains(containerID, "/") {
