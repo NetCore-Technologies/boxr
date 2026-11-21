@@ -1067,11 +1067,11 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 		"OpenStdin":    false, "StdinOnce": false, "Tty": false,
 	}
 	hostConfig := map[string]any{
-		"NetworkMode": dockerNetworkMode(record.Options),
-		"Memory": record.Options.MemoryLimitBytes,
+		"NetworkMode":       dockerNetworkMode(record.Options),
+		"Memory":            record.Options.MemoryLimitBytes,
 		"MemoryReservation": record.Options.MemoryLowBytes,
-		"MemorySwap": dockerMemorySwapTotal(record.Options),
-		"NanoCpus": int64(record.Options.CPUs * 1e9), "PidsLimit": record.Options.PidsLimit,
+		"MemorySwap":        dockerMemorySwapTotal(record.Options),
+		"NanoCpus":          int64(record.Options.CPUs * 1e9), "PidsLimit": record.Options.PidsLimit,
 		"RestartPolicy": map[string]any{"Name": dockerRestartPolicy(record.Options.RestartPolicy), "MaximumRetryCount": record.Options.RestartMaxRetries},
 		"PortBindings":  dockerPortBindings(record.Options), "Binds": dockerBinds(record.Options),
 		"Tmpfs":      tmpfsHostConfig,

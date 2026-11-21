@@ -212,19 +212,19 @@ func TestDockerContainerUpdatePreservesMemorySwapSemanticsWhenMemoryChanges(t *t
 		wantStatus    int
 	}{
 		{
-			name: "default swap follows the new memory limit",
+			name:    "default swap follows the new memory limit",
 			initial: container.Options{CgroupEnabled: true, MemoryLimitBytes: 64 << 20, MemorySwapMaxBytes: 64 << 20, MemorySwapMaxSet: true, MemorySwapDefaulted: true},
-			body: `{"Memory":134217728}`, wantSwap: 128 << 20, wantSet: true, wantDefaulted: true, wantStatus: http.StatusOK,
+			body:    `{"Memory":134217728}`, wantSwap: 128 << 20, wantSet: true, wantDefaulted: true, wantStatus: http.StatusOK,
 		},
 		{
-			name: "explicit total swap remains constant",
+			name:    "explicit total swap remains constant",
 			initial: container.Options{CgroupEnabled: true, MemoryLimitBytes: 64 << 20, MemorySwapMaxBytes: 64 << 20, MemorySwapMaxSet: true},
-			body: `{"Memory":100663296}`, wantSwap: 32 << 20, wantSet: true, wantStatus: http.StatusOK,
+			body:    `{"Memory":100663296}`, wantSwap: 32 << 20, wantSet: true, wantStatus: http.StatusOK,
 		},
 		{
-			name: "memory cannot exceed an explicit total swap ceiling",
+			name:    "memory cannot exceed an explicit total swap ceiling",
 			initial: container.Options{CgroupEnabled: true, MemoryLimitBytes: 64 << 20, MemorySwapMaxBytes: 64 << 20, MemorySwapMaxSet: true},
-			body: `{"Memory":150994944}`, wantStatus: http.StatusBadRequest,
+			body:    `{"Memory":150994944}`, wantStatus: http.StatusBadRequest,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
