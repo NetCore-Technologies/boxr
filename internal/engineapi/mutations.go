@@ -261,7 +261,7 @@ func dockerImageTagTarget(source string, query url.Values) (string, error) {
 		lastSlash, lastColon := strings.LastIndex(repository, "/"), strings.LastIndex(repository, ":")
 		if lastColon > lastSlash {
 			repository = repository[:lastColon]
-	}
+		}
 	}
 	target, err := normalizeDockerLocalImageReference(repository + ":" + tag)
 	if err != nil {
