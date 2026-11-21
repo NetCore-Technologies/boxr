@@ -4403,6 +4403,45 @@ func startDeploymentProcess(executable, stack string, order int, serviceName str
 	}, nil
 }
 
+func waitForDeploymentHealthy(ctx context.Context, dependentService, dependencyService, containerName string, timeout time.Duration, exits <-chan deploymentProcessExit) (*deploymentProcessExit, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case exited := <-exits:
+			return &exited, fmt.Errorf("service %q exited while service %q was waiting for dependency %q to become healthy", exited.service, dependentService, dependencyService)
+		case <-waitCtx.Done():
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("timed out waiting for dependency %q to become healthy for service %q", dependencyService, dependentService)
+		case <-ticker.C:
+			record, err := state.Get(containerName)
+			if err != nil {
+				continue
+			}
+			if record.Status == "exited" || record.Status == "failed" {
+				return nil, fmt.Errorf("dependency %q exited before becoming healthy", dependencyService)
+			}
+			if record.Health == nil {
+				return nil, fmt.Errorf("dependency %q has no active container healthcheck", dependencyService)
+			}
+			switch record.Health.Status {
+			case "healthy":
+				return nil, nil
+			case "unhealthy":
+				return nil, fmt.Errorf("dependency %q became unhealthy before service %q could start", dependencyService, dependentService)
+			case "starting":
+				// Wait for the next persisted health-monitor update.
+			default:
+				return nil, fmt.Errorf("dependency %q reported unknown health state %q", dependencyService, record.Health.Status)
+			}
+		}
+	}
+}
+
 func waitForDeploymentStart(ctx context.Context, name string, timeout time.Duration, probe *deploy.ReadinessProbe, exits <-chan deploymentProcessExit) (state.Record, *deploymentProcessExit, error) {
 	var empty state.Record
 	startCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -4650,6 +4689,27 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 		startGroups = [][]string{plan.ExecutionOrder}
 	}
 	for _, group := range startGroups {
+		// A service_healthy edge is stronger than the ordinary dependency edge:
+		// the predecessor must have a persisted healthy state before this wave starts.
+		for _, serviceName := range group {
+			service := file.Services[serviceName]
+			for _, dependency := range service.DependsOnHealthy {
+				dependencyContainer := deploy.ContainerName(file.Name, dependency)
+				dependencyTimeout := deploymentServiceStartTimeout(service, startTimeout)
+				unexpectedExit, waitErr := waitForDeploymentHealthy(ctx, serviceName, dependency, dependencyContainer, dependencyTimeout, exits)
+				if unexpectedExit != nil {
+					exited[unexpectedExit.service] = *unexpectedExit
+				}
+				if waitErr != nil {
+					fmt.Fprintf(stderr, "boxr deploy up: %v\n", waitErr)
+					stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
+					if errors.Is(waitErr, context.Canceled) {
+						return 130
+					}
+					return 1
+				}
+			}
+		}
 		groupProcesses := make([]*deploymentProcess, 0, len(group))
 		for _, serviceName := range group {
 			if _, exists := plannedByName[serviceName]; !exists {
