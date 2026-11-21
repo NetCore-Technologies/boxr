@@ -104,6 +104,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	switch {
+	case path == "/commit":
+		if !requireMethod(writer, request, http.MethodPost) {
+			return
+		}
+		s.handleContainerCommit(writer, request)
 	case path == "/build":
 		if !requireMethod(writer, request, http.MethodPost) {
 			return
