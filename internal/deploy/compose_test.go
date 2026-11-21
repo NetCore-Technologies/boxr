@@ -805,8 +805,12 @@ func TestLoadComposeRejectsHealthyDependencyWithoutEnabledHealthcheck(t *testing
 			if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Load(path); err == nil {
-				t.Fatal("service_healthy dependency without an enabled healthcheck was accepted")
+			file, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load Compose manifest: %v", err)
+			}
+			if _, err := BuildPlan(file); err == nil {
+				t.Fatal("service_healthy dependency without an enabled healthcheck was accepted by BuildPlan")
 			}
 		})
 	}

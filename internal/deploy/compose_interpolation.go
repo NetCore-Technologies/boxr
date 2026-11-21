@@ -5,6 +5,7 @@ package deploy
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,9 +30,25 @@ func loadComposeInterpolationEnvironment(composePath string) (map[string]string,
 		if info.Size() > maxComposeDotEnvBytes {
 			return nil, fmt.Errorf("Compose .env file exceeds %d bytes", maxComposeDotEnvBytes)
 		}
-		data, readErr := os.ReadFile(dotEnvPath)
+		dotEnvFile, openErr := os.Open(dotEnvPath)
+		if openErr != nil {
+			return nil, fmt.Errorf("open Compose .env file: %w", openErr)
+		}
+		openedInfo, statErr := dotEnvFile.Stat()
+		if statErr != nil || !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
+			_ = dotEnvFile.Close()
+			if statErr != nil {
+				return nil, fmt.Errorf("inspect opened Compose .env file: %w", statErr)
+			}
+			return nil, fmt.Errorf("Compose .env file changed while opening")
+		}
+		data, readErr := io.ReadAll(io.LimitReader(dotEnvFile, maxComposeDotEnvBytes+1))
+		closeErr := dotEnvFile.Close()
 		if readErr != nil {
 			return nil, fmt.Errorf("read Compose .env file: %w", readErr)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("close Compose .env file: %w", closeErr)
 		}
 		if len(data) > maxComposeDotEnvBytes {
 			return nil, fmt.Errorf("Compose .env file exceeds %d bytes", maxComposeDotEnvBytes)
