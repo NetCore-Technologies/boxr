@@ -531,6 +531,9 @@ func publishCopyUpTree(source, destination string) error {
 				return fmt.Errorf("publish staged directory %s without replacement: %w", destinationPath, err)
 			}
 			created = append(created, destinationPath)
+			if err := os.Chmod(sourcePath, 0700); err != nil {
+				return fmt.Errorf("make staged image directory readable for publication %s: %w", sourcePath, err)
+			}
 			entries, err := os.ReadDir(sourcePath)
 			if err != nil {
 				return fmt.Errorf("read staged directory %s: %w", sourcePath, err)
