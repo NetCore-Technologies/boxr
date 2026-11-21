@@ -769,6 +769,8 @@ func copyUpDockerVolumes(mounts []container.BindMount, rootPath string) error {
 	if err != nil {
 		return fmt.Errorf("inspect existing container volume users: %w", err)
 	}
+	// Validate every volume before changing any of them. A conflict on a later
+	// mount must not leave earlier empty volumes partially initialised.
 	for _, mount := range selected {
 		for _, record := range records {
 			if record.Status != "running" && record.Status != "restarting" {
@@ -780,6 +782,8 @@ func copyUpDockerVolumes(mounts []container.BindMount, rootPath string) error {
 				}
 			}
 		}
+	}
+	for _, mount := range selected {
 		if err := volume.CopyUpFromRootFS(mount.VolumeName, rootPath, mount.Target); err != nil {
 			return fmt.Errorf("copy image path %s into volume %q: %w", mount.Target, mount.VolumeName, err)
 		}
