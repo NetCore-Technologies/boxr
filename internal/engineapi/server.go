@@ -1348,10 +1348,10 @@ func writeLogFrame(writer io.Writer, data []byte, stream byte) error {
 		var header [8]byte
 		header[0] = stream
 		binary.BigEndian.PutUint32(header[4:], uint32(length))
-		if _, err := writer.Write(header[:]); err != nil {
+		if err := writeDockerExecBytes(writer, header[:]); err != nil {
 			return err
 		}
-		if _, err := writer.Write(data[:length]); err != nil {
+		if err := writeDockerExecBytes(writer, data[:length]); err != nil {
 			return err
 		}
 		data = data[length:]
