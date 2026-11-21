@@ -41,9 +41,9 @@ func TestDockerEngineExecCreateStartStreamAndInspect(t *testing.T) {
 	response := postDockerExecCreate(t, server, record.ID, dockerExecCreateConfig{
 		AttachStdout: true,
 		AttachStderr: true,
-		Cmd:        []string{"/bin/example", "hello"},
-		Env:        []string{"APP_MODE=test"},
-		WorkingDir: "/srv/app",
+		Cmd:          []string{"/bin/example", "hello"},
+		Env:          []string{"APP_MODE=test"},
+		WorkingDir:   "/srv/app",
 	})
 	if response.Code != http.StatusCreated {
 		t.Fatalf("exec create status=%d body=%s", response.Code, response.Body.String())
@@ -117,7 +117,7 @@ func TestDockerEngineExecDetachedSessionCanBeInspectedWhileRunning(t *testing.T)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("exec create status=%d body=%s", response.Code, response.Body.String())
 	}
-	var created struct { Id string }
+	var created struct{ Id string }
 	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
