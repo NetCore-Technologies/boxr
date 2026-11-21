@@ -107,6 +107,11 @@ func extractTarArchive(archivePath, destination string, limits Limits, requireGz
 			_ = os.RemoveAll(staging)
 		}
 	}()
+	stagingRoot, err := os.OpenRoot(staging)
+	if err != nil {
+		return manifest, fmt.Errorf("open extraction root: %w", err)
+	}
+	defer stagingRoot.Close()
 	seen := make(map[string]bool)
 	tarReader := tar.NewReader(source)
 	for {
@@ -134,16 +139,16 @@ func extractTarArchive(archivePath, destination string, limits Limits, requireGz
 			return manifest, fmt.Errorf("archive contains duplicate path %q", name)
 		}
 		seen[name] = true
-		target, err := safeArchiveTarget(staging, name)
+		target, err := safeArchiveTarget(stagingRoot, name)
 		if err != nil {
 			return manifest, fmt.Errorf("unsafe archive path %q: %w", name, err)
 		}
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, safeMode(header.Mode, true)); err != nil {
+			if err := stagingRoot.MkdirAll(target, safeMode(header.Mode, true)); err != nil {
 				return manifest, fmt.Errorf("create directory %q: %w", name, err)
 			}
-			if err := os.Chmod(target, safeMode(header.Mode, true)); err != nil {
+			if err := stagingRoot.Chmod(target, safeMode(header.Mode, true)); err != nil {
 				return manifest, fmt.Errorf("set directory mode %q: %w", name, err)
 			}
 			manifest.Directories++
@@ -151,10 +156,7 @@ func extractTarArchive(archivePath, destination string, limits Limits, requireGz
 			if header.Size > limits.MaxBytes-manifest.Bytes {
 				return manifest, fmt.Errorf("archive exceeds the %d-byte uncompressed limit", limits.MaxBytes)
 			}
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				return manifest, fmt.Errorf("create parent for %q: %w", name, err)
-			}
-			file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, safeMode(header.Mode, false))
+			file, err := stagingRoot.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, safeMode(header.Mode, false))
 			if err != nil {
 				return manifest, fmt.Errorf("create file %q: %w", name, err)
 			}
@@ -176,10 +178,7 @@ func extractTarArchive(archivePath, destination string, limits Limits, requireGz
 			if err != nil {
 				return manifest, fmt.Errorf("unsafe symlink %q: %w", name, err)
 			}
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				return manifest, fmt.Errorf("create symlink parent: %w", err)
-			}
-			if err := os.Symlink(linkTarget, target); err != nil {
+			if err := stagingRoot.Symlink(linkTarget, target); err != nil {
 				return manifest, fmt.Errorf("create symlink %q: %w", name, err)
 			}
 			manifest.Symlinks++
@@ -188,18 +187,15 @@ func extractTarArchive(archivePath, destination string, limits Limits, requireGz
 			if err != nil {
 				return manifest, fmt.Errorf("unsafe hard link target %q: %w", header.Linkname, err)
 			}
-			linkTarget, err := safeArchiveTarget(staging, linkName)
+			linkTarget, err := safeArchiveTarget(stagingRoot, linkName)
 			if err != nil {
 				return manifest, fmt.Errorf("unsafe hard link target %q: %w", header.Linkname, err)
 			}
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-				return manifest, fmt.Errorf("create hard link parent: %w", err)
-			}
-			info, err := os.Lstat(linkTarget)
+			info, err := stagingRoot.Lstat(linkTarget)
 			if err != nil || !info.Mode().IsRegular() {
 				return manifest, fmt.Errorf("hard link target %q must be an existing regular file", linkName)
 			}
-			if err := os.Link(linkTarget, target); err != nil {
+			if err := stagingRoot.Link(linkTarget, target); err != nil {
 				return manifest, fmt.Errorf("create hard link %q: %w", name, err)
 			}
 			manifest.Files++
@@ -212,6 +208,9 @@ func extractTarArchive(archivePath, destination string, limits Limits, requireGz
 	}
 	if manifest.Files+manifest.Directories+manifest.Symlinks == 0 {
 		return manifest, fmt.Errorf("archive is empty")
+	}
+	if err := stagingRoot.Close(); err != nil {
+		return manifest, fmt.Errorf("close extraction root: %w", err)
 	}
 	if err := os.Rename(staging, destination); err != nil {
 		return manifest, fmt.Errorf("publish extracted rootfs: %w", err)
@@ -397,55 +396,45 @@ func Inspect(root string) (Manifest, error) {
 }
 
 func cleanArchiveName(name string) (string, error) {
-	if name == "" || strings.ContainsRune(name, '\x00') || strings.HasPrefix(name, "/") || strings.HasPrefix(name, "\\\\") {
-		return "", fmt.Errorf("absolute or empty path")
+	if name == "" || strings.ContainsAny(name, "\\\x00") || strings.HasPrefix(name, "/") {
+		return "", fmt.Errorf("absolute, empty or invalid path")
 	}
 	clean := path.Clean(strings.TrimPrefix(name, "./"))
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
 		return "", fmt.Errorf("path escapes archive root")
 	}
+	for _, component := range strings.Split(clean, "/") {
+		if component == "" || component == "." || component == ".." || strings.Contains(component, ":") {
+			return "", fmt.Errorf("invalid path component")
+		}
+	}
 	return clean, nil
 }
 
-func safeArchiveTarget(root, name string) (string, error) {
+// safeArchiveTarget validates and creates only real directory parents beneath
+// the extraction root. os.Root keeps every subsequent operation confined to
+// that directory, including when an archive contains symlink entries.
+func safeArchiveTarget(root *os.Root, name string) (string, error) {
 	clean, err := cleanArchiveName(name)
 	if err != nil {
 		return "", err
 	}
-	candidate := filepath.Join(root, filepath.FromSlash(clean))
-	rel, err := filepath.Rel(root, candidate)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path escapes extraction root")
-	}
-	current := root
-	parts := strings.Split(rel, string(filepath.Separator))
-	for _, part := range parts[:len(parts)-1] {
-		current = filepath.Join(current, part)
-		info, statErr := os.Lstat(current)
-		if statErr == nil {
-			if info.Mode()&os.ModeSymlink != 0 {
-				resolved, evalErr := filepath.EvalSymlinks(current)
-				if evalErr != nil {
-					return "", evalErr
-				}
-				inside, relErr := filepath.Rel(root, resolved)
-				if relErr != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
-					return "", fmt.Errorf("parent symlink escapes extraction root")
-				}
-				current = resolved
-			} else if !info.IsDir() {
-				return "", fmt.Errorf("parent path is not a directory")
-			}
-		} else if errors.Is(statErr, os.ErrNotExist) {
-			if err := os.Mkdir(current, 0755); err != nil {
+	parts := strings.Split(clean, "/")
+	for index := 1; index < len(parts); index++ {
+		parent := strings.Join(parts[:index], "/")
+		info, statErr := root.Lstat(parent)
+		switch {
+		case errors.Is(statErr, os.ErrNotExist):
+			if err := root.Mkdir(parent, 0755); err != nil && !errors.Is(err, os.ErrExist) {
 				return "", err
 			}
-		} else {
+		case statErr != nil:
 			return "", statErr
+		case info.Mode()&os.ModeSymlink != 0 || !info.IsDir():
+			return "", fmt.Errorf("archive parent %q is not a real directory", parent)
 		}
 	}
-	last := parts[len(parts)-1]
-	return filepath.Join(current, last), nil
+	return filepath.FromSlash(clean), nil
 }
 
 func safeSymlinkTarget(name, linkName string) (string, error) {
