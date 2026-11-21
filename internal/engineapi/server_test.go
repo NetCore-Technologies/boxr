@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"github.com/NetCore-Technologies/boxr/internal/container"
 	"time"
 
 	"github.com/manit6752025/boxr/internal/container"
@@ -1165,7 +1166,6 @@ func TestDockerCreateRejectsUnsupportedAndMalformedRequests(t *testing.T) {
 		want int
 	}{
 		{name: "missing image", body: `{"Cmd":["/bin/sh"]}`, want: http.StatusBadRequest},
-		{name: "TTY unsupported", body: `{"Image":"alpine:latest","Tty":true}`, want: http.StatusBadRequest},
 		{name: "privileged unsupported", body: `{"Image":"alpine:latest","HostConfig":{"Privileged":true}}`, want: http.StatusBadRequest},
 		{name: "unknown field rejected", body: `{"Image":"alpine:latest","HostConfig":{"Mystery":true}}`, want: http.StatusBadRequest},
 		{name: "multiple JSON values rejected", body: `{"Image":"alpine:latest"} {}`, want: http.StatusBadRequest},
@@ -3398,5 +3398,23 @@ func TestDockerContainerSizeRejectsSymlinkedRootAndBoundsWalk(t *testing.T) {
 	record.Options.RootFS = link
 	if _, _, err := dockerContainerSize(record); err == nil {
 		t.Fatal("symlinked rootfs was followed during Docker size calculation")
+	}
+}
+
+func TestDockerContainerInspectPreservesTTYConfig(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record := createEngineAPITestContainer(t, "tty-container", container.Options{TTY: true})
+	response := engineAPIRequest(server, http.MethodGet, "/v1.45/containers/"+record.ID+"/json")
+	if response.Code != http.StatusOK {
+		t.Fatalf("TTY inspect status=%d body=%s", response.Code, response.Body.String())
+	}
+	var inspected struct {
+		Config map[string]any `json:"Config"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &inspected); err != nil {
+		t.Fatal(err)
+	}
+	if inspected.Config["Tty"] != true {
+		t.Fatalf("Docker inspect Config.Tty = %#v, want true", inspected.Config["Tty"])
 	}
 }
