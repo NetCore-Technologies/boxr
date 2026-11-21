@@ -205,6 +205,60 @@ func TestContainerLogsUseDockerMultiplexedFrames(t *testing.T) {
 	}
 }
 
+func TestContainerAttachStreamsDockerMultiplexedLogSnapshot(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("attach-test", []string{"/bin/echo", "hello"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := state.OpenLog(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("attach output\n")
+	if _, err := logFile.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := logFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	response := engineAPIRequest(server, http.MethodPost,
+		"/v1.45/containers/"+record.ID+"/attach?logs=1&stream=0&stdout=1&stderr=1")
+	if response.Code != http.StatusOK {
+		t.Fatalf("attach status=%d body=%q", response.Code, response.Body.String())
+	}
+	body := response.Body.Bytes()
+	if got, want := len(body), len(payload)+8; got != want {
+		t.Fatalf("attach stream length=%d want %d", got, want)
+	}
+	if body[0] != 1 || body[1] != 0 || body[2] != 0 || body[3] != 0 {
+		t.Fatalf("unexpected Docker attach frame header: %v", body[:8])
+	}
+	if got := binary.BigEndian.Uint32(body[4:8]); got != uint32(len(payload)) {
+		t.Fatalf("attach frame length=%d want %d", got, len(payload))
+	}
+	if string(body[8:]) != string(payload) {
+		t.Fatalf("attach payload=%q want %q", body[8:], payload)
+	}
+}
+
+func TestContainerAttachRejectsUnsupportedStdinAndMethods(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("attach-stdin-test", []string{"/bin/sleep", "1"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdin := engineAPIRequest(server, http.MethodPost,
+		"/containers/"+record.ID+"/attach?stdin=1&stream=1")
+	if stdin.Code != http.StatusBadRequest {
+		t.Fatalf("attach stdin status=%d body=%q", stdin.Code, stdin.Body.String())
+	}
+	method := engineAPIRequest(server, http.MethodGet, "/containers/"+record.ID+"/attach")
+	if method.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET attach status=%d body=%q", method.Code, method.Body.String())
+	}
+}
+
 func TestEventsStreamDockerContainerEventShape(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record := createEngineAPITestContainer(t, "event-test", container.Options{})
