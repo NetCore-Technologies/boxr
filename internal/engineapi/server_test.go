@@ -2023,7 +2023,6 @@ func TestParseDockerNetworkUntilAcceptsDockerTimestampForms(t *testing.T) {
 	}
 }
 
-
 func TestEngineAPIImageSaveAndLoadDockerArchives(t *testing.T) {
 	server := setupEngineAPITest(t)
 	const reference = "registry.example/team/boxr-archive:v1"
