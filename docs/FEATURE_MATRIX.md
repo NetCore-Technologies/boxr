@@ -933,3 +933,5 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 917. Docker bridge IPAM auxiliary IPv4 reservations are persisted, returned by inspect, excluded from dynamic allocation and rejected for static endpoint assignment
 
 918. Docker container listing evaluates ancestor image, volume name/source/destination, published host/container port and exposed port/range filters
+
+919. Docker container list `before` and `since` filters resolve existing container IDs/names once per request and compare persisted creation times; invalid and unknown filter inputs return errors
