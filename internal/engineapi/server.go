@@ -196,6 +196,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		writeMethodErrorFor(writer, http.MethodDelete)
+	case path == "/volumes/prune":
+		if !requireMethod(writer, request, http.MethodPost) {
+			return
+		}
+		s.handleVolumePrune(writer, request)
 	case path == "/volumes":
 		if !requireMethod(writer, request, http.MethodGet) {
 			return
