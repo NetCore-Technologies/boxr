@@ -109,6 +109,23 @@ func TestExtractRejectsEscapingAndAbsoluteSymlinksSafely(t *testing.T) {
 	}
 }
 
+func TestExtractRejectsArchiveWritesThroughSymlinkParents(t *testing.T) {
+	parent := t.TempDir()
+	archive := filepath.Join(parent, "symlink-parent.tar.gz")
+	writeTarGz(t, archive, []tarEntry{
+		{name: "safe", kind: tar.TypeDir},
+		{name: "pivot", kind: tar.TypeSymlink, link: "safe"},
+		{name: "pivot/owned", kind: tar.TypeReg, body: "must-not-be-written"},
+	})
+	destination := filepath.Join(parent, "rootfs")
+	if _, err := ExtractTarGz(archive, destination, Limits{}); err == nil {
+		t.Fatal("archive write through an earlier symlink was accepted")
+	}
+	if _, err := os.Lstat(destination); !os.IsNotExist(err) {
+		t.Fatalf("failed extraction published a destination: %v", err)
+	}
+}
+
 func TestExtractRejectsSpecialFilesAndResourceLimitExceeded(t *testing.T) {
 	parent := t.TempDir()
 	archive := filepath.Join(parent, "special.tar.gz")
