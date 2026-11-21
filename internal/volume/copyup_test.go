@@ -20,6 +20,9 @@ func TestCopyUpFromRootFSCopiesImageTreeOnlyIntoEmptyVolumes(t *testing.T) {
 	if err := os.Symlink("nested/state.db", filepath.Join(source, "current")); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Symlink("/etc/app.conf", filepath.Join(source, "absolute-config")); err != nil {
+		t.Fatal(err)
+	}
 	item, err := Create("copy-up", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +41,10 @@ func TestCopyUpFromRootFSCopiesImageTreeOnlyIntoEmptyVolumes(t *testing.T) {
 	link, err := os.Readlink(filepath.Join(item.Path, "current"))
 	if err != nil || link != "nested/state.db" {
 		t.Fatalf("copied symlink = %q, err=%v", link, err)
+	}
+	absoluteLink, err := os.Readlink(filepath.Join(item.Path, "absolute-config"))
+	if err != nil || absoluteLink != "/etc/app.conf" {
+		t.Fatalf("absolute symlink target changed during copy-up: %q, err=%v", absoluteLink, err)
 	}
 	if err := os.WriteFile(filePath, []byte("changed-image-data"), 0640); err != nil {
 		t.Fatal(err)
@@ -91,7 +98,7 @@ func TestCopyUpFromRootFSLeavesNonEmptyVolumesAndMissingTargetsAlone(t *testing.
 	}
 }
 
-func TestCopyUpFromRootFSRejectsSymlinkedMountTargetsAndEscapingLinks(t *testing.T) {
+func TestCopyUpFromRootFSRejectsSymlinkedMountTargetAndPreservesEscapingLinks(t *testing.T) {
 	useTempData(t)
 	root := t.TempDir()
 	outside := t.TempDir()
@@ -119,11 +126,11 @@ func TestCopyUpFromRootFSRejectsSymlinkedMountTargetsAndEscapingLinks(t *testing
 	if err := os.Symlink("../../outside", filepath.Join(source, "escape")); err != nil {
 		t.Fatal(err)
 	}
-	if err := CopyUpFromRootFS(item.Name, root, "/app"); err == nil {
-		t.Fatal("escaping image symlink unexpectedly copied into volume")
+	if err := CopyUpFromRootFS(item.Name, root, "/app"); err != nil {
+		t.Fatalf("copy-up with a relative link outside the mount subtree: %v", err)
 	}
-	entries, err = os.ReadDir(item.Path)
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("escaping symlink rejection left partial volume data: entries=%v err=%v", entries, err)
+	link, err := os.Readlink(filepath.Join(item.Path, "escape"))
+	if err != nil || link != "../../outside" {
+		t.Fatalf("relative symlink target changed during copy-up: %q, err=%v", link, err)
 	}
 }
