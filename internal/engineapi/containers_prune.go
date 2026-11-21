@@ -40,17 +40,27 @@ func (s *Server) handleContainerPrune(writer http.ResponseWriter, request *http.
 
 	result := dockerContainerPruneResponse{ContainersDeleted: make([]string, 0)}
 	for _, record := range records {
-		if record.Status == "running" || record.Status == "restarting" {
+		unlock := s.containerTransitions.lock(record.ID)
+		current, getErr := state.Get(record.ID)
+		if getErr != nil {
+			unlock()
 			continue
 		}
-		matched, err := matchesDockerContainerPruneFilters(record, filters, now)
+		if current.Status == "running" || current.Status == "paused" || current.Status == "restarting" {
+			unlock()
+			continue
+		}
+		matched, err := matchesDockerContainerPruneFilters(current, filters, now)
 		if err != nil {
+			unlock()
 			writeError(writer, http.StatusBadRequest, err)
 			return
 		}
 		if !matched {
+			unlock()
 			continue
 		}
+		record = current
 
 		var removeErr error
 		if record.Status == "created" {
@@ -63,15 +73,17 @@ func (s *Server) handleContainerPrune(writer http.ResponseWriter, request *http.
 			// record since the initial snapshot. Re-check before deciding
 			// whether the prune operation itself has failed.
 			current, getErr := state.Get(record.ID)
+			unlock()
 			if getErr != nil {
 				continue // another operation already removed the record
 			}
-			if current.Status == "running" || current.Status == "restarting" {
+			if current.Status == "running" || current.Status == "paused" || current.Status == "restarting" {
 				continue
 			}
 			writeError(writer, http.StatusInternalServerError, fmt.Errorf("remove container %s during prune: %w", record.ID, removeErr))
 			return
 		}
+		unlock()
 		result.ContainersDeleted = append(result.ContainersDeleted, record.ID)
 	}
 

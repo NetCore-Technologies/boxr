@@ -38,6 +38,8 @@ func (s *Server) handleContainerChanges(writer http.ResponseWriter, request *htt
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
+	unlock := s.containerTransitions.lock(id)
+	defer unlock()
 	record, err := state.Get(id)
 	if err != nil {
 		writeError(writer, http.StatusNotFound, err)
