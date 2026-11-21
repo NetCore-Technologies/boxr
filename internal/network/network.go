@@ -298,6 +298,7 @@ func validateStoredNetworks(networks []Network) error {
 		}
 		prefixes = append(prefixes, prefix)
 		allocated := make(map[string]struct{}, len(network.Allocations))
+		allocatedMACs := make(map[string]string, len(network.MACAddresses))
 		for containerID, addressText := range network.Allocations {
 			if previousNetwork, exists := containerNetworks[containerID]; exists {
 				return fmt.Errorf("network store attaches container %q to both %q and %q", containerID, previousNetwork, network.Name)
@@ -317,10 +318,13 @@ func validateStoredNetworks(networks []Network) error {
 			if _, exists := network.Allocations[containerID]; !exists {
 				return fmt.Errorf("network store has a MAC address without an IPAM lease")
 			}
-			address, err := net.ParseMAC(mac)
-			if err != nil || len(address) != 6 || address[0]&1 != 0 || address[0]&2 == 0 || address.String() != mac {
-				return fmt.Errorf("network store contains an invalid locally administered MAC address")
+			if err := validateEndpointMAC(mac); err != nil {
+				return fmt.Errorf("network store contains an invalid endpoint MAC address: %w", err)
 			}
+			if previousContainer, exists := allocatedMACs[mac]; exists {
+				return fmt.Errorf("network store assigns MAC %s to both %q and %q", mac, previousContainer, containerID)
+			}
+			allocatedMACs[mac] = containerID
 			if network.EndpointIDs[containerID] == "" {
 				return fmt.Errorf("network store has a MAC address without an endpoint ID")
 			}
@@ -621,12 +625,29 @@ func missingNetworkInterface(err error) bool {
 
 // Join allocates a stable IPv4 address and connects a paused container network
 // namespace to the host bridge. PID is the host PID of Boxr's namespace helper.
+// EndpointOptions selects deterministic per-container bridge endpoint settings.
+// Empty values use Boxr's generated IPv4 address and locally administered MAC.
+type EndpointOptions struct {
+	IPv4Address string
+	MACAddress  string
+}
+
 func Join(networkName string, pid int, containerID string, ports ...PortMapping) (string, error) {
 	return JoinWithRunner(context.Background(), networkName, pid, containerID, commandRunner{}, ports...)
 }
 
+// JoinWithOptions attaches a container using optional static IPv4 and MAC settings.
+func JoinWithOptions(networkName string, pid int, containerID string, endpoint EndpointOptions, ports ...PortMapping) (string, error) {
+	return JoinWithRunnerOptions(context.Background(), networkName, pid, containerID, commandRunner{}, endpoint, ports...)
+}
+
 // JoinWithRunner is Join with an injectable host command executor.
 func JoinWithRunner(ctx context.Context, networkName string, pid int, containerID string, runner Runner, ports ...PortMapping) (string, error) {
+	return JoinWithRunnerOptions(ctx, networkName, pid, containerID, runner, EndpointOptions{}, ports...)
+}
+
+// JoinWithRunnerOptions is JoinWithOptions with an injectable host command executor.
+func JoinWithRunnerOptions(ctx context.Context, networkName string, pid int, containerID string, runner Runner, endpoint EndpointOptions, ports ...PortMapping) (string, error) {
 	if runner == nil {
 		return "", fmt.Errorf("network command runner is required")
 	}
@@ -659,11 +680,22 @@ func JoinWithRunner(ctx context.Context, networkName string, pid int, containerI
 	if err := validatePortMappingReservations(current.Networks, normalizedPorts); err != nil {
 		return "", err
 	}
-	address, err := allocateAddress(*network)
+	address, err := allocateEndpointAddress(*network, endpoint.IPv4Address)
 	if err != nil {
 		return "", err
 	}
 	endpointID, macAddress := endpointIdentity(network.ID, containerID)
+	if endpoint.MACAddress != "" {
+		if err := validateEndpointMAC(endpoint.MACAddress); err != nil {
+			return "", fmt.Errorf("EndpointConfig MAC address: %w", err)
+		}
+		for existingID, existingMAC := range network.MACAddresses {
+			if existingID != containerID && strings.EqualFold(existingMAC, endpoint.MACAddress) {
+				return "", fmt.Errorf("MAC address %s is already assigned on network %q", endpoint.MACAddress, network.Name)
+			}
+		}
+		macAddress = endpoint.MACAddress
+	}
 	if network.Allocations == nil {
 		network.Allocations = make(map[string]string)
 	}
@@ -1227,6 +1259,39 @@ func prefixesOverlap(left, right netip.Prefix) bool {
 		return false
 	}
 	return left.Contains(right.Addr()) || right.Contains(left.Addr())
+}
+
+func allocateEndpointAddress(network Network, requested string) (string, error) {
+	if requested == "" {
+		return allocateAddress(network)
+	}
+	address, err := netip.ParseAddr(requested)
+	if err != nil || !address.Is4() || address.String() != requested {
+		return "", fmt.Errorf("requested endpoint IPv4 address %q is invalid or non-canonical", requested)
+	}
+	prefix, err := netip.ParsePrefix(network.Subnet)
+	if err != nil || !prefix.Contains(address) || address == prefix.Addr() || address == broadcastAddress(prefix) {
+		return "", fmt.Errorf("requested endpoint IPv4 address %s is outside usable subnet %s", requested, network.Subnet)
+	}
+	gateway, err := netip.ParseAddr(network.Gateway)
+	if err != nil || address == gateway {
+		return "", fmt.Errorf("requested endpoint IPv4 address %s conflicts with the network gateway", requested)
+	}
+	for containerID, allocated := range network.Allocations {
+		if allocated == requested {
+			return "", fmt.Errorf("requested endpoint IPv4 address %s is already allocated to container %q", requested, containerID)
+		}
+	}
+	return address.String(), nil
+}
+
+func validateEndpointMAC(value string) error {
+	address, err := net.ParseMAC(value)
+	if err != nil || len(address) != 6 || address.String() != strings.ToLower(value) ||
+		address[0]&1 != 0 || address.String() == "00:00:00:00:00:00" {
+		return fmt.Errorf("must be a canonical six-byte unicast MAC address")
+	}
+	return nil
 }
 
 func allocateAddress(network Network) (string, error) {
