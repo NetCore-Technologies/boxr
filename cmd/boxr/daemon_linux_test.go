@@ -363,6 +363,21 @@ func TestDaemonMutualTLSRequiresTrustedClientCertificates(t *testing.T) {
 	}
 }
 
+func TestReadDaemonTLSFileRejectsSymlinks(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "ca.pem")
+	link := filepath.Join(directory, "linked-ca.pem")
+	if err := os.WriteFile(target, []byte("not a certificate"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readDaemonTLSFile(link, false); err == nil || !strings.Contains(err.Error(), "non-symlink") {
+		t.Fatalf("TLS symlink was accepted or produced wrong error: %v", err)
+	}
+}
+
 func TestLoadDaemonTLSConfigRejectsInsecurePrivateKeyPermissions(t *testing.T) {
 	pki := createDaemonTestPKI(t)
 	if err := os.Chmod(pki.serverKeyPath, 0644); err != nil {

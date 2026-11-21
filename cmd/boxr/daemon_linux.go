@@ -188,9 +188,14 @@ func readDaemonTLSFile(path string, private bool) ([]byte, error) {
 	if private && before.Mode().Perm()&0077 != 0 {
 		return nil, fmt.Errorf("private key %s must not be accessible by group or others (use chmod 0400 or 0600)", path)
 	}
-	file, err := os.Open(path)
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil, fmt.Errorf("open TLS file %s: %w", path, err)
+		return nil, fmt.Errorf("open TLS file without following symlinks %s: %w", path, err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = syscall.Close(fd)
+		return nil, fmt.Errorf("open TLS file %s: invalid file descriptor", path)
 	}
 	defer file.Close()
 	after, err := file.Stat()
