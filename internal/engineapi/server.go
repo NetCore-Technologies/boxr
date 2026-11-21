@@ -1121,7 +1121,7 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 		})
 	}
 	stateObject := map[string]any{
-		"Status": containerState(record), "Running": running, "Paused": false,
+		"Status": containerState(record), "Running": running, "Paused": record.Status == "paused",
 		"Restarting": record.Status == "restarting", "OOMKilled": false, "Dead": record.Status == "dead",
 		"Pid": record.PID, "ExitCode": exitCode(record.ExitCode), "Error": record.Error,
 		"StartedAt": startedAt, "FinishedAt": finishedAt,

@@ -337,4 +337,20 @@ func TestContainerListIncludesPausedContainersByDefault(t *testing.T) {
 	if len(items) != 1 || items[0]["State"] != "paused" {
 		t.Fatalf("default container list omitted paused workload: %#v", items)
 	}
+
+	response = engineAPIRequest(server, http.MethodGet, "/containers/"+running.ID+"/json")
+	if response.Code != http.StatusOK {
+		t.Fatalf("paused inspect status=%d body=%s", response.Code, response.Body.String())
+	}
+	var inspect map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &inspect); err != nil {
+		t.Fatal(err)
+	}
+	stateObject, ok := inspect["State"].(map[string]any)
+	if !ok {
+		t.Fatalf("inspect State = %#v", inspect["State"])
+	}
+	if stateObject["Paused"] != true || stateObject["Running"] != false || stateObject["Status"] != "paused" {
+		t.Fatalf("paused inspect State = %#v", stateObject)
+	}
 }

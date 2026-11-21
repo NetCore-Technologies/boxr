@@ -907,3 +907,11 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 898. Engine API-created containers persist writable OverlayFS layers across stop and restart and remove owned storage with container deletion
 899. Engine API containers retain a private immutable image rootfs snapshot across stops, survive local image-tag deletion, and remove owned snapshots with container deletion
 900. Engine API volume mounts populate empty pre-created local volumes from the immutable image rootfs by default and honor Docker VolumeOptions.NoCopy
+
+901. Linux cgroup v2 freezer transitions verify cgroup membership and kernel frozen state before reporting pause or unpause success
+902. Failed cgroup freezer transitions restore the previous freeze state and confirm rollback
+903. Container pause and unpause persist process-identity-checked lifecycle states and events with rollback on persistence failure
+904. Native CLI and Docker Engine API pause/unpause paths serialize lifecycle transitions and resume paused workloads before stop or kill
+905. Docker Engine inspect reports State.Paused and State.Running consistently with persisted paused status, while prune protects paused containers
+906. Docker Engine container changes reports bounded added changed and deleted paths from managed image and writable filesystem layers
+907. Docker exec supports validated USER[:GROUP] overrides and otherwise inherits the container's configured identity
