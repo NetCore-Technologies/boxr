@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 884 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 888 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 
 ## Implemented capabilities
@@ -891,3 +891,7 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 882. Engine API Docker builds support platform selection declared build arguments and multiple tags
 883. Engine API maps Docker default build networking to isolated none and requires explicit host network opt-in
 884. Engine API refuses to replace image tags referenced by persisted containers during builds
+885. Engine API prunes dangling images by default and unused tagged images when dangling is false
+886. Engine API applies Docker-compatible image prune until label and label-exclusion filters
+887. Engine API protects all aliases sharing image digests used by persisted containers during prune
+888. Engine API removes selected image tags atomically and reports reclaimed content-addressed blob bytes
