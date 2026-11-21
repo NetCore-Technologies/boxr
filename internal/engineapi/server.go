@@ -1556,7 +1556,7 @@ func (s *Server) handleContainer(writer http.ResponseWriter, request *http.Reque
 	}
 	switch parts[1] {
 	case "json":
-		s.handleContainerInspect(writer, query)
+		s.handleContainerInspect(writer, query, request)
 	case "logs":
 		s.handleContainerLogs(writer, request, query)
 	case "stats":
@@ -1572,7 +1572,12 @@ func (s *Server) handleContainer(writer http.ResponseWriter, request *http.Reque
 	}
 }
 
-func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string) {
+func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string, request *http.Request) {
+	includeSize, err := boolQuery(request, "size")
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, err)
+		return
+	}
 	record, err := state.Get(query)
 	if err != nil {
 		writeError(writer, http.StatusNotFound, err)
@@ -1674,13 +1679,23 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 		return
 	}
 	networkSettings := dockerContainerNetworkSettings(record, ports, networkAttachments)
-	writeJSON(writer, http.StatusOK, map[string]any{
+	result := map[string]any{
 		"Id": record.ID, "Created": created, "Path": path, "Args": commandArgs,
 		"State": stateObject, "Image": image, "Name": displayName(record),
 		"RestartCount": record.RestartCount, "Driver": "boxr-rootfs", "Platform": "linux",
 		"Mounts": mounts, "HostConfig": hostConfig,
 		"Config": configObject, "NetworkSettings": networkSettings,
-	})
+	}
+	if includeSize {
+		sizeRW, sizeRootFS, sizeErr := dockerContainerSize(record)
+		if sizeErr != nil {
+			writeError(writer, http.StatusInternalServerError, fmt.Errorf("measure container %s filesystem: %w", record.ID, sizeErr))
+			return
+		}
+		result["SizeRw"] = sizeRW
+		result["SizeRootFs"] = sizeRootFS
+	}
+	writeJSON(writer, http.StatusOK, result)
 }
 
 func dockerMountMode(readOnly bool) string {
