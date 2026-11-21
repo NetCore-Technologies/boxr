@@ -160,6 +160,18 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			s.handleContainerUnpause(writer, request, containerID)
 			return
 		}
+		if strings.HasSuffix(remainder, "/export") {
+			containerID := strings.TrimSuffix(remainder, "/export")
+			if containerID == "" || strings.Contains(containerID, "/") {
+				writeError(writer, http.StatusNotFound, fmt.Errorf("container export endpoint not found"))
+				return
+			}
+			if !requireMethod(writer, request, http.MethodGet) {
+				return
+			}
+			s.handleContainerExport(writer, request, containerID)
+			return
+		}
 		if strings.HasSuffix(remainder, "/attach") {
 			containerID := strings.TrimSuffix(remainder, "/attach")
 			if containerID == "" || strings.Contains(containerID, "/") {
