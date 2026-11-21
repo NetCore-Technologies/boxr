@@ -2392,7 +2392,6 @@ func parseTmpfsMount(value string) (container.TmpfsMount, error) {
 	return mount, nil
 }
 
-
 func pullRegistryImage(reference, platform, authFile string) (imageStore.Image, registry.Artifact, error) {
 	var stored imageStore.Image
 	var artifact registry.Artifact
