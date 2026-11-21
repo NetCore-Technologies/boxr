@@ -22,7 +22,7 @@ func TestCleanDockerArchivePath(t *testing.T) {
 		{input: "/", want: ""},
 		{input: "/var/lib/app", want: "var/lib/app"},
 		{input: "/var//lib/./app", want: "var/lib/app"},
-		{input: "relative/path", wantErr: true},
+		{input: "relative/path", want: "relative/path"},
 		{input: "/var/../etc", wantErr: true},
 		{input: "/var/file\x00", wantErr: true},
 		{input: "/var/file\nname", wantErr: true},
@@ -35,6 +35,31 @@ func TestCleanDockerArchivePath(t *testing.T) {
 		}
 		if err == nil && got != test.want {
 			t.Errorf("cleanDockerArchivePath(%q) = %q, want %q", test.input, got, test.want)
+		}
+	}
+}
+
+func TestDockerArchivePathFlags(t *testing.T) {
+	tests := []struct {
+		input          string
+		wantPath       string
+		contentsOnly   bool
+		directoryExpected bool
+	}{
+		{input: "etc/passwd", wantPath: "etc/passwd"},
+		{input: "/etc/", wantPath: "etc", directoryExpected: true},
+		{input: "/etc/.", wantPath: "etc", contentsOnly: true, directoryExpected: true},
+		{input: "/.", wantPath: "", contentsOnly: true, directoryExpected: true},
+	}
+	for _, test := range tests {
+		gotPath, contentsOnly, directoryExpected, err := dockerArchivePathFlags(test.input)
+		if err != nil {
+			t.Fatalf("dockerArchivePathFlags(%q): %v", test.input, err)
+		}
+		if gotPath != test.wantPath || contentsOnly != test.contentsOnly || directoryExpected != test.directoryExpected {
+			t.Errorf("dockerArchivePathFlags(%q) = (%q,%v,%v), want (%q,%v,%v)",
+				test.input, gotPath, contentsOnly, directoryExpected,
+				test.wantPath, test.contentsOnly, test.directoryExpected)
 		}
 	}
 }
