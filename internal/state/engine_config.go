@@ -1,11 +1,14 @@
 package state
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 const maxEngineConfigBytes = 1 << 20
@@ -162,6 +165,20 @@ func EngineStdinSocketPath(id string) (string, error) {
 		return "", err
 	}
 	directory := filepath.Join(stateDirectory, "engine-stdin")
+	socketPath := filepath.Join(directory, record.ID+".sock")
+	if len(socketPath) >= 100 {
+		if runtime.GOOS != "linux" {
+			return "", fmt.Errorf("Engine API stdin socket path exceeds the Unix-domain socket limit")
+		}
+		// Unix socket sun_path is tightly bounded. Keep state and secrets in
+		// the configured state root, but place this private IPC endpoint in a
+		// short, per-user runtime directory when that root is too deep.
+		directory = filepath.Join("/tmp", fmt.Sprintf("bxr-%d", os.Getuid()))
+		socketPath = filepath.Join(directory, record.ID+".sock")
+	}
+	if len(socketPath) >= 100 {
+		return "", fmt.Errorf("Engine API stdin socket path exceeds the Unix-domain socket limit")
+	}
 	if err := os.Mkdir(directory, 0700); err != nil && !errors.Is(err, os.ErrExist) {
 		return "", fmt.Errorf("create Engine API stdin directory: %w", err)
 	}
@@ -172,7 +189,7 @@ func EngineStdinSocketPath(id string) (string, error) {
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
 		return "", fmt.Errorf("Engine API stdin directory must be a private real directory")
 	}
-	return filepath.Join(directory, record.ID+".sock"), nil
+	return socketPath, nil
 }
 
 func engineConfigPath(directory, id string) string {
