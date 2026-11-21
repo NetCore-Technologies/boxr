@@ -160,7 +160,7 @@ func parseDockerBuildOptions(query url.Values) (dockerBuildOptions, error) {
 		return options, err
 	}
 	if buildArgsJSON != "" {
-		if len(buildArgsJSON) > maxDockerBuildArgsBytes {
+		if int64(len(buildArgsJSON)) > maxDockerBuildArgsBytes {
 			return options, fmt.Errorf("Docker buildargs JSON exceeds %d bytes", maxDockerBuildArgsBytes)
 		}
 		decoder := json.NewDecoder(bytes.NewBufferString(buildArgsJSON))
