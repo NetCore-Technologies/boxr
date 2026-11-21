@@ -1631,7 +1631,8 @@ func TestDockerNetworkCreateListInspectAndDelete(t *testing.T) {
 }
 
 type engineAPINetworkRunner struct {
-	aliases map[string]string
+	aliases      map[string]string
+	deletedVeths []string
 }
 
 func (runner *engineAPINetworkRunner) Run(_ context.Context, executable string, args ...string) error {
@@ -1643,6 +1644,7 @@ func (runner *engineAPINetworkRunner) Run(_ context.Context, executable string, 
 		runner.aliases[args[3]] = args[5]
 	}
 	if executable == "ip" && len(args) >= 4 && args[0] == "link" && args[1] == "del" && args[2] == "dev" {
+		runner.deletedVeths = append(runner.deletedVeths, args[3])
 		delete(runner.aliases, args[3])
 	}
 	return nil
@@ -1753,6 +1755,16 @@ func TestDockerNetworkConnectDisconnectAndInspectEndpoint(t *testing.T) {
 	server.ServeHTTP(disconnectResponse, disconnectRequest)
 	if disconnectResponse.Code != http.StatusOK {
 		t.Fatalf("network disconnect status=%d body=%s", disconnectResponse.Code, disconnectResponse.Body.String())
+	}
+	if len(runner.deletedVeths) != 1 || len(runner.aliases) != 0 {
+		t.Fatalf("disconnect did not remove the verified veth: deleted=%v aliases=%v", runner.deletedVeths, runner.aliases)
+	}
+	details, err := boxrnetwork.InspectDetails(networkCreated.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(details.Allocations) != 0 {
+		t.Fatalf("disconnect did not persist IPAM release: %+v", details.Allocations)
 	}
 	inspectResponse = engineAPIRequest(server, http.MethodGet, "/v1.45/networks/"+networkCreated.ID)
 	if inspectResponse.Code != http.StatusOK {
