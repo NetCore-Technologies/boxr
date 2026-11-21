@@ -708,11 +708,11 @@ func dockerNetworkAttachmentsFromNetworks(networks []boxrnetwork.Network, record
 			}
 			attachments[network.Name] = map[string]any{
 				"IPAMConfig": nil, "Links": nil, "Aliases": []string{},
-				"NetworkID": network.ID, "EndpointID": "",
+				"NetworkID": network.ID, "EndpointID": network.EndpointIDs[containerID],
 				"Gateway": gateway.String(), "IPAddress": address.String(),
 				"IPPrefixLen": prefix.Bits(), "IPv6Gateway": "",
 				"GlobalIPv6Address": "", "GlobalIPv6PrefixLen": 0,
-				"MacAddress": "", "DriverOpts": nil,
+				"MacAddress": network.MACAddresses[containerID], "DriverOpts": nil,
 			}
 		}
 	}
