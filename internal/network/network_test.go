@@ -212,14 +212,15 @@ func TestJoinAllocatesConfiguresAndLeaveReleasesAddress(t *testing.T) {
 	if address != "172.30.40.2" {
 		t.Fatalf("allocated address = %s, want 172.30.40.2", address)
 	}
-	if len(runner.calls) != 10 {
-		t.Fatalf("join command count = %d, want 10: %v", len(runner.calls), runner.calls)
+	if len(runner.calls) != 11 {
+		t.Fatalf("join command count = %d, want 11: %v", len(runner.calls), runner.calls)
 	}
 	if !strings.Contains(runner.calls[0], "link add vbx") ||
 		!strings.Contains(runner.calls[1], "alias boxr:"+network.ID+":container-01") ||
 		!strings.Contains(runner.calls[4], "netns 1234") ||
 		!strings.Contains(runner.calls[5], "nsenter -t 1234 -n -- ip link set dev cbx") ||
-		!strings.Contains(runner.calls[9], "route add default via "+network.Gateway) {
+		!strings.Contains(runner.calls[6], "ip link set dev eth0 address 02:") ||
+		!strings.Contains(runner.calls[10], "route add default via "+network.Gateway) {
 		t.Fatalf("unexpected veth/namespace setup sequence: %v", runner.calls)
 	}
 	if _, err := JoinWithRunner(context.Background(), "backend", 1235, "container-01", runner); err == nil {
@@ -231,6 +232,18 @@ func TestJoinAllocatesConfiguresAndLeaveReleasesAddress(t *testing.T) {
 	}
 	if summary.ContainerCount != 1 {
 		t.Fatalf("container count = %d, want 1", summary.ContainerCount)
+	}
+	details, err := InspectDetails("backend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	macAddress := details.MACAddresses["container-01"]
+	endpointID := details.EndpointIDs["container-01"]
+	if macAddress == "" || !strings.HasPrefix(macAddress, "02:") || len(endpointID) != 64 {
+		t.Fatalf("persisted endpoint identity = MAC %q ID %q", macAddress, endpointID)
+	}
+	if !strings.Contains(runner.calls[6], macAddress) {
+		t.Fatalf("configured interface MAC does not match persisted identity: %v", runner.calls[6])
 	}
 	if err := RemoveWithRunner(context.Background(), "backend", runner); err == nil {
 		t.Fatal("network with an attached container unexpectedly removed")
@@ -244,6 +257,16 @@ func TestJoinAllocatesConfiguresAndLeaveReleasesAddress(t *testing.T) {
 	}
 	if summary.ContainerCount != 0 {
 		t.Fatalf("container count after leave = %d, want 0", summary.ContainerCount)
+	}
+	details, err = InspectDetails("backend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := details.MACAddresses["container-01"]; exists {
+		t.Fatal("disconnected endpoint retained its MAC address")
+	}
+	if _, exists := details.EndpointIDs["container-01"]; exists {
+		t.Fatal("disconnected endpoint retained its endpoint ID")
 	}
 	if _, err := JoinWithRunner(context.Background(), "backend", 1234, "container-02", runner); err != nil {
 		t.Fatalf("released IPv4 address was not reusable: %v", err)
@@ -377,9 +400,9 @@ func TestJoinRollsBackPublishedRulesWhenFirewallSetupFails(t *testing.T) {
 	if _, err := CreateWithRunner(context.Background(), "frontend", CreateOptions{Subnet: "172.30.73.0/24"}, &fakeRunner{}); err != nil {
 		t.Fatal(err)
 	}
-	// Nine link/namespace operations succeed. Fail the PREROUTING rule after
+	// Eleven link/namespace operations succeed. Fail after the first DNAT rule is installed and
 	// enabling forwarding and then verify every partial rule and lease is cleaned.
-	runner := &fakeRunner{failAt: 14}
+	runner := &fakeRunner{failAt: 15}
 	_, err := JoinWithRunner(context.Background(), "frontend", 3325, "container-firewall-fail", runner, PortMapping{HostPort: 8081, ContainerPort: 80})
 	if err == nil {
 		t.Fatal("injected firewall failure unexpectedly succeeded")
