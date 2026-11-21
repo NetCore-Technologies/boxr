@@ -20,7 +20,8 @@ func TestBuildPlanOrdersServicesDeterministicallyAndRedactsSecrets(t *testing.T)
 			"web": {
 				Command:   []string{"/bin/sh", "-c", "echo private-command-token"},
 				Options:   container.Options{Env: []string{"TOKEN=private-environment-token"}, Labels: map[string]string{"owner": "private-label"}},
-				DependsOn: []string{"database"},
+				DependsOn:        []string{"database"},
+				DependsOnHealthy: []string{"database"},
 				Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:5432", Attempts: 2},
 			},
 			"worker": {
@@ -30,7 +31,7 @@ func TestBuildPlanOrdersServicesDeterministicallyAndRedactsSecrets(t *testing.T)
 			},
 			"database": {
 				Command: []string{"/bin/database"},
-				Options: container.Options{SecurityProfile: "restricted", MemoryLimitBytes: 1024},
+				Options: container.Options{SecurityProfile: "restricted", MemoryLimitBytes: 1024, Healthcheck: &container.HealthcheckConfig{Test: []string{"CMD", "/bin/true"}}},
 			},
 			"proxy": {
 				Command:   []string{"/bin/proxy"},
@@ -66,6 +67,9 @@ func TestBuildPlanOrdersServicesDeterministicallyAndRedactsSecrets(t *testing.T)
 		if strings.Contains(string(encoded), secret) {
 			t.Errorf("deployment plan leaked %q: %s", secret, encoded)
 		}
+	}
+	if !reflect.DeepEqual(plan.Services[1].DependsOnHealthy, []string{"database"}) {
+		t.Fatalf("healthy dependency summary = %v, want [database]", plan.Services[1].DependsOnHealthy)
 	}
 	if plan.Services[1].CommandArgumentCount != 3 || plan.Services[1].EnvironmentEntryCount != 1 || plan.Services[1].LabelCount != 1 {
 		t.Fatalf("redacted service summary lost useful counts: %+v", plan.Services[1])
@@ -114,6 +118,18 @@ func TestBuildPlanRejectsInvalidGraphsAndServices(t *testing.T) {
 		}},
 		"untrusted readiness profile": {Version: 1, Services: map[string]Service{
 			"web": {Command: []string{"/bin/true"}, Options: container.Options{SecurityProfile: "untrusted", RootFS: "/tmp/boxr-test-rootfs"}, Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:8080"}},
+		}},
+		"healthy dependency without declared edge": {Version: 1, Services: map[string]Service{
+			"db": validService,
+			"web": {Command: []string{"/bin/true"}, DependsOnHealthy: []string{"db"}},
+		}},
+		"healthy dependency without healthcheck": {Version: 1, Services: map[string]Service{
+			"db": validService,
+			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"db"}, DependsOnHealthy: []string{"db"}},
+		}},
+		"healthy dependency with disabled healthcheck": {Version: 1, Services: map[string]Service{
+			"db": {Command: []string{"/bin/true"}, Options: container.Options{Healthcheck: &container.HealthcheckConfig{Test: []string{"NONE"}}}},
+			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"db"}, DependsOnHealthy: []string{"db"}},
 		}},
 		"duplicate container names": {Version: 1, Services: map[string]Service{
 			"api": {Command: []string{"/bin/true"}, Options: container.Options{Name: "same-name"}},

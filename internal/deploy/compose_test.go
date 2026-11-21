@@ -141,7 +141,7 @@ func TestLoadComposeRejectsSemanticsBoxrCannotRepresent(t *testing.T) {
 		"restart policy":                   "services:\n  api:\n    image: alpine\n    network_mode: none\n    restart: always\n",
 		"implicit default bridge":          "services:\n  api:\n    image: alpine\n",
 		"non-external network":             "services:\n  api:\n    image: alpine\n    networks: [app]\nnetworks:\n  app: {}\n",
-		"unsupported dependency condition": "services:\n  api:\n    image: alpine\n    network_mode: none\n    depends_on:\n      db:\n        condition: service_healthy\n  db:\n    image: postgres\n    network_mode: none\n",
+		"unsupported dependency condition": "services:\n  api:\n    image: alpine\n    network_mode: none\n    depends_on:\n      db:\n        condition: service_completed_successfully\n  db:\n    image: postgres\n    network_mode: none\n",
 		"unknown service field":            "services:\n  api:\n    image: alpine\n    network_mode: none\n    deploy: {}\n",
 	}
 	for name, contents := range tests {
@@ -747,5 +747,67 @@ func TestComposeHealthcheckDisableFlag(t *testing.T) {
 	got := file.Services["api"].Options.Healthcheck
 	if got == nil || !reflect.DeepEqual(got.Test, []string{"NONE"}) {
 		t.Fatalf("healthcheck disable = %#v", got)
+	}
+}
+
+
+func TestLoadComposeSupportsServiceHealthyDependency(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "compose.yaml")
+	contents := strings.Join([]string{
+		"services:",
+		"  database:",
+		"    image: postgres:16",
+		"    network_mode: none",
+		"    healthcheck:",
+		"      test: [\"CMD\", \"pg_isready\"]",
+		"      interval: 1s",
+		"  api:",
+		"    image: example/api:1.0",
+		"    network_mode: none",
+		"    depends_on:",
+		"      database:",
+		"        condition: service_healthy",
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load Compose service_healthy dependency: %v", err)
+	}
+	api := file.Services["api"]
+	if !reflect.DeepEqual(api.DependsOn, []string{"database"}) ||
+		!reflect.DeepEqual(api.DependsOnHealthy, []string{"database"}) {
+		t.Fatalf("api dependencies = %#v / %#v", api.DependsOn, api.DependsOnHealthy)
+	}
+	plan, err := BuildPlan(file)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	if !reflect.DeepEqual(plan.StartGroups, [][]string{{"database"}, {"api"}}) {
+		t.Fatalf("start groups = %#v", plan.StartGroups)
+	}
+	if !reflect.DeepEqual(plan.Services[1].DependsOnHealthy, []string{"database"}) {
+		t.Fatalf("planned healthy dependencies = %#v", plan.Services[1].DependsOnHealthy)
+	}
+}
+
+func TestLoadComposeRejectsHealthyDependencyWithoutEnabledHealthcheck(t *testing.T) {
+	for name, healthcheck := range map[string]string{
+		"missing":  "",
+		"disabled": "    healthcheck:\n      test: [\"NONE\"]\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "compose.yaml")
+			contents := "services:\n  database:\n    image: postgres:16\n    network_mode: none\n" + healthcheck
+			contents += "  api:\n    image: example/api:1.0\n    network_mode: none\n    depends_on:\n      database:\n        condition: service_healthy\n"
+			if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatal("service_healthy dependency without an enabled healthcheck was accepted")
+			}
+		})
 	}
 }

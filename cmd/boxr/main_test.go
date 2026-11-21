@@ -4153,3 +4153,65 @@ func TestContainerPruneRequiresExplicitModeAndPreservesActiveRecords(t *testing.
 		t.Fatalf("remove restarting fixture after cancellation: %v", err)
 	}
 }
+
+
+func TestWaitForDeploymentHealthyUsesPersistedContainerHealth(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	options := container.Options{
+		Name:        "healthy-dependency",
+		NetworkMode: "none",
+		Healthcheck: &container.HealthcheckConfig{Test: []string{"CMD", "/bin/true"}},
+	}
+	record, err := state.Create("healthy-dependency", []string{"/bin/true"}, options, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, 12345); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SetHealth(record.ID, state.HealthState{Status: "healthy", Log: []state.HealthLog{}}); err != nil {
+		t.Fatal(err)
+	}
+	unexpected, err := waitForDeploymentHealthy(context.Background(), "api", "database", record.Name, time.Second, make(chan deploymentProcessExit))
+	if err != nil || unexpected != nil {
+		t.Fatalf("healthy dependency wait = %#v, %v", unexpected, err)
+	}
+}
+
+func TestWaitForDeploymentHealthyFailsClosed(t *testing.T) {
+	for _, healthStatus := range []string{"unhealthy", "starting"} {
+		t.Run(healthStatus, func(t *testing.T) {
+			t.Setenv("BOXR_STATE_DIR", t.TempDir())
+			options := container.Options{
+				Name:        "unhealthy-dependency",
+				NetworkMode: "none",
+				Healthcheck: &container.HealthcheckConfig{Test: []string{"CMD", "/bin/true"}},
+			}
+			record, err := state.Create("unhealthy-dependency", []string{"/bin/true"}, options, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := state.Start(record.ID, 12345); err != nil {
+				t.Fatal(err)
+			}
+			if healthStatus == "unhealthy" {
+				if err := state.SetHealth(record.ID, state.HealthState{Status: healthStatus, Log: []state.HealthLog{}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err = waitForDeploymentHealthy(context.Background(), "api", "database", record.Name, 35*time.Millisecond, make(chan deploymentProcessExit))
+			if err == nil {
+				t.Fatalf("health state %q unexpectedly passed", healthStatus)
+			}
+		})
+	}
+}
+
+func TestWaitForDeploymentHealthySurfacesUnexpectedServiceExit(t *testing.T) {
+	exits := make(chan deploymentProcessExit, 1)
+	exits <- deploymentProcessExit{service: "worker", err: fmt.Errorf("exit code 3")}
+	unexpected, err := waitForDeploymentHealthy(context.Background(), "api", "database", "database", time.Second, exits)
+	if err == nil || unexpected == nil || unexpected.service != "worker" {
+		t.Fatalf("unexpected exit = %#v, %v", unexpected, err)
+	}
+}
