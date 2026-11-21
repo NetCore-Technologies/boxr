@@ -2228,7 +2228,7 @@ func (runner *engineAPINetworkRunner) Output(_ context.Context, executable strin
 
 func TestDockerNetworkCreateRejectsUnsupportedModesAndOptions(t *testing.T) {
 	for name, body := range map[string]string{
-		"non bridge driver":   `{"Name":"unsupported","Driver":"overlay","IPAM":{"Config":[{"Subnet":"172.28.40.0/24"}]}}`,
+		"non bridge driver": `{"Name":"unsupported","Driver":"overlay","IPAM":{"Config":[{"Subnet":"172.28.40.0/24"}]}}`,
 		"internal":          `{"Name":"unsupported","Driver":"bridge","Internal":true,"IPAM":{"Config":[{"Subnet":"172.28.40.0/24"}]}}`,
 		"ipv6":              `{"Name":"unsupported","Driver":"bridge","EnableIPv6":true,"IPAM":{"Config":[{"Subnet":"172.28.40.0/24"}]}}`,
 		"empty ipam":        `{"Name":"unsupported","Driver":"bridge","IPAM":{"Config":[]}}`,
