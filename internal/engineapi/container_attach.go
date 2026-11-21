@@ -56,7 +56,13 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 		return
 	}
 
-	data, offset, err := state.ReadLogsSnapshot(query, 0)
+	var data []byte
+	var offset int64
+	if logs {
+		data, offset, err = state.ReadLogsSnapshot(query, 0)
+	} else {
+		offset, err = state.LogOffset(query)
+	}
 	if err != nil {
 		writeError(writer, http.StatusNotFound, err)
 		return
