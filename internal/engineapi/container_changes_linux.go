@@ -128,24 +128,30 @@ func walkDockerOverlayChanges(lower, upper, relative string, changes map[string]
 		}
 		whiteoutName, whiteout := overlayWhiteout(upperPath, entry, info)
 		if whiteout {
-			lowerPath := filepath.Join(lower, whiteoutName)
-			if _, statErr := os.Lstat(lowerPath); statErr == nil {
-				path := joinDockerDiffPath(relative, whiteoutName)
-				if err := addDockerDiffChange(changes, visited, path, 2); err != nil {
-					return err
+			if lower != "" {
+				lowerPath := filepath.Join(lower, whiteoutName)
+				if _, statErr := os.Lstat(lowerPath); statErr == nil {
+					path := joinDockerDiffPath(relative, whiteoutName)
+					if err := addDockerDiffChange(changes, visited, path, 2); err != nil {
+						return err
+					}
+				} else if !os.IsNotExist(statErr) {
+					return fmt.Errorf("inspect whiteouted lower path %q: %w", whiteoutName, statErr)
 				}
-			} else if !os.IsNotExist(statErr) {
-				return fmt.Errorf("inspect whiteouted lower path %q: %w", whiteoutName, statErr)
 			}
 			whiteouts[whiteoutName] = struct{}{}
 			continue
 		}
 
-		lowerPath := filepath.Join(lower, name)
-		lowerInfo, statErr := os.Lstat(lowerPath)
-		lowerExists := statErr == nil
-		if statErr != nil && !os.IsNotExist(statErr) {
-			return fmt.Errorf("inspect lower-layer path %q: %w", name, statErr)
+		var lowerInfo os.FileInfo
+		lowerExists := false
+		if lower != "" {
+			lowerPath := filepath.Join(lower, name)
+			lowerInfo, err = os.Lstat(lowerPath)
+			lowerExists = err == nil
+			if err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("inspect lower-layer path %q: %w", name, err)
+			}
 		}
 		kind := 1
 		if lowerExists {
