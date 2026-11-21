@@ -181,7 +181,7 @@ func walkDockerOverlayChanges(lower, upper, relative string, changes map[string]
 			}
 			lowerPath := filepath.Join(lower, name)
 			path := joinDockerDiffPath(relative, name)
-			if err := appendDeletedDockerTree(lowerPath, path, changes, visited); err != nil {
+			if err := appendDeletedDockerTree(lowerPath, path, changes, visited, depth+1); err != nil {
 				return err
 			}
 		}
@@ -243,7 +243,8 @@ func overlayWhiteout(path string, entry fs.DirEntry, info fs.FileInfo) (string, 
 			return target, true
 		}
 	}
-	if info.Mode().IsRegular() && hasOverlayXattr(path, "trusted.overlay.whiteout") {
+	if info.Mode().IsRegular() && (hasOverlayXattr(path, "trusted.overlay.whiteout") ||
+		hasOverlayXattr(path, "user.overlay.whiteout")) {
 		return name, true
 	}
 	if info.Mode()&os.ModeDevice != 0 && info.Mode()&os.ModeCharDevice != 0 {
@@ -266,7 +267,7 @@ func overlayDirectoryOpaque(path string) bool {
 
 func hasOverlayXattr(path, name string) bool {
 	buffer := make([]byte, 32)
-	size, err := unix.Getxattr(path, name, buffer)
+	size, err := unix.Lgetxattr(path, name, buffer)
 	if err != nil {
 		return false
 	}
@@ -293,7 +294,7 @@ func addDockerDiffChange(changes map[string]int, visited *int, path string, kind
 	return nil
 }
 
-func appendDeletedDockerTree(root, relative string, changes map[string]int, visited *int) error {
+func appendDeletedDockerTree(root, relative string, changes map[string]int, visited *int, baseDepth int) error {
 	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -302,7 +303,11 @@ func appendDeletedDockerTree(root, relative string, changes map[string]int, visi
 		if err != nil {
 			return err
 		}
-		if rel != "." && strings.Count(filepath.ToSlash(rel), "/") >= maxDockerDiffDepth {
+		relativeDepth := 0
+		if rel != "." {
+			relativeDepth = strings.Count(filepath.ToSlash(rel), "/") + 1
+		}
+		if baseDepth+relativeDepth > maxDockerDiffDepth {
 			return fmt.Errorf("deleted container filesystem subtree exceeds maximum depth %d", maxDockerDiffDepth)
 		}
 		name := relative
