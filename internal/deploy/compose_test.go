@@ -335,11 +335,10 @@ func TestLoadComposeTranslatesLongFormBindVolumeAndTmpfsMounts(t *testing.T) {
 	if !reflect.DeepEqual(service.Options.TmpfsMounts, []container.TmpfsMount{{Target: "/run", SizeBytes: 64 << 20, Mode: 1023}}) {
 		t.Fatalf("long-form tmpfs translation = %#v", service.Options.TmpfsMounts)
 	}
-}
 	if _, err := BuildPlan(file); err != nil {
 		t.Fatalf("BuildPlan(long-form mounts): %v", err)
 	}
-
+}
 
 func TestLoadComposeLongFormMountsRejectUnsupportedSemantics(t *testing.T) {
 	dir := t.TempDir()
