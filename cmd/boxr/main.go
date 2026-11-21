@@ -3686,7 +3686,7 @@ var implementedFeatures = []string{
 	"Compose profiles labels working directories and hostnames map to Boxr deployment options",
 	"Compose short-form IPv4 TCP and UDP port mappings map to Boxr published bridge ports",
 	"Compose services attach only to explicit pre-created external Boxr bridge networks or explicit host/none modes",
-	"unsupported Compose builds implicit volume creation implicit networks healthchecks TTY privileged mode and restart policies fail explicitly",
+	"unsupported Compose builds implicit volume creation implicit networks health-based dependency gates TTY privileged mode and restart policies fail explicitly",
 	"exec supports explicit -i stdin forwarding and closes stdin by default",
 	"exec -t allocates a pseudo-terminal with a controlling session and combines terminal output",
 	"exec TTY mode propagates SIGWINCH terminal size changes and restores host terminal settings on exit",
