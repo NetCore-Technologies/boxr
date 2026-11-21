@@ -856,6 +856,7 @@ func TestNetworkIPRangeBoundsAutomaticAndStaticAllocations(t *testing.T) {
 	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
 	created, err := CreateWithRunner(context.Background(), "bounded-pool", CreateOptions{
 		Subnet: "172.30.50.0/24", IPRange: "172.30.50.128/25", Gateway: "172.30.50.1",
+		AuxiliaryAddresses: map[string]string{"reserved": "172.30.50.129", "reserved-second": "172.30.50.130"},
 	}, &fakeRunner{})
 	if err != nil {
 		t.Fatal(err)
@@ -867,10 +868,14 @@ func TestNetworkIPRangeBoundsAutomaticAndStaticAllocations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if automatic != "172.30.50.129" {
+	if automatic != "172.30.50.131" {
 		t.Fatalf("automatic address=%q, want first address in configured pool", automatic)
 	}
-	if _, err := JoinWithRunnerOptions(context.Background(), "bounded-pool", 2502, "container-static-outside", &fakeRunner{},
+	if _, err := JoinWithRunnerOptions(context.Background(), "bounded-pool", 2502, "container-static-reserved", &fakeRunner{},
+		EndpointOptions{IPv4Address: "172.30.50.129"}); err == nil {
+		t.Fatal("static address reserved by IPAM auxiliary configuration was accepted")
+	}
+	if _, err := JoinWithRunnerOptions(context.Background(), "bounded-pool", 2504, "container-static-outside", &fakeRunner{},
 		EndpointOptions{IPv4Address: "172.30.50.20"}); err == nil {
 		t.Fatal("static address inside subnet but outside IPRange was accepted")
 	}
@@ -886,7 +891,8 @@ func TestNetworkIPRangeBoundsAutomaticAndStaticAllocations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.IPRange != "172.30.50.128/25" || summary.ContainerCount != 2 {
+	if summary.IPRange != "172.30.50.128/25" || summary.ContainerCount != 2 ||
+		summary.AuxiliaryAddresses["reserved"] != "172.30.50.129" {
 		t.Fatalf("bounded pool summary = %+v", summary)
 	}
 }
@@ -903,6 +909,30 @@ func TestCreateRejectsInvalidOrOutOfSubnetIPRange(t *testing.T) {
 			}, &fakeRunner{})
 			if err == nil {
 				t.Fatalf("invalid IPAM range %q was accepted", value)
+			}
+		})
+	}
+}
+
+
+func TestCreateRejectsInvalidAuxiliaryIPAMAddresses(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	for name, addresses := range map[string]map[string]string{
+		"outside subnet": {"reserved": "192.0.2.10"},
+		"network address": {"reserved": "172.30.53.0"},
+		"broadcast address": {"reserved": "172.30.53.255"},
+		"gateway": {"reserved": "172.30.53.1"},
+		"duplicate values": {"first": "172.30.53.10", "second": "172.30.53.10"},
+		"invalid name": {"not valid": "172.30.53.10"},
+		"invalid address": {"reserved": "not-an-ip"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := CreateWithRunner(context.Background(), "invalid-aux", CreateOptions{
+				Subnet: "172.30.53.0/24", Gateway: "172.30.53.1",
+				AuxiliaryAddresses: addresses,
+			}, &fakeRunner{})
+			if err == nil {
+				t.Fatalf("invalid auxiliary IPAM addresses were accepted: %#v", addresses)
 			}
 		})
 	}
