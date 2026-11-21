@@ -24,15 +24,16 @@ const (
 )
 
 type dockerTopProcess struct {
-	hostPID int
-	pid     int
-	ppid    int
-	uid     uint32
-	comm    string
-	command string
-	tty     string
-	cpuTime uint64
-	start   uint64
+	hostPID    int
+	threadPIDs []int
+	pid        int
+	ppid       int
+	uid        uint32
+	comm       string
+	command    string
+	tty        string
+	cpuTime    uint64
+	start      uint64
 }
 
 func (s *Server) handleContainerTop(writer http.ResponseWriter, _ *http.Request, rawID string) {
@@ -67,6 +68,9 @@ func (s *Server) handleContainerTop(writer http.ResponseWriter, _ *http.Request,
 	pidByHost := make(map[int]int, len(processes))
 	for _, process := range processes {
 		pidByHost[process.hostPID] = process.pid
+		for _, threadPID := range process.threadPIDs {
+			pidByHost[threadPID] = process.pid
+		}
 	}
 	sort.Slice(processes, func(i, j int) bool { return processes[i].pid < processes[j].pid })
 	for _, process := range processes {
@@ -157,6 +161,14 @@ func readContainerProcessAt(procRoot string, pid int) (dockerTopProcess, error) 
 	if err != nil {
 		return result, err
 	}
+	uid, err = mapContainerUID(procRoot, pid, uid)
+	if err != nil {
+		return result, err
+	}
+	threadPIDs, err := readProcTaskIDs(procRoot, pid)
+	if err != nil {
+		return result, err
+	}
 	cmdline, _ := readProcFile(filepath.Join(base, "cmdline"), maxContainerProcFileBytes)
 	command := strings.ReplaceAll(strings.TrimRight(string(cmdline), "\x00"), "\x00", " ")
 	tty := readProcTTY(filepath.Join(base, "fd", "0"))
@@ -173,6 +185,7 @@ func readContainerProcessAt(procRoot string, pid int) (dockerTopProcess, error) 
 	}
 	return dockerTopProcess{
 		hostPID: pid,
+		threadPIDs: threadPIDs,
 		pid: namespacePID,
 		ppid: parsed.ppid,
 		uid: uid,
@@ -266,25 +279,104 @@ func parseDockerTopProcStatus(value string, fallbackPID int) (uint32, int, error
 	return uint32(uid), namespacePID, nil
 }
 
-func readProcChildren(procRoot string, pid int) ([]int, error) {
-	path := filepath.Join(procRoot, strconv.Itoa(pid), "task", strconv.Itoa(pid), "children")
-	data, err := readProcFile(path, 256<<10)
+func readProcTaskIDs(procRoot string, pid int) ([]int, error) {
+	taskDir := filepath.Join(procRoot, strconv.Itoa(pid), "task")
+	directory, err := os.Open(taskDir)
 	if err != nil {
 		return nil, err
 	}
-	fields := strings.Fields(string(data))
-	if len(fields) > maxContainerTopProcesses {
-		return nil, fmt.Errorf("process %d has too many children", pid)
+	entries, err := directory.ReadDir(maxContainerTopProcesses + 1)
+	closeErr := directory.Close()
+	if err != nil {
+		return nil, err
 	}
-	children := make([]int, 0, len(fields))
-	for _, field := range fields {
-		child, err := strconv.Atoi(field)
-		if err != nil || child <= 0 {
-			return nil, fmt.Errorf("invalid child PID %q", field)
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if len(entries) > maxContainerTopProcesses {
+		return nil, fmt.Errorf("process %d exceeds the thread inspection limit", pid)
+	}
+	threadIDs := make([]int, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
 		}
-		children = append(children, child)
+		tid, parseErr := strconv.Atoi(entry.Name())
+		if parseErr == nil && tid > 0 {
+			threadIDs = append(threadIDs, tid)
+		}
+	}
+	if len(threadIDs) == 0 {
+		return nil, fmt.Errorf("process %d has no readable tasks", pid)
+	}
+	return threadIDs, nil
+}
+
+func readProcChildren(procRoot string, pid int) ([]int, error) {
+	threadIDs, err := readProcTaskIDs(procRoot, pid)
+	if err != nil {
+		return nil, err
+	}
+	children := make([]int, 0)
+	for _, tid := range threadIDs {
+		path := filepath.Join(procRoot, strconv.Itoa(pid), "task", strconv.Itoa(tid), "children")
+		data, readErr := readProcFile(path, 256<<10)
+		if readErr != nil {
+			continue
+		}
+		for _, field := range strings.Fields(string(data)) {
+			child, parseErr := strconv.Atoi(field)
+			if parseErr != nil || child <= 0 {
+				return nil, fmt.Errorf("invalid child PID %q", field)
+			}
+			children = append(children, child)
+			if len(children) > maxContainerTopProcesses {
+				return nil, fmt.Errorf("process %d has too many children", pid)
+			}
+		}
 	}
 	return children, nil
+}
+
+func mapContainerUID(procRoot string, pid int, hostUID uint32) (uint32, error) {
+	data, err := readProcFile(filepath.Join(procRoot, strconv.Itoa(pid), "uid_map"), 64<<10)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return hostUID, nil
+		}
+		return 0, fmt.Errorf("read process UID map: %w", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if len(fields) != 3 {
+			return 0, fmt.Errorf("malformed UID mapping for process %d", pid)
+		}
+		containerStart, parseErr := strconv.ParseUint(fields[0], 10, 32)
+		if parseErr != nil {
+			return 0, fmt.Errorf("invalid container UID mapping for process %d", pid)
+		}
+		hostStart, parseErr := strconv.ParseUint(fields[1], 10, 32)
+		if parseErr != nil {
+			return 0, fmt.Errorf("invalid host UID mapping for process %d", pid)
+		}
+		length, parseErr := strconv.ParseUint(fields[2], 10, 32)
+		if parseErr != nil || length == 0 {
+			return 0, fmt.Errorf("invalid UID mapping length for process %d", pid)
+		}
+		hostValue := uint64(hostUID)
+		if hostValue < hostStart || hostValue-hostStart >= length {
+			continue
+		}
+		containerValue := containerStart + hostValue - hostStart
+		if containerValue > uint64(^uint32(0)) {
+			return 0, fmt.Errorf("container UID mapping overflows for process %d", pid)
+		}
+		return uint32(containerValue), nil
+	}
+	return 0, fmt.Errorf("host UID %d is not covered by process %d UID map", hostUID, pid)
 }
 
 func readProcBootTime(procRoot string) (int64, error) {

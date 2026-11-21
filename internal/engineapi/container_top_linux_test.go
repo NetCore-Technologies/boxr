@@ -32,6 +32,9 @@ func writeProcFixture(t *testing.T, root string, pid, ppid int, comm string, nsP
 	if err := os.WriteFile(filepath.Join(base, "status"), []byte(status), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(base, "uid_map"), []byte("0 0 4294967295\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(base, "cmdline"), []byte(command), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -45,8 +48,17 @@ func TestReadContainerProcessTreeMapsPIDsAndBoundsCPUTime(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "stat"), []byte("cpu 1 2 3 4\nbtime 1700000000\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	writeProcFixture(t, root, 5000, 4000, "boxr init ) name", 1, 0, 200, 100, 50, "5001", "boxr\x00init\x00")
-	writeProcFixture(t, root, 5001, 5000, "worker", 2, 1001, 300, 100, 50, "", "worker\x00--serve\x00")
+	writeProcFixture(t, root, 5000, 4000, "boxr init ) name", 1, 0, 200, 100, 50, "", "boxr\x00init\x00")
+	if err := os.MkdirAll(filepath.Join(root, "5000", "task", "5002"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "5000", "task", "5002", "children"), []byte("5001"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	writeProcFixture(t, root, 5001, 5002, "worker", 2, 101000, 300, 100, 50, "", "worker\x00--serve\x00")
+	if err := os.WriteFile(filepath.Join(root, "5001", "uid_map"), []byte("0 100000 1\n1000 101000 1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 
 	processes, bootTime, err := readContainerProcessTree(root, 5000)
 	if err != nil {
@@ -61,11 +73,32 @@ func TestReadContainerProcessTreeMapsPIDsAndBoundsCPUTime(t *testing.T) {
 	if processes[0].pid != 1 || processes[1].pid != 2 {
 		t.Fatalf("namespace PIDs = [%d %d], want [1 2]", processes[0].pid, processes[1].pid)
 	}
-	if processes[1].ppid != 5000 || processes[1].uid != 1001 || processes[1].command != "worker --serve" {
+	if processes[1].ppid != 5002 || processes[1].uid != 1000 || processes[1].command != "worker --serve" {
 		t.Fatalf("worker process was parsed incorrectly: %#v", processes[1])
 	}
 	if got := formatProcessCPUTime(processes[0].cpuTime); got != "00:00:01" {
 		t.Fatalf("CPU time=%q, want 00:00:01", got)
+	}
+}
+
+func TestMapContainerUIDUsesTheProcessUserNamespaceMap(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "1234")
+	if err := os.MkdirAll(base, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "uid_map"), []byte("0 100000 1\n1000 101000 1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := mapContainerUID(root, 1234, 101000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1000 {
+		t.Fatalf("mapped UID=%d, want 1000", got)
+	}
+	if _, err := mapContainerUID(root, 1234, 500000); err == nil {
+		t.Fatal("UID outside the namespace map was accepted")
 	}
 }
 
