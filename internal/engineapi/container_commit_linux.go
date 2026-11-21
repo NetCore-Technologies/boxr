@@ -147,19 +147,29 @@ func (s *Server) handleContainerCommit(writer http.ResponseWriter, request *http
 		writeError(writer, http.StatusConflict, fmt.Errorf("verify container image rootfs: %w", err))
 		return
 	}
-	if err := verifyDockerCommitDirectory(overlayDir); err != nil {
+	if err := verifyDockerCommitOptionalDirectory(overlayDir); err != nil {
 		writeError(writer, http.StatusConflict, fmt.Errorf("verify container writable layer: %w", err))
 		return
 	}
-	upperRoot := filepath.Join(overlayDir, "upper")
-	if err := verifyDockerCommitOptionalDirectory(upperRoot); err != nil {
-		writeError(writer, http.StatusConflict, fmt.Errorf("verify container writable upperdir: %w", err))
+	upperRoot := ""
+	if err := verifyDockerCommitOptionalDirectory(overlayDir); err != nil {
+		writeError(writer, http.StatusConflict, fmt.Errorf("verify container writable layer: %w", err))
 		return
 	}
-	if _, err := os.Lstat(upperRoot); errors.Is(err, os.ErrNotExist) {
-		upperRoot = ""
-	} else if err != nil {
-		writeError(writer, http.StatusInternalServerError, fmt.Errorf("inspect container writable upperdir: %w", err))
+	if _, err := os.Lstat(overlayDir); err == nil {
+		upperRoot = filepath.Join(overlayDir, "upper")
+		if err := verifyDockerCommitOptionalDirectory(upperRoot); err != nil {
+			writeError(writer, http.StatusConflict, fmt.Errorf("verify container writable upperdir: %w", err))
+			return
+		}
+		if _, err := os.Lstat(upperRoot); errors.Is(err, os.ErrNotExist) {
+			upperRoot = ""
+		} else if err != nil {
+			writeError(writer, http.StatusInternalServerError, fmt.Errorf("inspect container writable upperdir: %w", err))
+			return
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		writeError(writer, http.StatusInternalServerError, fmt.Errorf("inspect container writable layer: %w", err))
 		return
 	}
 
