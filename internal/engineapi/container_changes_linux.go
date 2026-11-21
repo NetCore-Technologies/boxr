@@ -144,9 +144,10 @@ func walkDockerOverlayChanges(lower, upper, relative string, changes map[string]
 		}
 
 		var lowerInfo os.FileInfo
+		lowerPath := ""
 		lowerExists := false
 		if lower != "" {
-			lowerPath := filepath.Join(lower, name)
+			lowerPath = filepath.Join(lower, name)
 			lowerInfo, err = os.Lstat(lowerPath)
 			lowerExists = err == nil
 			if err != nil && !os.IsNotExist(err) {
