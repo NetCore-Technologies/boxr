@@ -3666,6 +3666,11 @@ var implementedFeatures = []string{
 	"Engine API removes named volumes only when no persisted container references them",
 	"Engine API container create resolves pre-created Boxr named volumes from Docker HostConfig.Binds",
 	"Engine API container inspect reports named volume type name driver and Docker-compatible Binds",
+	"Engine API lists managed bridge networks with Docker name driver scope and label filters",
+	"Engine API creates IPv4 bridge networks with validated IPAM options and managed NAT controls",
+	"Engine API inspects managed bridge network subnet gateway bridge interface and labels",
+	"Engine API deletes managed bridge networks only when no containers remain attached",
+	"managed bridge networks persist validated Docker-compatible network labels",
 }
 
 func printFeatures(stdout io.Writer) {
