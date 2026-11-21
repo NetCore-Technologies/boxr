@@ -842,9 +842,19 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 	startedAny := false
 	var runErr error
 	for {
+		var stdinReader io.Reader
+		var cleanupStdin func()
+		if opts.OpenStdin {
+			stdinReader, cleanupStdin, err = openEngineContainerStdinBridge(record.ID, opts.StdinOnce)
+			if err != nil {
+				runErr = fmt.Errorf("prepare container stdin: %w", err)
+				break
+			}
+		}
 		var healthCancel context.CancelFunc
 		var healthDone <-chan struct{}
 		runErr = container.RunWithHooks(commandArgs[0], commandArgs[1:], opts, container.Hooks{
+			Stdin:  stdinReader,
 			Stdout: io.MultiWriter(stdout, combinedLog),
 			Stderr: io.MultiWriter(stderr, combinedLog),
 			OnStart: func(pid int) error {
@@ -891,6 +901,9 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 				return stateErr
 			},
 		})
+		if cleanupStdin != nil {
+			cleanupStdin()
+		}
 
 		// RunWithHooks can fail before its exit callback is installed (for
 		// example, when clone or user-namespace setup fails). Persist that
