@@ -95,6 +95,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		s.handleImageBuild(writer, request)
+	case path == "/build":
+		if !requireMethod(writer, request, http.MethodPost) {
+			return
+		}
+		s.handleImageBuild(writer, request)
 	case path == "/info":
 		if !requireMethod(writer, request, http.MethodGet) {
 			return
