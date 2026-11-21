@@ -3662,6 +3662,7 @@ var implementedFeatures = []string{
 	"Engine API streams persisted container lifecycle events and lists OCI image tags",
 	"unsupported Docker Engine restart attach image volume network mutation and TCP listener operations are explicitly outside the API contract",
 	"Engine API creates containers from verified local images using a strict supported Docker create subset",
+	"Engine API container create supports validated structured bind volume and tmpfs mounts with explicit unsupported-option rejection",
 	"Engine API starts created containers through the native Boxr detached supervisor",
 	"Engine API gracefully stops containers with a bounded timeout and SIGKILL fallback",
 	"Engine API sends validated Docker kill signals only to process-identity-verified running containers",

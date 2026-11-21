@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 889 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 890 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 
 ## Implemented capabilities
@@ -837,62 +837,63 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 828. Engine API streams persisted container lifecycle events and lists OCI image tags
 829. unsupported Docker Engine restart attach image volume network mutation and TCP listener operations are explicitly outside the API contract
 830. Engine API creates containers from verified local images using a strict supported Docker create subset
-831. Engine API starts created containers through the native Boxr detached supervisor
-832. Engine API gracefully stops containers with a bounded timeout and SIGKILL fallback
-833. Engine API sends validated Docker kill signals only to process-identity-verified running containers
-834. Engine API removes created and stopped containers through Docker DELETE with safe conflict handling
-835. Engine API inspects verified local OCI images using Docker-compatible image metadata and uncompressed layer DiffIDs
-836. Engine API removes unused local image tags and rejects removal while containers reference them
-837. Engine API pulls and verifies OCI/Docker registry images using Docker X-Registry-Auth and Linux platform selection
-838. Engine API pushes verified local single-layer OCI images using Docker X-Registry-Auth and registry upload verification
-839. Engine API creates Docker image tag aliases from verified OCI content and protects tags referenced by containers
-840. top-level pull command reuses verified OCI and Docker registry image downloads
-841. top-level push command reuses verified OCI and Docker registry image uploads
-842. top-level build command supports Docker-style -t image tagging and reuses the verified Dockerfile builder
-843. top-level images command lists the verified local image store using Docker-style output flags
-844. top-level tag command creates local image aliases without copying content-addressed blobs
-845. top-level rmi command removes unused local image tags while preserving shared content-addressed blobs
-846. container namespace exposes Docker-style lifecycle subcommands through the native verified Boxr operations
-847. native rm safely removes created containers without weakening running-container protection
-848. native rm --force stops running containers or cancels pending restarts before safe removal
-849. native run accepts positional verified local image references while preserving ordinary command execution
-850. state store renames containers with unique names and persists rename lifecycle events
-851. native rename and container rename commands preserve container IDs while changing unique names
-852. Engine API POST containers rename updates unique container names and returns Docker-compatible errors
-853. compose command aliases the supported Compose YAML deployment validation planning pull and lifecycle workflows
-854. Engine API POST containers wait blocks for not-running state and returns the persisted workload exit status
-855. container prune previews and filters stopped records and requires explicit force before removal
-856. Engine API DELETE force true delegates to native safe forced removal for running or restarting containers
-857. native create command records a verified image-backed container without starting it
-858. native start command launches a created image-backed container through the detached supervisor
-859. native start command restarts stopped image-backed containers through the detached supervisor
-860. native restart command stops then starts an image-backed container with a bounded graceful timeout
-861. Engine API start endpoint restarts stopped image-backed containers through the native detached supervisor
-862. Engine API restart endpoint performs a bounded graceful stop and launches the same saved container again
-863. Engine API lists local named volumes with name label driver scope and dangling filters
-864. Engine API creates local named volumes with validated labels and the local driver
-865. Engine API inspects named volume metadata and the private mountpoint
-866. Engine API removes named volumes only when no persisted container references them
-867. Engine API container create resolves pre-created Boxr named volumes from Docker HostConfig.Binds
-868. Engine API container inspect reports named volume type name driver and Docker-compatible Binds
-869. Engine API lists managed bridge networks with Docker name driver scope and label filters
-870. Engine API creates IPv4 bridge networks with validated IPAM options and managed NAT controls
-871. Engine API inspects managed bridge network subnet gateway bridge interface and labels
-872. Engine API deletes managed bridge networks only when no containers remain attached
-873. managed bridge networks persist validated Docker-compatible network labels
-874. Engine API creates anonymous local volumes when the create request omits Name
-875. Engine API prunes unused anonymous volumes by default with Docker-compatible label filters
-876. Engine API prunes unused named volumes when the all filter is true
-877. Engine API prunes unused managed bridge networks with label and until filters
-878. Engine API protects persisted container network references during network pruning
-879. Engine API exports one or more verified local image tags as Docker-save archives
-880. Engine API imports Docker-save archives after tag preflight and protects images referenced by containers
-881. Engine API builds images from bounded Docker tar contexts using the supported single-stage Dockerfile subset
-882. Engine API Docker builds support platform selection declared build arguments and multiple tags
-883. Engine API maps Docker default build networking to isolated none and requires explicit host network opt-in
-884. Engine API refuses to replace image tags referenced by persisted containers during builds
-885. Engine API prunes dangling images by default and unused tagged images when dangling is false
-886. Engine API applies Docker-compatible image prune until label and label-exclusion filters
-887. Engine API protects all aliases sharing image digests used by persisted containers during prune
-888. Engine API removes selected image tags atomically and reports reclaimed content-addressed blob bytes
-889. Engine API pulls accept immutable SHA-256 digest references and map them to deterministic local image aliases
+831. Engine API container create supports validated structured bind volume and tmpfs mounts with explicit unsupported-option rejection
+832. Engine API starts created containers through the native Boxr detached supervisor
+833. Engine API gracefully stops containers with a bounded timeout and SIGKILL fallback
+834. Engine API sends validated Docker kill signals only to process-identity-verified running containers
+835. Engine API removes created and stopped containers through Docker DELETE with safe conflict handling
+836. Engine API inspects verified local OCI images using Docker-compatible image metadata and uncompressed layer DiffIDs
+837. Engine API removes unused local image tags and rejects removal while containers reference them
+838. Engine API pulls and verifies OCI/Docker registry images using Docker X-Registry-Auth and Linux platform selection
+839. Engine API pulls accept immutable SHA-256 digest references and map them to deterministic local image aliases
+840. Engine API pushes verified local single-layer OCI images using Docker X-Registry-Auth and registry upload verification
+841. Engine API creates Docker image tag aliases from verified OCI content and protects tags referenced by containers
+842. top-level pull command reuses verified OCI and Docker registry image downloads
+843. top-level push command reuses verified OCI and Docker registry image uploads
+844. top-level build command supports Docker-style -t image tagging and reuses the verified Dockerfile builder
+845. top-level images command lists the verified local image store using Docker-style output flags
+846. top-level tag command creates local image aliases without copying content-addressed blobs
+847. top-level rmi command removes unused local image tags while preserving shared content-addressed blobs
+848. container namespace exposes Docker-style lifecycle subcommands through the native verified Boxr operations
+849. native rm safely removes created containers without weakening running-container protection
+850. native rm --force stops running containers or cancels pending restarts before safe removal
+851. native run accepts positional verified local image references while preserving ordinary command execution
+852. state store renames containers with unique names and persists rename lifecycle events
+853. native rename and container rename commands preserve container IDs while changing unique names
+854. Engine API POST containers rename updates unique container names and returns Docker-compatible errors
+855. compose command aliases the supported Compose YAML deployment validation planning pull and lifecycle workflows
+856. Engine API POST containers wait blocks for not-running state and returns the persisted workload exit status
+857. container prune previews and filters stopped records and requires explicit force before removal
+858. Engine API DELETE force true delegates to native safe forced removal for running or restarting containers
+859. native create command records a verified image-backed container without starting it
+860. native start command launches a created image-backed container through the detached supervisor
+861. native start command restarts stopped image-backed containers through the detached supervisor
+862. native restart command stops then starts an image-backed container with a bounded graceful timeout
+863. Engine API start endpoint restarts stopped image-backed containers through the native detached supervisor
+864. Engine API restart endpoint performs a bounded graceful stop and launches the same saved container again
+865. Engine API lists local named volumes with name label driver scope and dangling filters
+866. Engine API creates local named volumes with validated labels and the local driver
+867. Engine API inspects named volume metadata and the private mountpoint
+868. Engine API removes named volumes only when no persisted container references them
+869. Engine API container create resolves pre-created Boxr named volumes from Docker HostConfig.Binds
+870. Engine API container inspect reports named volume type name driver and Docker-compatible Binds
+871. Engine API lists managed bridge networks with Docker name driver scope and label filters
+872. Engine API creates IPv4 bridge networks with validated IPAM options and managed NAT controls
+873. Engine API inspects managed bridge network subnet gateway bridge interface and labels
+874. Engine API deletes managed bridge networks only when no containers remain attached
+875. managed bridge networks persist validated Docker-compatible network labels
+876. Engine API creates anonymous local volumes when the create request omits Name
+877. Engine API prunes unused anonymous volumes by default with Docker-compatible label filters
+878. Engine API prunes unused named volumes when the all filter is true
+879. Engine API prunes unused managed bridge networks with label and until filters
+880. Engine API protects persisted container network references during network pruning
+881. Engine API exports one or more verified local image tags as Docker-save archives
+882. Engine API imports Docker-save archives after tag preflight and protects images referenced by containers
+883. Engine API builds images from bounded Docker tar contexts using the supported single-stage Dockerfile subset
+884. Engine API Docker builds support platform selection declared build arguments and multiple tags
+885. Engine API maps Docker default build networking to isolated none and requires explicit host network opt-in
+886. Engine API refuses to replace image tags referenced by persisted containers during builds
+887. Engine API prunes dangling images by default and unused tagged images when dangling is false
+888. Engine API applies Docker-compatible image prune until label and label-exclusion filters
+889. Engine API protects all aliases sharing image digests used by persisted containers during prune
+890. Engine API removes selected image tags atomically and reports reclaimed content-addressed blob bytes

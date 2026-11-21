@@ -872,19 +872,32 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 	for _, item := range storedVolumes {
 		volumeNames[item.Path] = item.Name
 	}
-	mounts := make([]map[string]any, 0, len(record.Options.BindMounts))
+	mounts := make([]map[string]any, 0, len(record.Options.BindMounts)+len(record.Options.TmpfsMounts))
 	for _, mount := range record.Options.BindMounts {
 		mountType := "bind"
 		mountInfo := map[string]any{
 			"Type": mountType, "Source": mount.Source, "Destination": mount.Target,
-			"RW": !mount.ReadOnly,
+			"Mode": dockerMountMode(mount.ReadOnly), "Propagation": "rprivate", "RW": !mount.ReadOnly,
 		}
 		if name, ok := volumeNames[mount.Source]; ok {
 			mountInfo["Type"] = "volume"
 			mountInfo["Name"] = name
 			mountInfo["Driver"] = "local"
+			delete(mountInfo, "Propagation")
 		}
 		mounts = append(mounts, mountInfo)
+	}
+	tmpfsHostConfig := make(map[string]string, len(record.Options.TmpfsMounts))
+	for _, mount := range record.Options.TmpfsMounts {
+		options := fmt.Sprintf("mode=%o", mount.Mode)
+		if mount.SizeBytes > 0 {
+			options = fmt.Sprintf("size=%d,%s", mount.SizeBytes, options)
+		}
+		tmpfsHostConfig[mount.Target] = options
+		mounts = append(mounts, map[string]any{
+			"Type": "tmpfs", "Source": "tmpfs", "Destination": mount.Target,
+			"Mode": options, "RW": true,
+		})
 	}
 	stateObject := map[string]any{
 		"Status": containerState(record), "Running": running, "Paused": false,
@@ -902,6 +915,7 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 		"NanoCpus": int64(record.Options.CPUs * 1e9), "PidsLimit": record.Options.PidsLimit,
 		"RestartPolicy": map[string]any{"Name": dockerRestartPolicy(record.Options.RestartPolicy), "MaximumRetryCount": record.Options.RestartMaxRetries},
 		"PortBindings":  dockerPortBindings(record.Options), "Binds": dockerBinds(record.Options),
+		"Tmpfs": tmpfsHostConfig,
 		"Privileged": false, "ReadonlyRootfs": record.Options.ReadOnlyRootFS,
 	}
 	networkSettings := map[string]any{
@@ -914,6 +928,13 @@ func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string
 		"Mounts": mounts, "HostConfig": hostConfig,
 		"Config": configObject, "NetworkSettings": networkSettings,
 	})
+}
+
+func dockerMountMode(readOnly bool) string {
+	if readOnly {
+		return "ro"
+	}
+	return "rw"
 }
 
 func exitCode(value *int) int {

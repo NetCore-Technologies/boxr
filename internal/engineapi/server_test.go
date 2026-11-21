@@ -968,6 +968,152 @@ func TestDockerOptionsMapsResourcesPortsAndSafeNetworkDefaults(t *testing.T) {
 	}
 }
 
+func TestDockerOptionsSupportsStructuredBindVolumeAndTmpfsMounts(t *testing.T) {
+	t.Setenv("BOXR_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+	volumeItem, err := volume.Create("structured-data", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostSource := filepath.Join(t.TempDir(), "source:with-colon")
+	if err := os.Mkdir(hostSource, 0700); err != nil {
+		t.Fatal(err)
+	}
+	input := dockerHostConfig{Mounts: []json.RawMessage{
+		json.RawMessage(fmt.Sprintf(`{"Type":"bind","Source":%q,"Target":"/workspace","ReadOnly":true,"BindOptions":{"Propagation":"rprivate"}}`, hostSource)),
+		json.RawMessage(`{"Type":"volume","Source":"structured-data","Target":"/data","VolumeOptions":{"NoCopy":true}}`),
+		json.RawMessage(`{"Type":"tmpfs","Target":"/run","TmpfsOptions":{"SizeBytes":4096,"Mode":1023}}`),
+	}}
+	options, err := dockerOptions(input)
+	if err != nil {
+		t.Fatalf("dockerOptions structured mounts: %v", err)
+	}
+	if len(options.BindMounts) != 2 || len(options.TmpfsMounts) != 1 {
+		t.Fatalf("translated mounts = bind=%+v tmpfs=%+v", options.BindMounts, options.TmpfsMounts)
+	}
+	if options.BindMounts[0].Source != hostSource || options.BindMounts[0].Target != "/workspace" || !options.BindMounts[0].ReadOnly {
+		t.Fatalf("bind mount translation = %+v", options.BindMounts[0])
+	}
+	if options.BindMounts[1].Source != volumeItem.Path || options.BindMounts[1].Target != "/data" {
+		t.Fatalf("volume mount translation = %+v", options.BindMounts[1])
+	}
+	if options.TmpfsMounts[0].Target != "/run" || options.TmpfsMounts[0].SizeBytes != 4096 || options.TmpfsMounts[0].Mode != 1023 {
+		t.Fatalf("tmpfs mount translation = %+v", options.TmpfsMounts[0])
+	}
+}
+
+func TestDockerStructuredMountsRejectUnsupportedAndUnsafeOptions(t *testing.T) {
+	hostSource := t.TempDir()
+	for _, test := range []struct {
+		name  string
+		mount string
+	}{
+		{name: "unknown field", mount: fmt.Sprintf(`{"Type":"bind","Source":%q,"Target":"/data","Unexpected":true}`, hostSource)},
+		{name: "unsupported propagation", mount: fmt.Sprintf(`{"Type":"bind","Source":%q,"Target":"/data","BindOptions":{"Propagation":"rshared"}}`, hostSource)},
+		{name: "implicit host path creation", mount: fmt.Sprintf(`{"Type":"bind","Source":%q,"Target":"/data","BindOptions":{"CreateMountpoint":true}}`, filepath.Join(t.TempDir(), "missing"))},
+		{name: "volume copy-up", mount: `{"Type":"volume","Source":"preexisting","Target":"/data","VolumeOptions":{"NoCopy":false}}`},
+		{name: "volume no-copy not explicit", mount: `{"Type":"volume","Source":"preexisting","Target":"/data"}`},
+		{name: "volume subpath", mount: `{"Type":"volume","Source":"preexisting","Target":"/data","VolumeOptions":{"NoCopy":true,"Subpath":"child"}}`},
+		{name: "tmpfs source", mount: `{"Type":"tmpfs","Source":"/tmp","Target":"/run"}`},
+		{name: "tmpfs size omitted", mount: `{"Type":"tmpfs","Target":"/run"}`},
+		{name: "tmpfs size too large", mount: `{"Type":"tmpfs","Target":"/run","TmpfsOptions":{"SizeBytes":1073741825}}`},
+		{name: "tmpfs options", mount: `{"Type":"tmpfs","Target":"/run","TmpfsOptions":{"SizeBytes":4096,"Options":[["noexec"]]}}`},
+		{name: "unsupported type", mount: fmt.Sprintf(`{"Type":"image","Source":%q,"Target":"/data"}`, hostSource)},
+		{name: "target traversal", mount: fmt.Sprintf(`{"Type":"bind","Source":%q,"Target":"/data/../escape"}`, hostSource)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := dockerOptions(dockerHostConfig{Mounts: []json.RawMessage{json.RawMessage(test.mount)}}); err == nil {
+				t.Fatalf("unsupported structured mount unexpectedly accepted: %s", test.mount)
+			}
+		})
+	}
+	if _, err := dockerOptions(dockerHostConfig{Mounts: []json.RawMessage{json.RawMessage("{")}}); err == nil {
+		t.Fatal("malformed structured mount JSON unexpectedly accepted")
+	}
+}
+
+func TestDockerStructuredMountsRejectDuplicateTargetsAcrossLegacyBinds(t *testing.T) {
+	hostSource := t.TempDir()
+	_, err := dockerOptions(dockerHostConfig{
+		Binds: []string{hostSource + ":/shared"},
+		Mounts: []json.RawMessage{
+			json.RawMessage(fmt.Sprintf(`{"Type":"bind","Source":%q,"Target":"/shared"}`, hostSource)),
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "multiple Docker mounts target") {
+		t.Fatalf("duplicate mount target error = %v", err)
+	}
+	_, err = dockerOptions(dockerHostConfig{Mounts: []json.RawMessage{
+		json.RawMessage(fmt.Sprintf(`{"Type":"bind","Source":%q,"Target":"/workspace"}`, hostSource)),
+		json.RawMessage(`{"Type":"tmpfs","Target":"/workspace/cache","TmpfsOptions":{"SizeBytes":4096}}`),
+	}})
+	if err == nil || !strings.Contains(err.Error(), "nested Docker mount targets") {
+		t.Fatalf("nested mount target error = %v", err)
+	}
+}
+
+func TestDockerCreateAndInspectExposeStructuredTmpfsAndVolumeMounts(t *testing.T) {
+	server := setupEngineAPITest(t)
+	t.Setenv("BOXR_DATA_DIR", filepath.Join(t.TempDir(), "data"))
+	volumeItem, err := volume.Create("inspect-structured", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image := importEngineAPITestImage(t, "registry.example/team/structured-mounts:v1")
+	hostSource := t.TempDir()
+	mounts := []json.RawMessage{
+		json.RawMessage(fmt.Sprintf(`{"Type":"bind","Source":%q,"Target":"/workspace","ReadOnly":true}`, hostSource)),
+		json.RawMessage(`{"Type":"volume","Source":"inspect-structured","Target":"/data","VolumeOptions":{"NoCopy":true}}`),
+		json.RawMessage(`{"Type":"tmpfs","Target":"/run","TmpfsOptions":{"SizeBytes":8192,"Mode":1023}}`),
+	}
+	record, err := createContainerRecord("structured-mounts", dockerCreateRequest{
+		Image: image.Reference, HostConfig: dockerHostConfig{Mounts: mounts},
+	})
+	if err != nil {
+		t.Fatalf("create container from structured Docker mounts: %v", err)
+	}
+	defer state.RemoveCreated(record.ID)
+	response := engineAPIRequest(server, http.MethodGet, "/v1.45/containers/"+record.ID+"/json")
+	if response.Code != http.StatusOK {
+		t.Fatalf("inspect status=%d body=%s", response.Code, response.Body.String())
+	}
+	var inspected map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &inspected); err != nil {
+		t.Fatal(err)
+	}
+	mounted, ok := inspected["Mounts"].([]any)
+	if !ok || len(mounted) != 3 {
+		t.Fatalf("structured Docker inspect mounts = %#v", inspected["Mounts"])
+	}
+	types := make(map[string]map[string]any, len(mounted))
+	for _, value := range mounted {
+		item, ok := value.(map[string]any)
+		if !ok {
+			t.Fatalf("mount entry has type %T", value)
+		}
+		types[item["Type"].(string)] = item
+	}
+	if types["bind"]["Destination"] != "/workspace" || types["bind"]["RW"] != false || types["bind"]["Propagation"] != "rprivate" {
+		t.Fatalf("bind inspect data = %#v", types["bind"])
+	}
+	if types["volume"]["Name"] != "inspect-structured" || types["volume"]["Destination"] != "/data" {
+		t.Fatalf("volume inspect data = %#v", types["volume"])
+	}
+	if types["tmpfs"]["Destination"] != "/run" || types["tmpfs"]["RW"] != true {
+		t.Fatalf("tmpfs inspect data = %#v", types["tmpfs"])
+	}
+	hostConfig, ok := inspected["HostConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("inspect HostConfig has type %T", inspected["HostConfig"])
+	}
+	tmpfs, ok := hostConfig["Tmpfs"].(map[string]any)
+	if !ok || tmpfs["/run"] != "size=8192,mode=1777" {
+		t.Fatalf("inspect HostConfig.Tmpfs = %#v", hostConfig["Tmpfs"])
+	}
+	if _, err := volume.Get(volumeItem.Name); err != nil {
+		t.Fatalf("container inspect unexpectedly removed volume: %v", err)
+	}
+}
+
 func TestDockerOptionsRejectsUnsupportedOrImpossibleLimits(t *testing.T) {
 	tests := []struct {
 		name string

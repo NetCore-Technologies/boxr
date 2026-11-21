@@ -80,6 +80,43 @@ type dockerHostConfig struct {
 	PublishAllPorts   bool                           `json:"PublishAllPorts"`
 }
 
+type dockerMountBindOptions struct {
+	Propagation            string `json:"Propagation"`
+	CreateMountpoint       bool   `json:"CreateMountpoint"`
+	NonRecursive           bool   `json:"NonRecursive"`
+	ReadOnlyNonRecursive   bool   `json:"ReadOnlyNonRecursive"`
+	ReadOnlyForceRecursive bool   `json:"ReadOnlyForceRecursive"`
+}
+
+type dockerMountVolumeDriverConfig struct {
+	Name    string            `json:"Name"`
+	Options map[string]string `json:"Options"`
+}
+
+type dockerMountVolumeOptions struct {
+	NoCopy       bool                           `json:"NoCopy"`
+	Labels       map[string]string              `json:"Labels"`
+	Subpath      string                         `json:"Subpath"`
+	DriverConfig *dockerMountVolumeDriverConfig `json:"DriverConfig"`
+}
+
+type dockerMountTmpfsOptions struct {
+	SizeBytes int64      `json:"SizeBytes"`
+	Mode      *uint32    `json:"Mode"`
+	Options   [][]string `json:"Options"`
+}
+
+type dockerMount struct {
+	Type          string                    `json:"Type"`
+	Source        string                    `json:"Source"`
+	Target        string                    `json:"Target"`
+	ReadOnly      bool                      `json:"ReadOnly"`
+	Consistency   string                    `json:"Consistency"`
+	BindOptions   *dockerMountBindOptions   `json:"BindOptions"`
+	VolumeOptions *dockerMountVolumeOptions `json:"VolumeOptions"`
+	TmpfsOptions  *dockerMountTmpfsOptions  `json:"TmpfsOptions"`
+}
+
 type dockerPortBinding struct {
 	HostIP   string `json:"HostIp"`
 	HostPort string `json:"HostPort"`
@@ -90,7 +127,12 @@ type dockerRestartPolicyConfig struct {
 	MaximumRetryCount int    `json:"MaximumRetryCount"`
 }
 
-const maxDockerRegistryAuthBytes = 16 << 10
+const (
+	maxDockerRegistryAuthBytes          = 16 << 10
+	maxDockerEngineMountCount           = 64
+	maxDockerEngineTmpfsBytes     int64 = 1 << 30
+	maxDockerEngineTmpfsTotalBytes int64 = 2 << 30
+)
 
 func decodeDockerRegistryCredentials(request *http.Request) (registry.Credentials, error) {
 	header := strings.TrimSpace(request.Header.Get("X-Registry-Auth"))
@@ -661,7 +703,7 @@ func createContainerRecord(name string, input dockerCreateRequest) (state.Record
 		}
 	}
 	validationOptions := options
-	if validationOptions.ReadOnlyRootFS || len(validationOptions.BindMounts) > 0 {
+	if validationOptions.ReadOnlyRootFS || len(validationOptions.BindMounts) > 0 || len(validationOptions.TmpfsMounts) > 0 {
 		validationOptions.RootFS = "/boxr-engine-api-create-validation"
 	}
 	if err := validationOptions.Validate(); err != nil {
@@ -704,8 +746,8 @@ func dockerOptions(host dockerHostConfig) (container.Options, error) {
 		}
 		options.MemorySwapMaxBytes = host.MemorySwap - host.Memory
 	}
-	if host.Privileged || host.PublishAllPorts || len(host.CapAdd) > 0 || len(host.Devices) > 0 || len(host.SecurityOpt) > 0 || len(host.Tmpfs) > 0 || len(host.Mounts) > 0 || host.ShmSize > 0 {
-		return options, fmt.Errorf("Privileged, CapAdd, Devices, SecurityOpt, Tmpfs, Mounts, ShmSize and PublishAllPorts are not supported by Engine API create")
+	if host.Privileged || host.PublishAllPorts || len(host.CapAdd) > 0 || len(host.Devices) > 0 || len(host.SecurityOpt) > 0 || len(host.Tmpfs) > 0 || host.ShmSize > 0 {
+		return options, fmt.Errorf("Privileged, CapAdd, Devices, SecurityOpt, legacy Tmpfs, ShmSize and PublishAllPorts are not supported by Engine API create")
 	}
 	if host.RestartPolicy.Name == "" {
 		options.RestartPolicy = "no"
@@ -738,6 +780,9 @@ func dockerOptions(host dockerHostConfig) (container.Options, error) {
 		}
 		options.NetworkMode, options.NetworkName = "bridge", mode
 	}
+	if len(host.Binds)+len(host.Mounts) > maxDockerEngineMountCount {
+		return options, fmt.Errorf("Docker create supports at most %d combined HostConfig.Binds and HostConfig.Mounts entries", maxDockerEngineMountCount)
+	}
 	binds := make([]container.BindMount, 0, len(host.Binds))
 	for index, value := range host.Binds {
 		mount, err := parseDockerBind(value)
@@ -746,7 +791,16 @@ func dockerOptions(host dockerHostConfig) (container.Options, error) {
 		}
 		binds = append(binds, mount)
 	}
+	structuredBinds, structuredTmpfs, err := parseDockerMounts(host.Mounts)
+	if err != nil {
+		return options, err
+	}
+	binds = append(binds, structuredBinds...)
 	options.BindMounts = binds
+	options.TmpfsMounts = structuredTmpfs
+	if err := validateUniqueDockerMountTargets(options.BindMounts, options.TmpfsMounts); err != nil {
+		return options, err
+	}
 	ports, err := parseDockerPortBindings(host.PortBindings)
 	if err != nil {
 		return options, err
@@ -756,46 +810,221 @@ func dockerOptions(host dockerHostConfig) (container.Options, error) {
 }
 
 func parseDockerBind(value string) (container.BindMount, error) {
-	var result container.BindMount
+	var empty container.BindMount
 	parts := strings.Split(value, ":")
 	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[1] == "" {
-		return result, fmt.Errorf("expected HOST_PATH_OR_VOLUME:CONTAINER_PATH[:ro|rw]")
+		return empty, fmt.Errorf("expected HOST_PATH_OR_VOLUME:CONTAINER_PATH[:ro|rw]")
 	}
-	if !filepath.IsAbs(parts[1]) || filepath.Clean(parts[1]) == "/" {
-		return result, fmt.Errorf("container target must be an absolute non-root path")
-	}
-	result.Target = filepath.Clean(parts[1])
+	readOnly := false
 	if len(parts) == 3 {
 		switch parts[2] {
 		case "ro":
-			result.ReadOnly = true
+			readOnly = true
 		case "rw":
 		default:
-			return result, fmt.Errorf("mount mode must be ro or rw")
+			return empty, fmt.Errorf("mount mode must be ro or rw")
 		}
 	}
-	if filepath.IsAbs(parts[0]) {
-		result.Source = filepath.Clean(parts[0])
+	// The legacy colon-delimited form historically cleaned its source path
+	// before validation. Structured Mounts use parseDockerBindPaths directly
+	// so valid POSIX source paths containing ':' remain unambiguous.
+	return parseDockerBindPaths(filepath.Clean(parts[0]), parts[1], readOnly)
+}
+
+func parseDockerBindPaths(source, rawTarget string, readOnly bool) (container.BindMount, error) {
+	var result container.BindMount
+	target, err := validateDockerMountTarget(rawTarget)
+	if err != nil {
+		return result, err
+	}
+	result.Target, result.ReadOnly = target, readOnly
+	if filepath.IsAbs(source) {
+		result.Source = source
 		if err := validateDockerBindSource(result.Source); err != nil {
 			return result, err
 		}
 	} else {
-		if err := volume.ValidateName(parts[0]); err != nil {
+		if err := volume.ValidateName(source); err != nil {
 			return result, fmt.Errorf("source must be an absolute host path or a pre-created Boxr volume name: %w", err)
 		}
-		item, err := volume.Get(parts[0])
+		item, err := volume.Get(source)
 		if err != nil {
-			return result, fmt.Errorf("resolve named volume %q: %w", parts[0], err)
+			return result, fmt.Errorf("resolve named volume %q: %w", source, err)
 		}
 		result.Source = item.Path
 	}
-	for _, part := range strings.Split(filepath.ToSlash(result.Target), "/") {
-		if part == ".." {
-			return result, fmt.Errorf("target path cannot contain '..'")
-		}
-	}
 	return result, nil
 }
+func validateDockerMountTarget(raw string) (string, error) {
+	if raw == "" || !filepath.IsAbs(raw) || strings.ContainsAny(raw, "\x00\r\n") {
+		return "", fmt.Errorf("mount target must be an absolute path")
+	}
+	for _, part := range strings.Split(filepath.ToSlash(raw), "/") {
+		if part == ".." {
+			return "", fmt.Errorf("mount target cannot contain '..'")
+		}
+	}
+	clean := filepath.Clean(raw)
+	if clean == "/" {
+		return "", fmt.Errorf("mount target cannot be the container root")
+	}
+	return clean, nil
+}
+
+// parseDockerMounts translates only mount behaviours that Boxr's local Linux
+// runtime can represent faithfully. Unknown fields and unsupported Docker
+// mount options fail closed instead of being silently discarded.
+func parseDockerMounts(rawMounts []json.RawMessage) ([]container.BindMount, []container.TmpfsMount, error) {
+	if len(rawMounts) > 64 {
+		return nil, nil, fmt.Errorf("HostConfig.Mounts supports at most 64 entries")
+	}
+	binds := make([]container.BindMount, 0, len(rawMounts))
+	tmpfs := make([]container.TmpfsMount, 0, len(rawMounts))
+	var totalTmpfsBytes int64
+	for index, raw := range rawMounts {
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) == 0 || trimmed[0] != '{' {
+			return nil, nil, fmt.Errorf("HostConfig.Mounts[%d] must be a JSON object", index)
+		}
+		var mount dockerMount
+		decoder := json.NewDecoder(bytes.NewReader(trimmed))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&mount); err != nil {
+			return nil, nil, fmt.Errorf("HostConfig.Mounts[%d]: %w", index, err)
+		}
+		var extra any
+		if err := decoder.Decode(&extra); err != io.EOF {
+			return nil, nil, fmt.Errorf("HostConfig.Mounts[%d] must contain one JSON object", index)
+		}
+		target, err := validateDockerMountTarget(mount.Target)
+		if err != nil {
+			return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].Target: %w", index, err)
+		}
+		if mount.Consistency != "" && mount.Consistency != "default" && mount.Consistency != "consistent" {
+			return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].Consistency %q is unsupported", index, mount.Consistency)
+		}
+		switch mount.Type {
+		case "bind":
+			if mount.VolumeOptions != nil || mount.TmpfsOptions != nil {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d]: BindOptions cannot be combined with VolumeOptions or TmpfsOptions", index)
+			}
+			if !filepath.IsAbs(mount.Source) || filepath.Clean(mount.Source) != mount.Source {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].Source must be a clean absolute host path", index)
+			}
+			if mount.BindOptions != nil {
+				options := mount.BindOptions
+				if options.CreateMountpoint || options.NonRecursive || options.ReadOnlyNonRecursive || options.ReadOnlyForceRecursive {
+					return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].BindOptions requests an unsupported host mount operation", index)
+				}
+				if options.Propagation != "" && options.Propagation != "rprivate" {
+					return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].BindOptions.Propagation supports only rprivate", index)
+				}
+			}
+			mode := "rw"
+			if mount.ReadOnly {
+				mode = "ro"
+			}
+			parsed, err := parseDockerBindPaths(mount.Source, target, mount.ReadOnly)
+			if err != nil {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d]: %w", index, err)
+			}
+			binds = append(binds, parsed)
+		case "volume":
+			if mount.BindOptions != nil || mount.TmpfsOptions != nil {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d]: VolumeOptions cannot be combined with BindOptions or TmpfsOptions", index)
+			}
+			if mount.Source == "" {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].Source must name a pre-created Boxr volume", index)
+			}
+			if mount.VolumeOptions == nil || !mount.VolumeOptions.NoCopy {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].VolumeOptions.NoCopy must be true because volume copy-up is not implemented", index)
+			}
+			if len(mount.VolumeOptions.Labels) > 0 || mount.VolumeOptions.Subpath != "" || mount.VolumeOptions.DriverConfig != nil {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].VolumeOptions supports only NoCopy=true", index)
+			}
+			if err := volume.ValidateName(mount.Source); err != nil {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].Source is not a valid Boxr volume name: %w", index, err)
+			}
+			if _, err := volume.Get(mount.Source); err != nil {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d] requires a pre-created Boxr volume: %w", index, err)
+			}
+			parsed, err := parseDockerBindPaths(mount.Source, target, mount.ReadOnly)
+			if err != nil {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d]: %w", index, err)
+			}
+			binds = append(binds, parsed)
+		case "tmpfs":
+			if mount.Source != "" {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].Source must be empty for tmpfs mounts", index)
+			}
+			if mount.ReadOnly {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d]: read-only tmpfs mounts are not supported", index)
+			}
+			if mount.BindOptions != nil || mount.VolumeOptions != nil {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d]: TmpfsOptions cannot be combined with BindOptions or VolumeOptions", index)
+			}
+			tmpfsMount := container.TmpfsMount{Target: target, Mode: 01777}
+			if mount.TmpfsOptions == nil || mount.TmpfsOptions.SizeBytes <= 0 || mount.TmpfsOptions.SizeBytes > maxDockerEngineTmpfsBytes {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].TmpfsOptions.SizeBytes must be between 1 byte and %d bytes", index, maxDockerEngineTmpfsBytes)
+			}
+			options := mount.TmpfsOptions
+			if options.Mode != nil && *options.Mode > 07777 {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].TmpfsOptions.Mode must be at most 07777", index)
+			}
+			if len(options.Options) > 0 {
+				return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].TmpfsOptions.Options are not supported", index)
+			}
+			if options.SizeBytes > maxDockerEngineTmpfsTotalBytes-totalTmpfsBytes {
+				return nil, nil, fmt.Errorf("combined Docker tmpfs mounts exceed %d bytes", maxDockerEngineTmpfsTotalBytes)
+			}
+			totalTmpfsBytes += options.SizeBytes
+			tmpfsMount.SizeBytes = options.SizeBytes
+			if options.Mode != nil {
+				tmpfsMount.Mode = *options.Mode
+			}
+			tmpfs = append(tmpfs, tmpfsMount)
+		default:
+			return nil, nil, fmt.Errorf("HostConfig.Mounts[%d].Type %q is unsupported (supported: bind, volume, tmpfs)", index, mount.Type)
+		}
+	}
+	return binds, tmpfs, nil
+}
+
+func dockerMountTargetContains(parent, child string) bool {
+	relative, err := filepath.Rel(parent, child)
+	if err != nil || relative == ".." || filepath.IsAbs(relative) {
+		return false
+	}
+	return relative == "." || !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func validateUniqueDockerMountTargets(binds []container.BindMount, tmpfs []container.TmpfsMount) error {
+	seen := make([]string, 0, len(binds)+len(tmpfs))
+	check := func(target string) error {
+		for _, previous := range seen {
+			if previous == target {
+				return fmt.Errorf("multiple Docker mounts target %q", target)
+			}
+			if dockerMountTargetContains(previous, target) || dockerMountTargetContains(target, previous) {
+				return fmt.Errorf("nested Docker mount targets %q and %q are not supported", previous, target)
+			}
+		}
+		seen = append(seen, target)
+		return nil
+	}
+	for _, mount := range binds {
+		if err := check(mount.Target); err != nil {
+			return err
+		}
+	}
+	for _, mount := range tmpfs {
+		if err := check(mount.Target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateDockerBindSource(path string) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return fmt.Errorf("bind source must be a clean absolute path")
