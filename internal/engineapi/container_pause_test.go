@@ -136,7 +136,6 @@ func TestDockerContainerPauseRejectsQueriesAndInvalidStates(t *testing.T) {
 	}
 }
 
-
 func TestDockerContainerPauseAndUnpauseSerializePerContainer(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record := createEngineAPITestContainer(t, "pause-concurrency", container.Options{CgroupEnabled: true})

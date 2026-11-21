@@ -52,7 +52,9 @@ func (s *Server) handleContainerUpdate(writer http.ResponseWriter, request *http
 		writeError(writer, http.StatusBadRequest, err)
 		return
 	}
-	input, err := decodeDockerContainerUpdateRequest(request)
+
+	unlock := s.containerTransitions.lock(query)
+	defer unlock()	input, err := decodeDockerContainerUpdateRequest(request)
 	if err != nil {
 		writeError(writer, http.StatusBadRequest, err)
 		return

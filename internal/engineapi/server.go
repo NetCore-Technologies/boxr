@@ -33,7 +33,7 @@ const (
 
 type Server struct {
 	version               string
-	containerTransitions containerTransitionLocks
+	containerTransitions  containerTransitionLocks
 	imageMu               sync.Mutex
 	volumeMu              sync.Mutex
 	containerPruneMu      sync.Mutex
