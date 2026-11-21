@@ -286,6 +286,7 @@ type Hooks struct {
 	OnStart func(hostPID int) error
 	OnReady func(hostPID int)
 	OnExit  func(hostPID int, runErr error) error
+	Stdin   io.Reader
 	Stdout  io.Writer
 	Stderr  io.Writer
 }
