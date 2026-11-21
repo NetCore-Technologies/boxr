@@ -23,3 +23,7 @@ The stream is newline-delimited JSON rather than one enclosing JSON array, so it
 ## Table output
 
 `boxr stats --format table ID|NAME` prints a single readable snapshot. Adding `--watch` emits a header once and then timestamped rows at the chosen interval. JSON remains the default and is unchanged.
+
+## Docker Engine API stats
+
+`GET /containers/{id}/stats?stream=false` returns Docker-shaped CPU, memory, PID, block-I/O and per-interface network counters from cgroup v2 and the verified container network namespace. Streaming mode emits one JSON sample per second and carries the previous CPU counters in `precpu_stats`, allowing Docker clients to calculate interval CPU usage. Docker-created containers create a Boxr cgroup even without explicit limits; Boxr enables optional telemetry controllers only when they are already delegated by the host. Unlimited memory limits fall back to host physical memory, and unavailable optional cgroup controllers are not treated as enforced limits.
