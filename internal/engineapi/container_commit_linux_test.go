@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	imageStore "github.com/manit6752025/boxr/internal/image"
@@ -51,8 +52,7 @@ func TestDockerContainerCommitSnapshotsWritableLayerAndConfig(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(upper, "etc", "boxr"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(upper, "etc", "boxr", "committed.conf"), []byte("committed=true
-"), 0640); err != nil {
+	if err := os.WriteFile(filepath.Join(upper, "etc", "boxr", "committed.conf"), []byte("committed=true" + string([]byte{10})), 0640); err != nil {
 		t.Fatal(err)
 	}
 
@@ -93,8 +93,7 @@ func TestDockerContainerCommitSnapshotsWritableLayerAndConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "committed=true
-" {
+	if string(data) != "committed=true" + string([]byte{10}) {
 		t.Fatalf("committed writable-layer content = %q", data)
 	}
 }
