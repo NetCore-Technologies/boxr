@@ -1121,7 +1121,7 @@ func TestDockerOptionsRejectsUnsupportedOrImpossibleLimits(t *testing.T) {
 	}{
 		{name: "swap without memory", host: dockerHostConfig{MemorySwap: 1024}},
 		{name: "swap smaller than memory", host: dockerHostConfig{Memory: 2048, MemorySwap: 1024}},
-		{name: "negative limit", host: dockerHostConfig{PidsLimit: -1}},
+		{name: "negative limit", host: dockerHostConfig{PidsLimit: -2}},
 		{name: "privileged", host: dockerHostConfig{Privileged: true}},
 		{name: "capability add", host: dockerHostConfig{CapAdd: []string{"SYS_ADMIN"}}},
 		{name: "auto remove with restart", host: dockerHostConfig{AutoRemove: true, RestartPolicy: dockerRestartPolicyConfig{Name: "always"}}},
