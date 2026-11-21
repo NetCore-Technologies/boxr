@@ -71,6 +71,13 @@ func TestSetCgroupFrozenAtRejectsMissingKernelConfirmation(t *testing.T) {
 	if err := setCgroupFrozenAt(root, pid, true, 15*time.Millisecond, time.Millisecond); err == nil {
 		t.Fatal("freezer transition succeeded without kernel confirmation")
 	}
+	restored, err := os.ReadFile(filepath.Join(directory, "cgroup.freeze"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(restored)) != "0" {
+		t.Fatalf("failed freezer transition did not restore the prior state: %q", restored)
+	}
 }
 
 func TestSetCgroupFrozenAtRejectsSymlinkedControlFiles(t *testing.T) {
@@ -118,4 +125,38 @@ func TestParseCgroupFrozenEvent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSetCgroupFrozenAtWaitsForThawConfirmation(t *testing.T) {
+	root := newExtendedCgroupFixture(t)
+	const pid = 5160
+	directory := filepath.Join(root, "boxr", "5160")
+	if err := os.Mkdir(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for path, value := range map[string]string{
+		filepath.Join(directory, "cgroup.freeze"): "1",
+		filepath.Join(directory, "cgroup.events"): "populated 1\nfrozen 1\n",
+	} {
+		if err := os.WriteFile(path, []byte(value), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			value, err := os.ReadFile(filepath.Join(directory, "cgroup.freeze"))
+			if err == nil && strings.TrimSpace(string(value)) == "0" {
+				_ = os.WriteFile(filepath.Join(directory, "cgroup.events"), []byte("populated 1\nfrozen 0\n"), 0644)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	if err := setCgroupFrozenAt(root, pid, false, 500*time.Millisecond, time.Millisecond); err != nil {
+		t.Fatalf("setCgroupFrozenAt(thawed): %v", err)
+	}
+	<-done
 }

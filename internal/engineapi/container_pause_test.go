@@ -12,11 +12,15 @@ import (
 func TestDockerContainerPauseAndUnpauseFreezeAndPersistState(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record := createEngineAPITestContainer(t, "pause-test", container.Options{CgroupEnabled: true})
+	running, err := state.Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	server.verifyUpdatePID = func(state.Record) error { return nil }
 	var transitions []bool
 	server.setCgroupFrozen = func(pid int, frozen bool) error {
-		if pid != record.PID {
-			t.Fatalf("freezer PID = %d, want %d", pid, record.PID)
+		if pid != running.PID {
+			t.Fatalf("freezer PID = %d, want %d", pid, running.PID)
 		}
 		transitions = append(transitions, frozen)
 		return nil

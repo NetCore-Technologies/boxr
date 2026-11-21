@@ -3,6 +3,7 @@
 package container
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,15 +50,48 @@ func setCgroupFrozenAt(root string, pid int, frozen bool, timeout, poll time.Dur
 			return fmt.Errorf("cgroup freezer control %s is not a regular file", filepath.Base(path))
 		}
 	}
+	current, err := os.ReadFile(freezePath)
+	if err != nil {
+		return fmt.Errorf("read current cgroup.freeze: %w", err)
+	}
+	var previousFrozen bool
+	switch strings.TrimSpace(string(current)) {
+	case "0":
+		previousFrozen = false
+	case "1":
+		previousFrozen = true
+	default:
+		return fmt.Errorf("invalid current cgroup.freeze value %q", strings.TrimSpace(string(current)))
+	}
+
 	value := "0"
 	if frozen {
 		value = "1"
 	}
-	if err := writeCgroupFile(freezePath, value); err != nil {
-		return fmt.Errorf("write cgroup.freeze: %w", err)
+	restore := func(cause error) error {
+		previousValue := "0"
+		if previousFrozen {
+			previousValue = "1"
+		}
+		if writeErr := writeCgroupFile(freezePath, previousValue); writeErr != nil {
+			return errors.Join(cause, fmt.Errorf("restore previous cgroup.freeze value: %w", writeErr))
+		}
+		waitErr := waitForCgroupFrozen(eventsPath, previousFrozen, time.Now().Add(timeout), poll)
+		if waitErr != nil {
+			return errors.Join(cause, fmt.Errorf("verify restored cgroup freezer state: %w", waitErr))
+		}
+		return cause
 	}
+	if err := writeCgroupFile(freezePath, value); err != nil {
+		return restore(fmt.Errorf("write cgroup.freeze: %w", err))
+	}
+	if err := waitForCgroupFrozen(eventsPath, frozen, time.Now().Add(timeout), poll); err != nil {
+		return restore(err)
+	}
+	return nil
+}
 
-	deadline := time.Now().Add(timeout)
+func waitForCgroupFrozen(eventsPath string, frozen bool, deadline time.Time, poll time.Duration) error {
 	for {
 		data, err := os.ReadFile(eventsPath)
 		if err != nil {
