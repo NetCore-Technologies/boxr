@@ -2842,6 +2842,23 @@ func TestDeploymentStopTimeoutUsesPersistedServiceOverride(t *testing.T) {
 }
 
 func TestDeploymentStopGraceChildProcess(t *testing.T) {
+	if value := os.Getenv("BOXR_STOP_SIGNAL_CHILD"); value != "" {
+		var configured syscall.Signal
+		switch value {
+		case "SIGUSR1":
+			configured = syscall.Signal(10)
+		case "SIGUSR2":
+			configured = syscall.Signal(12)
+		default:
+			t.Fatalf("unsupported child test signal %q", value)
+		}
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, configured)
+		defer signal.Stop(signals)
+		_, _ = fmt.Fprintln(os.Stdout, "ready")
+		<-signals
+		return
+	}
 	if os.Getenv("BOXR_STOP_GRACE_CHILD") != "1" {
 		return
 	}
@@ -2893,6 +2910,49 @@ func TestStopDeploymentProcessesHonorsIndependentGracePeriods(t *testing.T) {
 	}
 	if errOut.Len() != 0 {
 		t.Fatalf("stop process errors: %s", errOut.String())
+	}
+}
+
+func TestStopDeploymentProcessesForwardsConfiguredSignals(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		signal syscall.Signal
+	}{
+		{name: "SIGUSR1", signal: syscall.Signal(10)},
+		{name: "SIGUSR2", signal: syscall.Signal(12)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			command := exec.Command(os.Args[0], "-test.run=^TestDeploymentStopGraceChildProcess$")
+			command.Env = append(os.Environ(), "BOXR_STOP_SIGNAL_CHILD="+test.name)
+			pipe, err := command.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			command.Stderr = io.Discard
+			if err := command.Start(); err != nil {
+				t.Fatal(err)
+			}
+			line, err := bufio.NewReader(pipe).ReadString('\n')
+			if err != nil || line != "ready\n" {
+				_ = command.Process.Kill()
+				_ = command.Wait()
+				t.Fatalf("signal helper did not become ready: line=%q err=%v", line, err)
+			}
+			process := &deploymentProcess{service: "signal-test", stopTimeout: time.Second, stopSignal: test.signal, command: command}
+			exits := make(chan deploymentProcessExit, 1)
+			go func() {
+				exits <- deploymentProcessExit{service: process.service, err: process.command.Wait()}
+			}()
+			var out, errOut bytes.Buffer
+			exited := make(map[string]deploymentProcessExit)
+			stopDeploymentProcesses([]*deploymentProcess{process}, exited, exits, time.Second, &out, &errOut)
+			if len(exited) != 1 {
+				t.Fatalf("configured %s did not stop child cleanly: exited=%#v stdout=%q stderr=%q", test.name, exited, out.String(), errOut.String())
+			}
+			if exited["signal-test"].err != nil {
+				t.Fatalf("child exited with error after %s: %v", test.name, exited[test.name].err)
+			}
+		})
 	}
 }
 
