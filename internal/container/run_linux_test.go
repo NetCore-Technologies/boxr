@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -93,7 +94,6 @@ func testEnvironmentValue(values []string, key string) (string, bool) {
 	}
 	return "", false
 }
-
 
 func TestRunAsInitForwardsUserSignalsToWorkloadGroup(t *testing.T) {
 	cases := []struct {
