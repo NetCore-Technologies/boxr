@@ -166,7 +166,7 @@ func TestLoadComposeRejectsSemanticsBoxrCannotRepresent(t *testing.T) {
 		"long stop grace period":           "services:\n  api:\n    image: alpine\n    network_mode: none\n    stop_grace_period: 10m1s\n",
 		"implicit default bridge":          "services:\n  api:\n    image: alpine\n",
 		"non-external network":             "services:\n  api:\n    image: alpine\n    networks: [app]\nnetworks:\n  app: {}\n",
-		"unsupported dependency condition": "services:\n  api:\n    image: alpine\n    network_mode: none\n    depends_on:\n      db:\n        condition: service_completed_successfully\n  db:\n    image: postgres\n    network_mode: none\n",
+		"unsupported dependency condition": "services:\n  api:\n    image: alpine\n    network_mode: none\n    depends_on:\n      db:\n        condition: service_failed\n  db:\n    image: postgres\n    network_mode: none\n",
 		"memory reservation exceeds hard limit": "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    mem_limit: 128m\\n    mem_reservation: 256m\\n",
 		"invalid user syntax":               "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    user: \"bad/user\"\\n",
 		"invalid user whitespace":           "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    user: \"1000: 1000\"\\n",
@@ -1031,5 +1031,35 @@ func TestParseComposeInit(t *testing.T) {
 		if err := parseComposeInit(node); err == nil {
 			t.Errorf("parseComposeInit(%#v) unexpectedly succeeded", node)
 		}
+	}
+}
+
+
+func TestLoadComposeSupportsServiceCompletedSuccessfullyDependency(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "compose.yaml")
+	contents := "services:\n" +
+		"  migrate:\n    image: example/migrate:1.0\n    network_mode: none\n" +
+		"  api:\n    image: example/api:1.0\n    network_mode: none\n    depends_on:\n      migrate:\n        condition: service_completed_successfully\n"
+	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load Compose completion dependency: %v", err)
+	}
+	api := file.Services["api"]
+	if !reflect.DeepEqual(api.DependsOn, []string{"migrate"}) ||
+		!reflect.DeepEqual(api.DependsOnCompleted, []string{"migrate"}) {
+		t.Fatalf("api dependencies = %#v / %#v", api.DependsOn, api.DependsOnCompleted)
+	}
+	plan, err := BuildPlan(file)
+	if err != nil {
+		t.Fatalf("BuildPlan: %v", err)
+	}
+	if !reflect.DeepEqual(plan.StartGroups, [][]string{{"migrate"}, {"api"}}) {
+		t.Fatalf("start groups = %#v", plan.StartGroups)
+	}
+	if !reflect.DeepEqual(plan.Services[1].DependsOnCompleted, []string{"migrate"}) {
+		t.Fatalf("planned completed dependencies = %#v", plan.Services[1].DependsOnCompleted)
 	}
 }

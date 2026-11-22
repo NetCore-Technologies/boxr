@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"slices"
 	"strings"
 
 	"github.com/manit6752025/boxr/internal/container"
@@ -58,7 +59,8 @@ type Service struct {
 	Command          []string          `json:"command,omitempty"`
 	Options          container.Options `json:"options"`
 	DependsOn        []string          `json:"dependsOn,omitempty"`
-	DependsOnHealthy []string          `json:"dependsOnHealthy,omitempty"`
+	DependsOnHealthy   []string          `json:"dependsOnHealthy,omitempty"`
+	DependsOnCompleted []string          `json:"dependsOnCompleted,omitempty"`
 	Volumes          []VolumeMount     `json:"volumes,omitempty"`
 	Profiles         []string          `json:"profiles,omitempty"`
 	EnvFiles         []string          `json:"envFiles,omitempty"`
@@ -76,6 +78,7 @@ type ServicePlan struct {
 	Image                    string                  `json:"image,omitempty"`
 	DependsOn                []string                `json:"dependsOn,omitempty"`
 	DependsOnHealthy         []string                `json:"dependsOnHealthy,omitempty"`
+	DependsOnCompleted       []string                `json:"dependsOnCompleted,omitempty"`
 	Profiles                 []string                `json:"profiles,omitempty"`
 	ReadinessType            string                  `json:"readinessType,omitempty"`
 	Volumes                  []VolumeMount           `json:"volumes,omitempty"`
@@ -496,6 +499,28 @@ func buildPlan(file File) (Plan, error) {
 				return plan, fmt.Errorf("service %q marks %q as healthy without declaring it in dependsOn", name, dependency)
 			}
 		}
+		completedDeps := append([]string(nil), service.DependsOnCompleted...)
+		if len(completedDeps) > MaxServices {
+			return plan, fmt.Errorf("service %q has more than %d completed dependencies", name, MaxServices)
+		}
+		sort.Strings(completedDeps)
+		for index, dependency := range completedDeps {
+			if !serviceNamePattern.MatchString(dependency) {
+				return plan, fmt.Errorf("service %q has invalid completed dependency name %q", name, dependency)
+			}
+			if dependency == name {
+				return plan, fmt.Errorf("service %q cannot wait for itself to complete", name)
+			}
+			if index > 0 && completedDeps[index-1] == dependency {
+				return plan, fmt.Errorf("service %q repeats completed dependency %q", name, dependency)
+			}
+			if _, declared := dependencySet[dependency]; !declared {
+				return plan, fmt.Errorf("service %q marks %q as completed without declaring it in dependsOn", name, dependency)
+			}
+			if slices.Contains(healthyDeps, dependency) {
+				return plan, fmt.Errorf("service %q cannot require %q to be both healthy and completed", name, dependency)
+			}
+		}
 		dependencies[name] = deps
 		indegree[name] = len(deps)
 
@@ -513,6 +538,7 @@ func buildPlan(file File) (Plan, error) {
 			Image:                    service.Image,
 			DependsOn:                deps,
 			DependsOnHealthy:         healthyDeps,
+			DependsOnCompleted:       completedDeps,
 			Profiles:                 append([]string(nil), service.Profiles...),
 			ReadinessType:            readinessType,
 			Volumes:                  append([]VolumeMount(nil), service.Volumes...),

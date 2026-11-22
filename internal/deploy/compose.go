@@ -319,7 +319,7 @@ func convertComposeService(name string, source composeService, networkNames map[
 	if err != nil {
 		return result, err
 	}
-	dependencies, healthyDependencies, err := parseComposeDependencies(&source.DependsOn)
+	dependencies, healthyDependencies, completedDependencies, err := parseComposeDependencies(&source.DependsOn)
 	if err != nil {
 		return result, err
 	}
@@ -377,7 +377,8 @@ func convertComposeService(name string, source composeService, networkNames map[
 		Command:          command,
 		Options:          options,
 		DependsOn:        dependencies,
-		DependsOnHealthy: healthyDependencies,
+		DependsOnHealthy:   healthyDependencies,
+		DependsOnCompleted: completedDependencies,
 		Profiles:         append([]string(nil), source.Profiles...),
 		EnvFiles:         envFiles,
 		Volumes:          namedVolumes,
@@ -996,17 +997,18 @@ func splitComposeCommand(value string) ([]string, error) {
 	return result, nil
 }
 
-func parseComposeDependencies(node *yaml.Node) ([]string, []string, error) {
+func parseComposeDependencies(node *yaml.Node) ([]string, []string, []string, error) {
 	if node.Kind == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	var result []string
 	var healthy []string
+	var completed []string
 	switch node.Kind {
 	case yaml.SequenceNode:
 		for _, item := range node.Content {
 			if item.Kind != yaml.ScalarNode || item.Value == "" {
-				return nil, nil, fmt.Errorf("depends_on must contain service names")
+				return nil, nil, nil, fmt.Errorf("depends_on must contain service names")
 			}
 			result = append(result, item.Value)
 		}
@@ -1014,40 +1016,43 @@ func parseComposeDependencies(node *yaml.Node) ([]string, []string, error) {
 		for index := 0; index+1 < len(node.Content); index += 2 {
 			name, config := node.Content[index], node.Content[index+1]
 			if name.Kind != yaml.ScalarNode || name.Value == "" || config.Kind != yaml.MappingNode {
-				return nil, nil, fmt.Errorf("depends_on mapping values must use condition objects")
+				return nil, nil, nil, fmt.Errorf("depends_on mapping values must use condition objects")
 			}
 			condition := "service_started"
 			for field := 0; field+1 < len(config.Content); field += 2 {
 				key, value := config.Content[field].Value, config.Content[field+1]
 				switch key {
 				case "condition":
-					if value.Kind != yaml.ScalarNode || (value.Value != "service_started" && value.Value != "service_healthy" && value.Value != "") {
-						return nil, nil, fmt.Errorf("depends_on condition %q is unsupported; supported conditions are service_started and service_healthy", value.Value)
+					if value.Kind != yaml.ScalarNode || (value.Value != "service_started" && value.Value != "service_healthy" && value.Value != "service_completed_successfully" && value.Value != "") {
+						return nil, nil, nil, fmt.Errorf("depends_on condition %q is unsupported; supported conditions are service_started, service_healthy, and service_completed_successfully", value.Value)
 					}
 					if value.Value != "" {
 						condition = value.Value
 					}
 				case "required":
 					if value.Kind != yaml.ScalarNode || value.Value != "true" {
-						return nil, nil, fmt.Errorf("optional dependencies are not supported")
+						return nil, nil, nil, fmt.Errorf("optional dependencies are not supported")
 					}
 				case "restart":
 					if value.Kind != yaml.ScalarNode || value.Value != "false" {
-						return nil, nil, fmt.Errorf("dependency restart propagation is not supported")
+						return nil, nil, nil, fmt.Errorf("dependency restart propagation is not supported")
 					}
 				default:
-					return nil, nil, fmt.Errorf("depends_on option %q is not supported", key)
+					return nil, nil, nil, fmt.Errorf("depends_on option %q is not supported", key)
 				}
 			}
 			result = append(result, name.Value)
-			if condition == "service_healthy" {
+			switch condition {
+			case "service_healthy":
 				healthy = append(healthy, name.Value)
+			case "service_completed_successfully":
+				completed = append(completed, name.Value)
 			}
 		}
 	default:
-		return nil, nil, fmt.Errorf("depends_on must be a service list or mapping")
+		return nil, nil, nil, fmt.Errorf("depends_on must be a service list or mapping")
 	}
-	return result, healthy, nil
+	return result, healthy, completed, nil
 }
 
 func parseComposeEnvironment(node *yaml.Node) ([]string, error) {

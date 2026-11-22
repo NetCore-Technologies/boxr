@@ -127,6 +127,14 @@ func TestBuildPlanRejectsInvalidGraphsAndServices(t *testing.T) {
 			"db":  validService,
 			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"db"}, DependsOnHealthy: []string{"db"}},
 		}},
+		"completed dependency without declared edge": {Version: 1, Services: map[string]Service{
+			"job": validService,
+			"web": {Command: []string{"/bin/true"}, DependsOnCompleted: []string{"job"}},
+		}},
+		"completed dependency both healthy and completed": {Version: 1, Services: map[string]Service{
+			"job": {Command: []string{"/bin/true"}, Options: container.Options{Healthcheck: &container.HealthcheckConfig{Test: []string{"CMD", "/bin/true"}}}},
+			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"job"}, DependsOnHealthy: []string{"job"}, DependsOnCompleted: []string{"job"}},
+		}},
 		"healthy dependency with disabled healthcheck": {Version: 1, Services: map[string]Service{
 			"db":  {Command: []string{"/bin/true"}, Options: container.Options{Healthcheck: &container.HealthcheckConfig{Test: []string{"NONE"}}}},
 			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"db"}, DependsOnHealthy: []string{"db"}},
