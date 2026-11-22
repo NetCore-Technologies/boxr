@@ -375,6 +375,27 @@ func createFlagTakesValue(name string) bool {
 	}
 }
 
+func resolveImageCommand(imageEntrypoint, imageCommand []string, entrypointOverride *[]string, providedCommand []string) []string {
+	entrypoint := imageEntrypoint
+	defaultCommand := imageCommand
+	if entrypointOverride != nil {
+		entrypoint = *entrypointOverride
+		// Compose clears the image CMD whenever entrypoint is explicitly set.
+		defaultCommand = nil
+	}
+	arguments := providedCommand
+	if len(arguments) == 0 {
+		arguments = defaultCommand
+	}
+	if len(entrypoint) == 0 {
+		return append([]string(nil), arguments...)
+	}
+	command := make([]string, 0, len(entrypoint)+len(arguments))
+	command = append(command, entrypoint...)
+	command = append(command, arguments...)
+	return command
+}
+
 func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) int {
 	var detached bool
 	var opts container.Options
@@ -383,6 +404,7 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 	var configPath string
 	var imageReference string
 	var configCommand []string
+	var configEntrypoint *[]string
 	var configEnv []string
 	var env, envFiles, capDrop, mounts, tmpfs, labels, volumes, publish envList
 	var dryRun bool
@@ -407,6 +429,7 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 			opts.Name = loaded.Name
 		}
 		configCommand = loaded.Command
+		configEntrypoint = loaded.Entrypoint
 		configEnv = append(configEnv, loaded.Options.Env...)
 		// Config metadata is the low-priority label source. Labels in the
 		// options object override metadata, and explicit CLI --label flags
@@ -589,17 +612,9 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 		if opts.Workdir == "" {
 			opts.Workdir = imageRuntimeConfig.WorkingDir
 		}
-		if len(imageRuntimeConfig.Entrypoint) > 0 {
-			imageArguments := providedCommand
-			if len(imageArguments) == 0 {
-				imageArguments = imageRuntimeConfig.Cmd
-			}
-			commandArgs = append(append([]string(nil), imageRuntimeConfig.Entrypoint...), imageArguments...)
-		} else if len(providedCommand) == 0 {
-			commandArgs = append([]string(nil), imageRuntimeConfig.Cmd...)
-		}
 		opts.Labels = mergeLabels(imageRuntimeConfig.Labels, opts.Labels)
 	}
+	commandArgs = resolveImageCommand(imageRuntimeConfig.Entrypoint, imageRuntimeConfig.Cmd, configEntrypoint, providedCommand)
 	if len(commandArgs) == 0 {
 		fmt.Fprintln(stderr, "boxr run: a command is required (provide one after the options or in the config)")
 		flags.Usage()
@@ -3789,6 +3804,7 @@ var implementedFeatures = []string{
 	"Compose mem_limit cpus and pids_limit map to bounded cgroup v2 memory CPU quota and PID controls with strict scalar parsing",
 	"Compose mem_reservation maps to cgroup v2 memory.low and cpu_shares converts to cgroup v2 CPU weight",
 	"Compose service_completed_successfully waits for one-shot jobs to exit successfully before dependent groups start",
+	"Compose entrypoint overrides image ENTRYPOINT, clears image CMD when non-null, and preserves null inheritance semantics",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -4423,10 +4439,11 @@ func startDeploymentProcess(executable, stack string, order int, serviceName str
 		return nil, fmt.Errorf("prepare image service mounts: %w", err)
 	}
 	runFile := config.RunFile{
-		Version: 1,
-		Name:    options.Name,
-		Command: append([]string(nil), service.Command...),
-		Options: options,
+		Version:    1,
+		Name:       options.Name,
+		Command:    append([]string(nil), service.Command...),
+		Entrypoint: service.Entrypoint,
+		Options:    options,
 	}
 	data, err := json.Marshal(runFile)
 	if err != nil {

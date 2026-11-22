@@ -4349,6 +4349,40 @@ func TestDeploymentHealthyDependencyTimeoutUsesHealthcheckBudget(t *testing.T) {
 	}
 }
 
+func TestResolveImageCommandHonorsEntrypointOverride(t *testing.T) {
+	tests := []struct {
+		name            string
+		imageEntrypoint []string
+		imageCommand    []string
+		override        []string
+		overrideSet     bool
+		providedCommand []string
+		want            []string
+	}{
+		{name: "image defaults", imageEntrypoint: []string{"/image-entry"}, imageCommand: []string{"--serve"}, want: []string{"/image-entry", "--serve"}},
+		{name: "command overrides image CMD", imageEntrypoint: []string{"/image-entry"}, imageCommand: []string{"--default"}, providedCommand: []string{"--port", "80"}, want: []string{"/image-entry", "--port", "80"}},
+		{name: "entrypoint override clears image CMD", imageEntrypoint: []string{"/image-entry"}, imageCommand: []string{"--default"}, override: []string{"/compose-entry"}, overrideSet: true, want: []string{"/compose-entry"}},
+		{name: "entrypoint and command override", imageEntrypoint: []string{"/image-entry"}, imageCommand: []string{"--default"}, override: []string{"/compose-entry"}, overrideSet: true, providedCommand: []string{"--port", "80"}, want: []string{"/compose-entry", "--port", "80"}},
+		{name: "empty entrypoint override clears image defaults", imageEntrypoint: []string{"/image-entry"}, imageCommand: []string{"--default"}, override: []string{}, overrideSet: true, providedCommand: []string{"/explicit"}, want: []string{"/explicit"}},
+		{name: "explicit command with no image", providedCommand: []string{"/bin/sh"}, want: []string{"/bin/sh"}},
+		{name: "rootfs entrypoint", override: []string{"/rootfs/start"}, overrideSet: true, providedCommand: []string{"--foreground"}, want: []string{"/rootfs/start", "--foreground"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var override *[]string
+			if test.overrideSet {
+				overrideCopy := make([]string, len(test.override))
+				copy(overrideCopy, test.override)
+				override = &overrideCopy
+			}
+			got := resolveImageCommand(test.imageEntrypoint, test.imageCommand, override, test.providedCommand)
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("resolveImageCommand() = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestDeploymentOSStopSignalMapping(t *testing.T) {
 	cases := map[string]syscall.Signal{
 		"":        0,

@@ -31,6 +31,7 @@ services:
   api:
     image: ghcr.io/example/api:1.2.3
     command: /app/server --message "hello world"
+    entrypoint: ["/srv/entrypoint.sh", "--foreground"]
     depends_on:
       database:
         condition: service_started
@@ -73,6 +74,9 @@ networks:
 		t.Fatalf("deployment identity = version %d, name %q", file.Version, file.Name)
 	}
 	api := file.Services["api"]
+	if api.Entrypoint == nil || !reflect.DeepEqual(*api.Entrypoint, []string{"/srv/entrypoint.sh", "--foreground"}) {
+		t.Fatalf("entrypoint = %#v", api.Entrypoint)
+	}
 	if !reflect.DeepEqual(api.Command, []string{"/app/server", "--message", "hello world"}) {
 		t.Fatalf("command = %#v", api.Command)
 	}
@@ -156,7 +160,7 @@ func TestLoadComposeRejectsSemanticsBoxrCannotRepresent(t *testing.T) {
 		"image build":                           "services:\n  api:\n    build: .\n",
 		"named volumes":                         "services:\n  api:\n    image: alpine\n    network_mode: none\n    volumes: [data:/data]\n",
 		"top-level volumes":                     "services:\n  api:\n    image: alpine\n    network_mode: none\nvolumes:\n  data: {}\n",
-		"entrypoint override":                   "services:\n  api:\n    image: alpine\n    network_mode: none\n    entrypoint: [/bin/sh]\n",
+		"invalid entrypoint mapping":              "services:\n  api:\n    image: alpine\n    network_mode: none\n    entrypoint: {}\n",
 		"interactive tty":                       "services:\n  api:\n    image: alpine\n    network_mode: none\n    tty: true\n",
 		"privileged":                            "services:\n  api:\n    image: alpine\n    network_mode: none\n    privileged: true\n",
 		"restart policy":                        "services:\n  api:\n    image: alpine\n    network_mode: none\n    restart: always\n",
@@ -883,6 +887,42 @@ func TestParseComposeStopSignal(t *testing.T) {
 		if _, err := parseComposeStopSignal(input); err == nil {
 			t.Errorf("parseComposeStopSignal(%q) unexpectedly succeeded", input)
 		}
+	}
+}
+
+func TestParseComposeEntrypointPreservesOverridePresence(t *testing.T) {
+	if got, err := parseComposeEntrypoint(nil); err != nil || got != nil {
+		t.Fatalf("missing entrypoint = %#v, %v", got, err)
+	}
+	for _, node := range []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"},
+		{Kind: yaml.ScalarNode, Tag: "!!null", Value: ""},
+	} {
+		if got, err := parseComposeEntrypoint(node); err != nil || got != nil {
+			t.Errorf("null entrypoint = %#v, %v", got, err)
+		}
+	}
+	for _, node := range []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: ""},
+		{Kind: yaml.SequenceNode},
+	} {
+		got, err := parseComposeEntrypoint(node)
+		if err != nil || got == nil || len(*got) != 0 {
+			t.Errorf("empty entrypoint override = %#v, %v", got, err)
+		}
+	}
+	sequence := &yaml.Node{Kind: yaml.SequenceNode, Content: []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "/bin/sh"},
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "-c"},
+	}}
+	got, err := parseComposeEntrypoint(sequence)
+	if err != nil || got == nil || !reflect.DeepEqual(*got, []string{"/bin/sh", "-c"}) {
+		t.Fatalf("sequence entrypoint = %#v, %v", got, err)
+	}
+	scalar := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "/bin/sh -c"}
+	got, err = parseComposeEntrypoint(scalar)
+	if err != nil || got == nil || !reflect.DeepEqual(*got, []string{"/bin/sh", "-c"}) {
+		t.Fatalf("scalar entrypoint = %#v, %v", got, err)
 	}
 }
 

@@ -57,6 +57,7 @@ type VolumeMount struct {
 type Service struct {
 	Image              string            `json:"image,omitempty"`
 	Command            []string          `json:"command,omitempty"`
+	Entrypoint         *[]string         `json:"entrypoint,omitempty"`
 	Options            container.Options `json:"options"`
 	DependsOn          []string          `json:"dependsOn,omitempty"`
 	DependsOnHealthy   []string          `json:"dependsOnHealthy,omitempty"`
@@ -92,6 +93,8 @@ type ServicePlan struct {
 	CPUs                     float64                 `json:"cpus,omitempty"`
 	PidsLimit                int64                   `json:"pidsLimit,omitempty"`
 	CommandArgumentCount     int                     `json:"commandArgumentCount"`
+	EntrypointConfigured     bool                    `json:"entrypointConfigured"`
+	EntrypointArgumentCount  int                     `json:"entrypointArgumentCount"`
 	EnvironmentEntryCount    int                     `json:"environmentEntryCount"`
 	EnvironmentFileCount     int                     `json:"environmentFileCount"`
 	StartTimeoutMS           int                     `json:"startTimeoutMs,omitempty"`
@@ -325,11 +328,21 @@ func buildPlan(file File) (Plan, error) {
 			}
 			seenProfiles[profile] = struct{}{}
 		}
+		if service.Entrypoint != nil {
+			for index, argument := range *service.Entrypoint {
+				if argument == "" || strings.ContainsRune(argument, '\x00') {
+					return plan, fmt.Errorf("service %q entrypoint argument %d is empty or contains NUL", name, index)
+				}
+			}
+		}
 		if service.Image == "" {
-			if len(service.Command) == 0 {
-				return plan, fmt.Errorf("service %q must define an image or a command", name)
+			if len(service.Command) == 0 && (service.Entrypoint == nil || len(*service.Entrypoint) == 0) {
+				return plan, fmt.Errorf("service %q must define an image, command, or entrypoint", name)
 			}
 		} else {
+			if service.Entrypoint != nil && len(*service.Entrypoint) == 0 && len(service.Command) == 0 {
+				return plan, fmt.Errorf("service %q clears the image entrypoint and command but provides no replacement command", name)
+			}
 			if !imageReferencePattern.MatchString(service.Image) {
 				return plan, fmt.Errorf("service %q has an invalid image reference", name)
 			}
@@ -532,6 +545,10 @@ func buildPlan(file File) (Plan, error) {
 		if file.Name != "" {
 			containerName = ContainerName(file.Name, name)
 		}
+		entrypointArgumentCount := 0
+		if service.Entrypoint != nil {
+			entrypointArgumentCount = len(*service.Entrypoint)
+		}
 		servicePlans[name] = ServicePlan{
 			Name:                     name,
 			ContainerName:            containerName,
@@ -552,6 +569,8 @@ func buildPlan(file File) (Plan, error) {
 			CPUs:                     service.Options.CPUs,
 			PidsLimit:                service.Options.PidsLimit,
 			CommandArgumentCount:     len(service.Command),
+			EntrypointConfigured:     service.Entrypoint != nil,
+			EntrypointArgumentCount:  entrypointArgumentCount,
 			EnvironmentEntryCount:    len(service.Options.Env),
 			EnvironmentFileCount:     len(service.EnvFiles),
 			StartTimeoutMS:           service.StartTimeoutMS,

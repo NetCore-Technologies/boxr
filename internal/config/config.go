@@ -18,7 +18,8 @@ const MaxConfigBytes = 1 << 20
 type RunFile struct {
 	Version  int               `json:"version"`
 	Name     string            `json:"name,omitempty"`
-	Command  []string          `json:"command,omitempty"`
+	Command    []string          `json:"command,omitempty"`
+	Entrypoint *[]string         `json:"entrypoint,omitempty"`
 	Options  container.Options `json:"options"`
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
@@ -55,6 +56,13 @@ func Load(path string) (RunFile, error) {
 	for i, arg := range result.Command {
 		if arg == "" || strings.ContainsRune(arg, '\x00') {
 			return result, fmt.Errorf("command argument %d is empty or contains NUL", i)
+		}
+	}
+	if result.Entrypoint != nil {
+		for i, arg := range *result.Entrypoint {
+			if arg == "" || strings.ContainsRune(arg, '\x00') {
+				return result, fmt.Errorf("entrypoint argument %d is empty or contains NUL", i)
+			}
 		}
 	}
 	for key, value := range result.Metadata {

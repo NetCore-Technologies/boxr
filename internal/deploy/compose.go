@@ -254,8 +254,9 @@ func convertComposeService(name string, source composeService, networkNames map[
 	if source.Build.Kind != 0 {
 		return result, fmt.Errorf("build is not supported yet; build the image with boxr build and set image")
 	}
-	if source.Entrypoint.Kind != 0 {
-		return result, fmt.Errorf("entrypoint overrides are not supported yet")
+	entrypoint, err := parseComposeEntrypoint(&source.Entrypoint)
+	if err != nil {
+		return result, err
 	}
 	healthcheck, err := parseComposeHealthcheck(&source.Healthcheck)
 	if err != nil {
@@ -375,6 +376,7 @@ func convertComposeService(name string, source composeService, networkNames map[
 	return Service{
 		Image:              source.Image,
 		Command:            command,
+		Entrypoint:         entrypoint,
 		Options:            options,
 		DependsOn:          dependencies,
 		DependsOnHealthy:   healthyDependencies,

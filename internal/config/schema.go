@@ -15,6 +15,7 @@ func JSONSchema() string {
     "version": {"const": 1},
     "name": {"type": "string", "maxLength": 64},
     "command": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "entrypoint": {"type": "array", "items": {"type": "string", "minLength": 1}},
     "metadata": {"type": "object", "maxProperties": 64, "additionalProperties": {"type": "string"}},
     "options": {
       "type": "object",
