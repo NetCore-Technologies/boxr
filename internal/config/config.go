@@ -16,12 +16,12 @@ const MaxConfigBytes = 1 << 20
 
 // RunFile is the stable JSON format for reusable container run configurations.
 type RunFile struct {
-	Version  int               `json:"version"`
-	Name     string            `json:"name,omitempty"`
+	Version    int               `json:"version"`
+	Name       string            `json:"name,omitempty"`
 	Command    []string          `json:"command,omitempty"`
 	Entrypoint *[]string         `json:"entrypoint,omitempty"`
-	Options  container.Options `json:"options"`
-	Metadata map[string]string `json:"metadata,omitempty"`
+	Options    container.Options `json:"options"`
+	Metadata   map[string]string `json:"metadata,omitempty"`
 }
 
 func Load(path string) (RunFile, error) {
