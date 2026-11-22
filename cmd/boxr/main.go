@@ -3787,6 +3787,7 @@ var implementedFeatures = []string{
 	"Compose user selects a numeric UID or image-defined username and optional group through the existing container identity resolver",
 	"Compose init:true uses Boxr’s always-on PID-1 signal-forwarding and child-reaping helper while init:false is rejected",
 	"Compose mem_limit cpus and pids_limit map to bounded cgroup v2 memory CPU quota and PID controls with strict scalar parsing",
+	"Compose mem_reservation maps to cgroup v2 memory.low and cpu_shares converts to cgroup v2 CPU weight",
 }
 
 func printFeatures(stdout io.Writer) {

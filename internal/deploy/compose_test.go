@@ -52,6 +52,8 @@ services:
     mem_limit: 512m
     cpus: 1.5
     pids_limit: 256
+    mem_reservation: 128m
+    cpu_shares: 1024
     read_only: true
     cap_drop: [NET_RAW, CAP_MKNOD]
     networks: [app]
@@ -87,6 +89,9 @@ networks:
 	}
 	if api.Options.MemoryLimitBytes != 512<<20 || api.Options.CPUs != 1.5 || api.Options.PidsLimit != 256 {
 		t.Fatalf("resource limits = memory %d, CPUs %g, PIDs %d", api.Options.MemoryLimitBytes, api.Options.CPUs, api.Options.PidsLimit)
+	}
+	if api.Options.MemoryLowBytes != 128<<20 || api.Options.CPUWeight != 39 {
+		t.Fatalf("resource reservations = memory.low %d, cpu.weight %d", api.Options.MemoryLowBytes, api.Options.CPUWeight)
 	}
 	if api.Options.User != "1000:1000" {
 		t.Fatalf("container user = %q, want 1000:1000", api.Options.User)
@@ -945,6 +950,40 @@ func TestParseComposeCPUs(t *testing.T) {
 		node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
 		if _, err := parseComposeCPUs(node); err == nil {
 			t.Errorf("parseComposeCPUs(%q) unexpectedly succeeded", value)
+		}
+	}
+}
+
+func TestParseComposeMemoryReservation(t *testing.T) {
+	node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "128m"}
+	got, err := parseComposeMemoryReservation(node)
+	if err != nil || got != 128<<20 {
+		t.Fatalf("parseComposeMemoryReservation() = %d, %v", got, err)
+	}
+	if _, err := parseComposeMemoryReservation(&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "0"}); err == nil {
+		t.Fatal("zero Compose mem_reservation unexpectedly succeeded")
+	}
+}
+
+func TestParseComposeCPUShares(t *testing.T) {
+	for _, test := range []struct {
+		shares string
+		weight int
+	}{
+		{"2", 1},
+		{"1024", 39},
+		{"262144", 10000},
+	} {
+		node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: test.shares}
+		got, err := parseComposeCPUShares(node)
+		if err != nil || got != test.weight {
+			t.Errorf("parseComposeCPUShares(%s) = %d, %v; want %d", test.shares, got, err, test.weight)
+		}
+	}
+	for _, value := range []string{"1", "262145", "1.5", "-1"} {
+		node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
+		if _, err := parseComposeCPUShares(node); err == nil {
+			t.Errorf("parseComposeCPUShares(%q) unexpectedly succeeded", value)
 		}
 	}
 }

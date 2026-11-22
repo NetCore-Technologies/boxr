@@ -30,8 +30,8 @@ func composeResourceScalar(node *yaml.Node, field string, required bool) (string
 
 // parseComposeMemoryLimit uses binary Docker-style size suffixes and checks
 // overflow before mapping the value into cgroup v2 memory.max.
-func parseComposeMemoryLimit(node *yaml.Node) (int64, error) {
-	value, err := composeResourceScalar(node, "mem_limit", false)
+func parseComposeResourceBytes(node *yaml.Node, field string) (int64, error) {
+	value, err := composeResourceScalar(node, field, false)
 	if err != nil || value == "" {
 		return 0, err
 	}
@@ -57,9 +57,17 @@ func parseComposeMemoryLimit(node *yaml.Node) (int64, error) {
 	amount, parseErr := strconv.ParseUint(number, 10, 64)
 	maxInt64 := uint64(math.MaxInt64)
 	if parseErr != nil || amount == 0 || amount > maxInt64/multiplier {
-		return 0, fmt.Errorf("Compose mem_limit must be a positive byte size within the signed 64-bit range")
+		return 0, fmt.Errorf("Compose %s must be a positive byte size within the signed 64-bit range", field)
 	}
 	return int64(amount * multiplier), nil
+}
+
+func parseComposeMemoryLimit(node *yaml.Node) (int64, error) {
+	return parseComposeResourceBytes(node, "mem_limit")
+}
+
+func parseComposeMemoryReservation(node *yaml.Node) (int64, error) {
+	return parseComposeResourceBytes(node, "mem_reservation")
 }
 
 // parseComposeCPUs rejects values that the cgroup v2 quota/period interface
@@ -92,3 +100,19 @@ func parseComposePidsLimit(node *yaml.Node) (int64, error) {
 	}
 	return limit, nil
 }
+
+// parseComposeCPUShares converts Docker's 2..262144 CPU-share scale to
+// cgroup v2's 1..10000 CPU-weight scale using the kernel-compatible formula.
+func parseComposeCPUShares(node *yaml.Node) (int, error) {
+	value, err := composeResourceScalar(node, "cpu_shares", false)
+	if err != nil || value == "" {
+		return 0, err
+	}
+	shares, parseErr := strconv.ParseInt(value, 10, 64)
+	if parseErr != nil || shares < 2 || shares > 262144 {
+		return 0, fmt.Errorf("Compose cpu_shares must be an integer between 2 and 262144")
+	}
+	weight := 1 + ((shares - 2) * 9999 / 262142)
+	return int(weight), nil
+}
+

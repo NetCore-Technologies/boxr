@@ -61,6 +61,8 @@ type composeService struct {
 	MemLimit        yaml.Node `yaml:"mem_limit"`
 	CPUs            yaml.Node `yaml:"cpus"`
 	PidsLimit       yaml.Node `yaml:"pids_limit"`
+	MemReservation yaml.Node `yaml:"mem_reservation"`
+	CPUShares      yaml.Node `yaml:"cpu_shares"`
 	ContainerName   string    `yaml:"container_name"`
 	TTY             bool      `yaml:"tty"`
 	StdinOpen       bool      `yaml:"stdin_open"`
@@ -301,6 +303,15 @@ func convertComposeService(name string, source composeService, networkNames map[
 		return result, err
 	}
 
+	memoryReservationBytes, err := parseComposeMemoryReservation(&source.MemReservation)
+	if err != nil {
+		return result, err
+	}
+	cpuWeight, err := parseComposeCPUShares(&source.CPUShares)
+	if err != nil {
+		return result, err
+	}
+
 	command, err := parseComposeCommand(&source.Command)
 	if err != nil {
 		return result, err
@@ -355,6 +366,8 @@ func convertComposeService(name string, source composeService, networkNames map[
 		MemoryLimitBytes: memoryLimitBytes,
 		CPUs:             cpus,
 		PidsLimit:        pidsLimit,
+		MemoryLowBytes:   memoryReservationBytes,
+		CPUWeight:        cpuWeight,
 	}
 	return Service{
 		Image:            source.Image,
