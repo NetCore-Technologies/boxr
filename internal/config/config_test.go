@@ -69,6 +69,20 @@ func TestLoadRejectsInvalidEntrypointArguments(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsClearImageCommandFlag(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "clear-command.json")
+	if err := os.WriteFile(file, []byte(`{"version":1,"clearImageCommand":true,"options":{}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(file)
+	if err != nil {
+		t.Fatalf("Load(clear command config): %v", err)
+	}
+	if !loaded.ClearImageCommand {
+		t.Fatal("explicit clearImageCommand flag was lost")
+	}
+}
+
 func TestLoadAcceptsRestartPolicyConfiguration(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "restart.json")
 	contents := `{"version":1,"options":{"restartPolicy":"on-failure","restartMaxRetries":4,"restartDelayMs":1500}}`
@@ -173,6 +187,9 @@ func TestJSONSchemaIsStrictAndDescribesSecurityProfiles(t *testing.T) {
 	}
 	if _, ok := schema.Properties["entrypoint"]; !ok {
 		t.Fatal("schema does not describe entrypoint override")
+	}
+	if _, ok := schema.Properties["clearImageCommand"]; !ok {
+		t.Fatal("schema does not describe clearImageCommand")
 	}
 	if schema.Type != "object" || schema.AdditionalProperties {
 		t.Fatalf("root schema is not strict: %#v", schema)

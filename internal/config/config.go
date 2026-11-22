@@ -20,6 +20,7 @@ type RunFile struct {
 	Name       string            `json:"name,omitempty"`
 	Command    []string          `json:"command,omitempty"`
 	Entrypoint *[]string         `json:"entrypoint,omitempty"`
+	ClearImageCommand bool          `json:"clearImageCommand,omitempty"`
 	Options    container.Options `json:"options"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
 }

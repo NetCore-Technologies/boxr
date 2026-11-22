@@ -320,6 +320,7 @@ func convertComposeService(name string, source composeService, networkNames map[
 	if err != nil {
 		return result, err
 	}
+	clearImageCommand := source.Command.Kind != 0 && source.Command.Tag != "!!null" && len(command) == 0
 	dependencies, healthyDependencies, completedDependencies, err := parseComposeDependencies(&source.DependsOn)
 	if err != nil {
 		return result, err
@@ -376,6 +377,7 @@ func convertComposeService(name string, source composeService, networkNames map[
 	return Service{
 		Image:              source.Image,
 		Command:            command,
+		ClearImageCommand:  clearImageCommand,
 		Entrypoint:         entrypoint,
 		Options:            options,
 		DependsOn:          dependencies,
@@ -881,7 +883,7 @@ func resolveComposeServiceNetwork(source composeService, networkNames map[string
 }
 
 func parseComposeNetworkReferences(node *yaml.Node) ([]string, error) {
-	if node.Kind == 0 {
+	if node.Kind == 0 || node.Tag == "!!null" {
 		return nil, nil
 	}
 	var result []string

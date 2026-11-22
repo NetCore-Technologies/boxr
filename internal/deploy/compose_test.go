@@ -32,6 +32,7 @@ services:
     image: ghcr.io/example/api:1.2.3
     command: /app/server --message "hello world"
     entrypoint: ["/srv/entrypoint.sh", "--foreground"]
+    command: ["--serve"]
     depends_on:
       database:
         condition: service_started
@@ -74,6 +75,9 @@ networks:
 		t.Fatalf("deployment identity = version %d, name %q", file.Version, file.Name)
 	}
 	api := file.Services["api"]
+	if !api.ClearImageCommand || !reflect.DeepEqual(api.Command, []string{"--serve"}) {
+		t.Fatalf("command override = %#v, clear image command = %v", api.Command, api.ClearImageCommand)
+	}
 	if api.Entrypoint == nil || !reflect.DeepEqual(*api.Entrypoint, []string{"/srv/entrypoint.sh", "--foreground"}) {
 		t.Fatalf("entrypoint = %#v", api.Entrypoint)
 	}
@@ -886,6 +890,28 @@ func TestParseComposeStopSignal(t *testing.T) {
 	for _, input := range []string{"SIGKILL", "SIGSTOP", "SIGCONT", "SIGMAGIC"} {
 		if _, err := parseComposeStopSignal(input); err == nil {
 			t.Errorf("parseComposeStopSignal(%q) unexpectedly succeeded", input)
+		}
+	}
+}
+
+func TestParseComposeCommandPreservesNullAndEmptySemantics(t *testing.T) {
+	for _, node := range []*yaml.Node{
+		nil,
+		{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"},
+		{Kind: yaml.ScalarNode, Tag: "!!null", Value: ""},
+	} {
+		got, err := parseComposeCommand(node)
+		if err != nil || len(got) != 0 {
+			t.Errorf("null command = %#v, %v", got, err)
+		}
+	}
+	for _, node := range []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: ""},
+		{Kind: yaml.SequenceNode},
+	} {
+		got, err := parseComposeCommand(node)
+		if err != nil || len(got) != 0 {
+			t.Errorf("empty command = %#v, %v", got, err)
 		}
 	}
 }

@@ -57,6 +57,7 @@ type VolumeMount struct {
 type Service struct {
 	Image              string            `json:"image,omitempty"`
 	Command            []string          `json:"command,omitempty"`
+	ClearImageCommand bool              `json:"clearImageCommand,omitempty"`
 	Entrypoint         *[]string         `json:"entrypoint,omitempty"`
 	Options            container.Options `json:"options"`
 	DependsOn          []string          `json:"dependsOn,omitempty"`
@@ -93,6 +94,7 @@ type ServicePlan struct {
 	CPUs                     float64                 `json:"cpus,omitempty"`
 	PidsLimit                int64                   `json:"pidsLimit,omitempty"`
 	CommandArgumentCount     int                     `json:"commandArgumentCount"`
+	ClearImageCommand        bool                    `json:"clearImageCommand,omitempty"`
 	EntrypointConfigured     bool                    `json:"entrypointConfigured"`
 	EntrypointArgumentCount  int                     `json:"entrypointArgumentCount"`
 	EnvironmentEntryCount    int                     `json:"environmentEntryCount"`
@@ -569,6 +571,7 @@ func buildPlan(file File) (Plan, error) {
 			CPUs:                     service.Options.CPUs,
 			PidsLimit:                service.Options.PidsLimit,
 			CommandArgumentCount:     len(service.Command),
+			ClearImageCommand:        service.ClearImageCommand,
 			EntrypointConfigured:     service.Entrypoint != nil,
 			EntrypointArgumentCount:  entrypointArgumentCount,
 			EnvironmentEntryCount:    len(service.Options.Env),

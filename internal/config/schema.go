@@ -16,6 +16,7 @@ func JSONSchema() string {
     "name": {"type": "string", "maxLength": 64},
     "command": {"type": "array", "items": {"type": "string", "minLength": 1}},
     "entrypoint": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "clearImageCommand": {"type": "boolean"},
     "metadata": {"type": "object", "maxProperties": 64, "additionalProperties": {"type": "string"}},
     "options": {
       "type": "object",
