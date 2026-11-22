@@ -13,8 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/manit6752025/boxr/internal/container"
@@ -55,19 +55,19 @@ type VolumeMount struct {
 }
 
 type Service struct {
-	Image            string            `json:"image,omitempty"`
-	Command          []string          `json:"command,omitempty"`
-	Options          container.Options `json:"options"`
-	DependsOn        []string          `json:"dependsOn,omitempty"`
+	Image              string            `json:"image,omitempty"`
+	Command            []string          `json:"command,omitempty"`
+	Options            container.Options `json:"options"`
+	DependsOn          []string          `json:"dependsOn,omitempty"`
 	DependsOnHealthy   []string          `json:"dependsOnHealthy,omitempty"`
 	DependsOnCompleted []string          `json:"dependsOnCompleted,omitempty"`
-	Volumes          []VolumeMount     `json:"volumes,omitempty"`
-	Profiles         []string          `json:"profiles,omitempty"`
-	EnvFiles         []string          `json:"envFiles,omitempty"`
-	StartTimeoutMS   int               `json:"startTimeoutMs,omitempty"`
-	StopTimeoutMS    int               `json:"stopTimeoutMs,omitempty"`
-	Readiness        *ReadinessProbe   `json:"readiness,omitempty"`
-	Healthcheck      *Healthcheck      `json:"healthcheck,omitempty"`
+	Volumes            []VolumeMount     `json:"volumes,omitempty"`
+	Profiles           []string          `json:"profiles,omitempty"`
+	EnvFiles           []string          `json:"envFiles,omitempty"`
+	StartTimeoutMS     int               `json:"startTimeoutMs,omitempty"`
+	StopTimeoutMS      int               `json:"stopTimeoutMs,omitempty"`
+	Readiness          *ReadinessProbe   `json:"readiness,omitempty"`
+	Healthcheck        *Healthcheck      `json:"healthcheck,omitempty"`
 }
 
 // ServicePlan contains only safe-to-display metadata. It deliberately excludes
