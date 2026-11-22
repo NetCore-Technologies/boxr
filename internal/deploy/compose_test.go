@@ -48,6 +48,7 @@ services:
     stop_signal: SIGQUIT
     stop_grace_period: 30s
     user: "1000:1000"
+    init: true
     read_only: true
     cap_drop: [NET_RAW, CAP_MKNOD]
     networks: [app]
@@ -157,6 +158,7 @@ func TestLoadComposeRejectsSemanticsBoxrCannotRepresent(t *testing.T) {
 		"unsupported dependency condition": "services:\n  api:\n    image: alpine\n    network_mode: none\n    depends_on:\n      db:\n        condition: service_completed_successfully\n  db:\n    image: postgres\n    network_mode: none\n",
 		"invalid user syntax":               "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    user: \"bad/user\"\\n",
 		"invalid user whitespace":           "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    user: \"1000: 1000\"\\n",
+		"init disabled":                    "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    init: false\\n",
 		"invalid user delimiter":            "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    user: \"1000:1000:1000\"\\n",
 		"unknown service field":            "services:\n  api:\n    image: alpine\n    network_mode: none\n    deploy: {}\n",
 	}
@@ -890,5 +892,28 @@ func TestParseComposeUser(t *testing.T) {
 	}
 	if _, err := parseComposeUser(&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"}); err == nil {
 		t.Fatal("boolean Compose user unexpectedly succeeded")
+	}
+}
+
+
+func TestParseComposeInit(t *testing.T) {
+	if err := parseComposeInit(nil); err != nil {
+		t.Fatalf("unset init should use Boxr's built-in init: %v", err)
+	}
+	for _, value := range []string{"true", "TRUE"} {
+		node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: value}
+		if err := parseComposeInit(node); err != nil {
+			t.Errorf("parseComposeInit(%q): %v", value, err)
+		}
+	}
+	for _, node := range []*yaml.Node{
+		{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "false"},
+		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "true"},
+		{Kind: yaml.ScalarNode, Tag: "!!int", Value: "1"},
+		{Kind: yaml.SequenceNode},
+	} {
+		if err := parseComposeInit(node); err == nil {
+			t.Errorf("parseComposeInit(%#v) unexpectedly succeeded", node)
+		}
 	}
 }

@@ -3785,6 +3785,7 @@ var implementedFeatures = []string{
 	"Compose depends_on service_healthy gates dependent services until the declared dependency container healthcheck reports healthy",
 	"Compose stop_signal forwards a validated catchable stop signal through the attached supervisor and stop_grace_period sets a bounded per-service shutdown grace",
 	"Compose user selects a numeric UID or image-defined username and optional group through the existing container identity resolver",
+	"Compose init:true uses Boxr’s always-on PID-1 signal-forwarding and child-reaping helper while init:false is rejected",
 }
 
 func printFeatures(stdout io.Writer) {

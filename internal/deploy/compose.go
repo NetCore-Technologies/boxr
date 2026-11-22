@@ -57,6 +57,7 @@ type composeService struct {
 	StopSignal      string    `yaml:"stop_signal"`
 	StopGracePeriod yaml.Node `yaml:"stop_grace_period"`
 	User            yaml.Node `yaml:"user"`
+	Init            yaml.Node `yaml:"init"`
 	ContainerName   string    `yaml:"container_name"`
 	TTY             bool      `yaml:"tty"`
 	StdinOpen       bool      `yaml:"stdin_open"`
@@ -278,6 +279,9 @@ func convertComposeService(name string, source composeService, networkNames map[
 	}
 	user, err := parseComposeUser(&source.User)
 	if err != nil {
+		return result, err
+	}
+	if err := parseComposeInit(&source.Init); err != nil {
 		return result, err
 	}
 
