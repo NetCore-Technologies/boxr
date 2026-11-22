@@ -167,6 +167,7 @@ func TestLoadComposeRejectsSemanticsBoxrCannotRepresent(t *testing.T) {
 		"implicit default bridge":          "services:\n  api:\n    image: alpine\n",
 		"non-external network":             "services:\n  api:\n    image: alpine\n    networks: [app]\nnetworks:\n  app: {}\n",
 		"unsupported dependency condition": "services:\n  api:\n    image: alpine\n    network_mode: none\n    depends_on:\n      db:\n        condition: service_completed_successfully\n  db:\n    image: postgres\n    network_mode: none\n",
+		"memory reservation exceeds hard limit": "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    mem_limit: 128m\\n    mem_reservation: 256m\\n",
 		"invalid user syntax":               "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    user: \"bad/user\"\\n",
 		"invalid user whitespace":           "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    user: \"1000: 1000\"\\n",
 		"init disabled":                    "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    init: false\\n",

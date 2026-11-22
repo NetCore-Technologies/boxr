@@ -307,6 +307,9 @@ func convertComposeService(name string, source composeService, networkNames map[
 	if err != nil {
 		return result, err
 	}
+	if memoryLimitBytes > 0 && memoryReservationBytes > memoryLimitBytes {
+		return result, fmt.Errorf("Compose mem_reservation cannot exceed mem_limit")
+	}
 	cpuWeight, err := parseComposeCPUShares(&source.CPUShares)
 	if err != nil {
 		return result, err
