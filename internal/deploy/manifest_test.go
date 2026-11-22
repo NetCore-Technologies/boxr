@@ -91,66 +91,66 @@ func TestBuildPlanRejectsInvalidGraphsAndServices(t *testing.T) {
 		"invalid service name":                                  {Version: 1, Services: map[string]Service{"Web": validService}},
 		"missing command":                                       {Version: 1, Services: map[string]Service{"web": {}}},
 		"unknown dependency":                                    {Version: 1, Services: map[string]Service{
-			"web":                                                   {Command: []string{"/bin/true"}, DependsOn: []string{"db"}},
+			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"db"}},
 		}},
 		"self dependency":                                       {Version: 1, Services: map[string]Service{
-			"web":                                                   {Command: []string{"/bin/true"}, DependsOn: []string{"web"}},
+			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"web"}},
 		}},
 		"duplicate dependency":                                  {Version: 1, Services: map[string]Service{
-			"db":                                                    validService,
-			"web":                                                   {Command: []string{"/bin/true"}, DependsOn: []string{"db", "db"}},
+			"db":  validService,
+			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"db", "db"}},
 		}},
 		"cycle":                                                 {Version: 1, Services: map[string]Service{
-			"api":                                                   {Command: []string{"/bin/true"}, DependsOn: []string{"db"}},
-			"db":                                                    {Command: []string{"/bin/true"}, DependsOn: []string{"api"}},
+			"api": {Command: []string{"/bin/true"}, DependsOn: []string{"db"}},
+			"db":  {Command: []string{"/bin/true"}, DependsOn: []string{"api"}},
 		}},
 		"invalid options":                                       {Version: 1, Services: map[string]Service{
-			"web":                                                   {Command: []string{"/bin/true"}, Options: container.Options{NetworkMode: "bridge"}},
+			"web": {Command: []string{"/bin/true"}, Options: container.Options{NetworkMode: "bridge"}},
 		}},
 		"non-loopback readiness URL":                            {Version: 1, Services: map[string]Service{
-			"web":                                                   {Command: []string{"/bin/true"}, Readiness: &ReadinessProbe{HTTPURL: "http://example.com/health"}},
+			"web": {Command: []string{"/bin/true"}, Readiness: &ReadinessProbe{HTTPURL: "http://example.com/health"}},
 		}},
 		"isolated network readiness":                            {Version: 1, Services: map[string]Service{
-			"web":                                                   {Command: []string{"/bin/true"}, Options: container.Options{NetworkMode: "none"}, Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:8080"}},
+			"web": {Command: []string{"/bin/true"}, Options: container.Options{NetworkMode: "none"}, Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:8080"}},
 		}},
 		"restricted readiness profile":                          {Version: 1, Services: map[string]Service{
-			"web":                                                   {Command: []string{"/bin/true"}, Options: container.Options{SecurityProfile: "restricted"}, Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:8080"}},
+			"web": {Command: []string{"/bin/true"}, Options: container.Options{SecurityProfile: "restricted"}, Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:8080"}},
 		}},
 		"untrusted readiness profile":                           {Version: 1, Services: map[string]Service{
-			"web":                                                   {Command: []string{"/bin/true"}, Options: container.Options{SecurityProfile: "untrusted", RootFS: "/tmp/boxr-test-rootfs"}, Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:8080"}},
+			"web": {Command: []string{"/bin/true"}, Options: container.Options{SecurityProfile: "untrusted", RootFS: "/tmp/boxr-test-rootfs"}, Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:8080"}},
 		}},
 		"healthy dependency without declared edge":              {Version: 1, Services: map[string]Service{
-			"db":                                                    validService,
-			"web":                                                   {Command: []string{"/bin/true"}, DependsOnHealthy: []string{"db"}},
+			"db":  validService,
+			"web": {Command: []string{"/bin/true"}, DependsOnHealthy: []string{"db"}},
 		}},
 		"healthy dependency without healthcheck":                {Version: 1, Services: map[string]Service{
-			"db":                                                    validService,
-			"web":                                                   {Command: []string{"/bin/true"}, DependsOn: []string{"db"}, DependsOnHealthy: []string{"db"}},
+			"db":  validService,
+			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"db"}, DependsOnHealthy: []string{"db"}},
 		}},
 		"completed dependency without declared edge":            {Version: 1, Services: map[string]Service{
-			"job":                                                   validService,
-			"web":                                                   {Command: []string{"/bin/true"}, DependsOnCompleted: []string{"job"}},
+			"job": validService,
+			"web": {Command: []string{"/bin/true"}, DependsOnCompleted: []string{"job"}},
 		}},
 		"service used as both healthy and completed dependency": {Version: 1, Services: map[string]Service{
-			"job":                                                   {Command: []string{"/bin/true"}, Options: container.Options{Healthcheck: &container.HealthcheckConfig{Test: []string{"CMD", "/bin/true"}}}},
-			"health-consumer":                                       {Command: []string{"/bin/true"}, DependsOn: []string{"job"}, DependsOnHealthy: []string{"job"}},
-			"completion-consumer":                                   {Command: []string{"/bin/true"}, DependsOn: []string{"job"}, DependsOnCompleted: []string{"job"}},
+			"job":                 {Command: []string{"/bin/true"}, Options: container.Options{Healthcheck: &container.HealthcheckConfig{Test: []string{"CMD", "/bin/true"}}}},
+			"health-consumer":     {Command: []string{"/bin/true"}, DependsOn: []string{"job"}, DependsOnHealthy: []string{"job"}},
+			"completion-consumer": {Command: []string{"/bin/true"}, DependsOn: []string{"job"}, DependsOnCompleted: []string{"job"}},
 		}},
 		"completed dependency with readiness probe":             {Version: 1, Services: map[string]Service{
-			"job":                                                   {Command: []string{"/bin/true"}, Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:8080"}},
-			"web":                                                   {Command: []string{"/bin/true"}, DependsOn: []string{"job"}, DependsOnCompleted: []string{"job"}},
+			"job": {Command: []string{"/bin/true"}, Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:8080"}},
+			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"job"}, DependsOnCompleted: []string{"job"}},
 		}},
 		"completed dependency both healthy and completed":       {Version: 1, Services: map[string]Service{
-			"job":                                                   {Command: []string{"/bin/true"}, Options: container.Options{Healthcheck: &container.HealthcheckConfig{Test: []string{"CMD", "/bin/true"}}}},
-			"web":                                                   {Command: []string{"/bin/true"}, DependsOn: []string{"job"}, DependsOnHealthy: []string{"job"}, DependsOnCompleted: []string{"job"}},
+			"job": {Command: []string{"/bin/true"}, Options: container.Options{Healthcheck: &container.HealthcheckConfig{Test: []string{"CMD", "/bin/true"}}}},
+			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"job"}, DependsOnHealthy: []string{"job"}, DependsOnCompleted: []string{"job"}},
 		}},
 		"healthy dependency with disabled healthcheck":          {Version: 1, Services: map[string]Service{
-			"db":                                                    {Command: []string{"/bin/true"}, Options: container.Options{Healthcheck: &container.HealthcheckConfig{Test: []string{"NONE"}}}},
-			"web":                                                   {Command: []string{"/bin/true"}, DependsOn: []string{"db"}, DependsOnHealthy: []string{"db"}},
+			"db":  {Command: []string{"/bin/true"}, Options: container.Options{Healthcheck: &container.HealthcheckConfig{Test: []string{"NONE"}}}},
+			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"db"}, DependsOnHealthy: []string{"db"}},
 		}},
 		"duplicate container names":                             {Version: 1, Services: map[string]Service{
-			"api":                                                   {Command: []string{"/bin/true"}, Options: container.Options{Name: "same-name"}},
-			"web":                                                   {Command: []string{"/bin/true"}, Options: container.Options{Name: "same-name"}},
+			"api": {Command: []string{"/bin/true"}, Options: container.Options{Name: "same-name"}},
+			"web": {Command: []string{"/bin/true"}, Options: container.Options{Name: "same-name"}},
 		}},
 	}
 	for name, file := range tests {
