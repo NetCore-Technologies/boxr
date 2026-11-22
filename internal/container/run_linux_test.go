@@ -5,9 +5,11 @@ package container
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 func TestRunRejectsEmptyCommand(t *testing.T) {
@@ -90,4 +92,50 @@ func testEnvironmentValue(values []string, key string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+
+func TestRunAsInitForwardsUserSignalsToWorkloadGroup(t *testing.T) {
+	cases := []struct {
+		name     string
+		signal   syscall.Signal
+		exitCode int
+		trapName string
+	}{
+		{name: "USR1", signal: syscall.SIGUSR1, exitCode: 41, trapName: "USR1"},
+		{name: "USR2", signal: syscall.SIGUSR2, exitCode: 42, trapName: "USR2"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			readyPath := filepath.Join(t.TempDir(), "ready")
+			signals := make(chan os.Signal, 1)
+			done := make(chan error, 1)
+			script := "trap 'exit " + strconv.Itoa(test.exitCode) + "' " + test.trapName + "; : > \"$1\"; while :; do sleep 10; done"
+			go func() {
+				done <- runAsInit([]string{"/bin/sh", "-c", script, "boxr-signal-test", readyPath}, signals)
+			}()
+
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				if _, err := os.Stat(readyPath); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("workload did not reach its signal handler setup")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			signals <- test.signal
+
+			select {
+			case err := <-done:
+				var exitErr *ExitError
+				if !errors.As(err, &exitErr) || exitErr.Code != test.exitCode {
+					t.Fatalf("runAsInit(%s) error = %v, want exit code %d", test.name, err, test.exitCode)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatalf("runAsInit did not reap workload after forwarding %s", test.name)
+			}
+		})
+	}
 }
