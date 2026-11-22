@@ -153,26 +153,26 @@ func TestLoadComposeDerivesProjectNameAndAcceptsIsolatedServices(t *testing.T) {
 
 func TestLoadComposeRejectsSemanticsBoxrCannotRepresent(t *testing.T) {
 	tests := map[string]string{
-		"image build":                      "services:\n  api:\n    build: .\n",
-		"named volumes":                    "services:\n  api:\n    image: alpine\n    network_mode: none\n    volumes: [data:/data]\n",
-		"top-level volumes":                "services:\n  api:\n    image: alpine\n    network_mode: none\nvolumes:\n  data: {}\n",
-		"entrypoint override":              "services:\n  api:\n    image: alpine\n    network_mode: none\n    entrypoint: [/bin/sh]\n",
-		"interactive tty":                  "services:\n  api:\n    image: alpine\n    network_mode: none\n    tty: true\n",
-		"privileged":                       "services:\n  api:\n    image: alpine\n    network_mode: none\n    privileged: true\n",
-		"restart policy":                   "services:\n  api:\n    image: alpine\n    network_mode: none\n    restart: always\n",
-		"invalid stop signal":              "services:\n  api:\n    image: alpine\n    network_mode: none\n    stop_signal: SIGKILL\n",
-		"unknown stop signal":              "services:\n  api:\n    image: alpine\n    network_mode: none\n    stop_signal: SIGMAGIC\n",
-		"invalid stop grace period":        "services:\n  api:\n    image: alpine\n    network_mode: none\n    stop_grace_period: 0s\n",
-		"long stop grace period":           "services:\n  api:\n    image: alpine\n    network_mode: none\n    stop_grace_period: 10m1s\n",
-		"implicit default bridge":          "services:\n  api:\n    image: alpine\n",
-		"non-external network":             "services:\n  api:\n    image: alpine\n    networks: [app]\nnetworks:\n  app: {}\n",
-		"unsupported dependency condition": "services:\n  api:\n    image: alpine\n    network_mode: none\n    depends_on:\n      db:\n        condition: service_failed\n  db:\n    image: postgres\n    network_mode: none\n",
+		"image build":                           "services:\n  api:\n    build: .\n",
+		"named volumes":                         "services:\n  api:\n    image: alpine\n    network_mode: none\n    volumes: [data:/data]\n",
+		"top-level volumes":                     "services:\n  api:\n    image: alpine\n    network_mode: none\nvolumes:\n  data: {}\n",
+		"entrypoint override":                   "services:\n  api:\n    image: alpine\n    network_mode: none\n    entrypoint: [/bin/sh]\n",
+		"interactive tty":                       "services:\n  api:\n    image: alpine\n    network_mode: none\n    tty: true\n",
+		"privileged":                            "services:\n  api:\n    image: alpine\n    network_mode: none\n    privileged: true\n",
+		"restart policy":                        "services:\n  api:\n    image: alpine\n    network_mode: none\n    restart: always\n",
+		"invalid stop signal":                   "services:\n  api:\n    image: alpine\n    network_mode: none\n    stop_signal: SIGKILL\n",
+		"unknown stop signal":                   "services:\n  api:\n    image: alpine\n    network_mode: none\n    stop_signal: SIGMAGIC\n",
+		"invalid stop grace period":             "services:\n  api:\n    image: alpine\n    network_mode: none\n    stop_grace_period: 0s\n",
+		"long stop grace period":                "services:\n  api:\n    image: alpine\n    network_mode: none\n    stop_grace_period: 10m1s\n",
+		"implicit default bridge":               "services:\n  api:\n    image: alpine\n",
+		"non-external network":                  "services:\n  api:\n    image: alpine\n    networks: [app]\nnetworks:\n  app: {}\n",
+		"unsupported dependency condition":      "services:\n  api:\n    image: alpine\n    network_mode: none\n    depends_on:\n      db:\n        condition: service_failed\n  db:\n    image: postgres\n    network_mode: none\n",
 		"memory reservation exceeds hard limit": "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    mem_limit: 128m\\n    mem_reservation: 256m\\n",
-		"invalid user syntax":               "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    user: \"bad/user\"\\n",
-		"invalid user whitespace":           "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    user: \"1000: 1000\"\\n",
-		"init disabled":                    "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    init: false\\n",
-		"invalid user delimiter":            "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    user: \"1000:1000:1000\"\\n",
-		"unknown service field":            "services:\n  api:\n    image: alpine\n    network_mode: none\n    deploy: {}\n",
+		"invalid user syntax":                   "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    user: \"bad/user\"\\n",
+		"invalid user whitespace":               "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    user: \"1000: 1000\"\\n",
+		"init disabled":                         "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    init: false\\n",
+		"invalid user delimiter":                "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    user: \"1000:1000:1000\"\\n",
+		"unknown service field":                 "services:\n  api:\n    image: alpine\n    network_mode: none\n    deploy: {}\n",
 	}
 	for name, contents := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -886,7 +886,6 @@ func TestParseComposeStopSignal(t *testing.T) {
 	}
 }
 
-
 func TestParseComposeUser(t *testing.T) {
 	cases := []string{"1000", "1000:1000", "root", "app", ":1000"}
 	for _, input := range cases {
@@ -906,7 +905,6 @@ func TestParseComposeUser(t *testing.T) {
 		t.Fatal("boolean Compose user unexpectedly succeeded")
 	}
 }
-
 
 func TestParseComposeResourceLimits(t *testing.T) {
 	for _, test := range []struct {
@@ -1033,7 +1031,6 @@ func TestParseComposeInit(t *testing.T) {
 		}
 	}
 }
-
 
 func TestLoadComposeSupportsServiceCompletedSuccessfullyDependency(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "compose.yaml")
