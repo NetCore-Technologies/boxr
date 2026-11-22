@@ -590,6 +590,17 @@ func buildPlan(file File) (Plan, error) {
 			completedTargets[dependency] = true
 		}
 	}
+	healthyTargets := make(map[string]bool)
+	for _, service := range file.Services {
+		for _, dependency := range service.DependsOnHealthy {
+			healthyTargets[dependency] = true
+		}
+	}
+	for serviceName := range completedTargets {
+		if healthyTargets[serviceName] {
+			return plan, fmt.Errorf("service %q cannot be both a healthy dependency and a successful-completion dependency", serviceName)
+		}
+	}
 	for serviceName := range completedTargets {
 		service := file.Services[serviceName]
 		if service.Readiness != nil {

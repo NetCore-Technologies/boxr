@@ -4781,7 +4781,8 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 	plannedByName := make(map[string]deploy.ServicePlan, len(plan.Services))
 	orderIndex := make(map[string]int, len(plan.Services))
 	completedTargets := make(map[string]bool, len(plan.Services))
-	for _, service := range file.Services {
+	for _, planned := range plan.Services {
+		service := file.Services[planned.Name]
 		for _, dependency := range service.DependsOnCompleted {
 			completedTargets[dependency] = true
 		}
