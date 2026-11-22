@@ -3786,6 +3786,7 @@ var implementedFeatures = []string{
 	"Compose stop_signal forwards a validated catchable stop signal through the attached supervisor and stop_grace_period sets a bounded per-service shutdown grace",
 	"Compose user selects a numeric UID or image-defined username and optional group through the existing container identity resolver",
 	"Compose init:true uses Boxr’s always-on PID-1 signal-forwarding and child-reaping helper while init:false is rejected",
+	"Compose mem_limit cpus and pids_limit map to bounded cgroup v2 memory CPU quota and PID controls with strict scalar parsing",
 }
 
 func printFeatures(stdout io.Writer) {

@@ -49,6 +49,9 @@ services:
     stop_grace_period: 30s
     user: "1000:1000"
     init: true
+    mem_limit: 512m
+    cpus: 1.5
+    pids_limit: 256
     read_only: true
     cap_drop: [NET_RAW, CAP_MKNOD]
     networks: [app]
@@ -81,6 +84,9 @@ networks:
 		HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 8080, Protocol: "tcp",
 	}) {
 		t.Fatalf("published ports = %#v", api.Options.PublishedPorts)
+	}
+	if api.Options.MemoryLimitBytes != 512<<20 || api.Options.CPUs != 1.5 || api.Options.PidsLimit != 256 {
+		t.Fatalf("resource limits = memory %d, CPUs %g, PIDs %d", api.Options.MemoryLimitBytes, api.Options.CPUs, api.Options.PidsLimit)
 	}
 	if api.Options.User != "1000:1000" {
 		t.Fatalf("container user = %q, want 1000:1000", api.Options.User)
@@ -895,6 +901,76 @@ func TestParseComposeUser(t *testing.T) {
 	}
 }
 
+
+func TestParseComposeResourceLimits(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  int64
+	}{
+		{"512m", 512 << 20},
+		{"1GiB", 1 << 30},
+		{"4096", 4096},
+		{"8kb", 8 << 10},
+	} {
+		node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: test.value}
+		got, err := parseComposeMemoryLimit(node)
+		if err != nil || got != test.want {
+			t.Errorf("parseComposeMemoryLimit(%q) = %d, %v; want %d", test.value, got, err, test.want)
+		}
+	}
+	for _, value := range []string{"", "0", "-1", "512.5m", "999999999999999999999999g"} {
+		node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
+		if _, err := parseComposeMemoryLimit(node); err == nil {
+			t.Errorf("parseComposeMemoryLimit(%q) unexpectedly succeeded", value)
+		}
+	}
+}
+
+func TestParseComposeCPUs(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  float64
+	}{
+		{"0.5", 0.5},
+		{"1", 1},
+		{"1.75", 1.75},
+	} {
+		node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!float", Value: test.value}
+		got, err := parseComposeCPUs(node)
+		if err != nil || got != test.want {
+			t.Errorf("parseComposeCPUs(%q) = %g, %v; want %g", test.value, got, err, test.want)
+		}
+	}
+	for _, value := range []string{"0", "-1", "NaN", "+Inf", "0.000001", "1000001"} {
+		node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
+		if _, err := parseComposeCPUs(node); err == nil {
+			t.Errorf("parseComposeCPUs(%q) unexpectedly succeeded", value)
+		}
+	}
+}
+
+func TestParseComposePidsLimit(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  int64
+	}{
+		{"1", 1},
+		{"256", 256},
+		{"-1", 0},
+	} {
+		node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: test.value}
+		got, err := parseComposePidsLimit(node)
+		if err != nil || got != test.want {
+			t.Errorf("parseComposePidsLimit(%q) = %d, %v; want %d", test.value, got, err, test.want)
+		}
+	}
+	for _, value := range []string{"0", "-2", "1.5", "9223372036854775808"} {
+		node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
+		if _, err := parseComposePidsLimit(node); err == nil {
+			t.Errorf("parseComposePidsLimit(%q) unexpectedly succeeded", value)
+		}
+	}
+}
 
 func TestParseComposeInit(t *testing.T) {
 	if err := parseComposeInit(nil); err != nil {

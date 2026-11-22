@@ -58,6 +58,9 @@ type composeService struct {
 	StopGracePeriod yaml.Node `yaml:"stop_grace_period"`
 	User            yaml.Node `yaml:"user"`
 	Init            yaml.Node `yaml:"init"`
+	MemLimit        yaml.Node `yaml:"mem_limit"`
+	CPUs            yaml.Node `yaml:"cpus"`
+	PidsLimit       yaml.Node `yaml:"pids_limit"`
 	ContainerName   string    `yaml:"container_name"`
 	TTY             bool      `yaml:"tty"`
 	StdinOpen       bool      `yaml:"stdin_open"`
@@ -285,6 +288,19 @@ func convertComposeService(name string, source composeService, networkNames map[
 		return result, err
 	}
 
+	memoryLimitBytes, err := parseComposeMemoryLimit(&source.MemLimit)
+	if err != nil {
+		return result, err
+	}
+	cpus, err := parseComposeCPUs(&source.CPUs)
+	if err != nil {
+		return result, err
+	}
+	pidsLimit, err := parseComposePidsLimit(&source.PidsLimit)
+	if err != nil {
+		return result, err
+	}
+
 	command, err := parseComposeCommand(&source.Command)
 	if err != nil {
 		return result, err
@@ -336,6 +352,9 @@ func convertComposeService(name string, source composeService, networkNames map[
 		Healthcheck:      healthcheck,
 		StopSignal:       stopSignal,
 		User:             user,
+		MemoryLimitBytes: memoryLimitBytes,
+		CPUs:             cpus,
+		PidsLimit:        pidsLimit,
 	}
 	return Service{
 		Image:            source.Image,
