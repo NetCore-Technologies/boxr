@@ -1313,36 +1313,91 @@ func (s *Server) handleContainerWait(writer http.ResponseWriter, request *http.R
 	if condition == "" {
 		condition = "not-running"
 	}
-	if condition != "not-running" {
-		writeError(writer, http.StatusBadRequest, fmt.Errorf("unsupported wait condition %q; only not-running is supported", condition))
+	switch condition {
+	case "not-running", "next-exit", "removed":
+	default:
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("unsupported wait condition %q; supported conditions are not-running, next-exit, and removed", condition))
+		return
+	}
+
+	initial, err := state.Get(query)
+	if err != nil {
+		writeError(writer, http.StatusNotFound, err)
+		return
+	}
+	var previousFinishedAt *time.Time
+	if initial.FinishedAt != nil {
+		finishedAt := *initial.FinishedAt
+		previousFinishedAt = &finishedAt
+	}
+	lastRecord := initial
+	if condition == "not-running" && !dockerContainerIsActive(initial.Status) {
+		writeContainerWaitResult(writer, dockerContainerExitCode(initial), nil)
 		return
 	}
 
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		record, err := state.Get(query)
-		if err != nil {
-			writeError(writer, http.StatusNotFound, err)
-			return
-		}
-		if record.Status != "running" && record.Status != "paused" && record.Status != "restarting" {
-			statusCode := 0
-			if record.ExitCode != nil {
-				statusCode = *record.ExitCode
-			}
-			writeJSON(writer, http.StatusOK, map[string]any{
-				"StatusCode": statusCode,
-				"Error":      nil,
-			})
-			return
-		}
 		select {
 		case <-request.Context().Done():
 			return
 		case <-ticker.C:
 		}
+
+		record, err := state.Get(query)
+		if err != nil {
+			if condition == "removed" && isMissingContainerRecord(err) {
+				writeContainerWaitResult(writer, dockerContainerExitCode(lastRecord), nil)
+				return
+			}
+			writeError(writer, http.StatusNotFound, err)
+			return
+		}
+		lastRecord = record
+		switch condition {
+		case "not-running":
+			if !dockerContainerIsActive(record.Status) {
+				writeContainerWaitResult(writer, dockerContainerExitCode(record), nil)
+				return
+			}
+		case "next-exit":
+			// next-exit is relative to this request, not the container's last
+			// historical exit. A later Start clears FinishedAt and Finish writes
+			// a new timestamp; compare the persisted transition to the snapshot.
+			if (record.Status == "exited" || record.Status == "failed") &&
+				record.FinishedAt != nil &&
+				(previousFinishedAt == nil || record.FinishedAt.After(*previousFinishedAt)) {
+				writeContainerWaitResult(writer, dockerContainerExitCode(record), nil)
+				return
+			}
+		case "removed":
+			// Removal is observed when the persisted record disappears. Keep the
+			// last snapshot so Docker receives the final workload exit status.
+		}
 	}
+}
+
+func dockerContainerIsActive(status string) bool {
+	return status == "running" || status == "paused" || status == "restarting"
+}
+
+func dockerContainerExitCode(record state.Record) int {
+	if record.ExitCode == nil {
+		return 0
+	}
+	return *record.ExitCode
+}
+
+func isMissingContainerRecord(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "no container matches")
+}
+
+func writeContainerWaitResult(writer http.ResponseWriter, statusCode int, waitErr any) {
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"StatusCode": statusCode,
+		"Error":      waitErr,
+	})
 }
 
 func (s *Server) handleContainerRename(writer http.ResponseWriter, request *http.Request, rawID string) {

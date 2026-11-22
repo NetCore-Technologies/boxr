@@ -3811,6 +3811,7 @@ var implementedFeatures = []string{
 	"Compose service_completed_successfully waits for one-shot jobs to exit successfully before dependent groups start",
 	"Compose entrypoint overrides image ENTRYPOINT, clears image CMD when non-null, and preserves null inheritance semantics",
 	"Compose command null inherits image CMD while empty command string/list explicitly clears the image default",
+	"Docker Engine container wait implements not-running next-exit and removed conditions with persisted exit status semantics",
 }
 
 func printFeatures(stdout io.Writer) {

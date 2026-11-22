@@ -1916,7 +1916,7 @@ func TestDockerContainerWaitReturnsExitCodeAndSupportsNotRunningOnly(t *testing.
 		t.Fatalf("wait response = %+v", result)
 	}
 
-	response = engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+record.ID+"/wait?condition=next-exit")
+	response = engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+record.ID+"/wait?condition=unknown-condition")
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("unsupported wait condition status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -1927,6 +1927,142 @@ func TestDockerContainerWaitReturnsExitCodeAndSupportsNotRunningOnly(t *testing.
 	response = engineAPIRequest(server, http.MethodGet, "/v1.45/containers/"+record.ID+"/wait")
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET wait status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestDockerContainerWaitNextExitWaitsForFutureExit(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("wait-next-exit", []string{"/bin/false"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(record.ID, &container.ExitError{Code: 7}); err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		response *httptest.ResponseRecorder
+	}
+	done := make(chan result, 1)
+	go func() {
+		response := engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+record.ID+"/wait?condition=next-exit")
+		done <- result{response: response}
+	}()
+	select {
+	case got := <-done:
+		t.Fatalf("next-exit returned the previous exit immediately: status=%d body=%s", got.response.Code, got.response.Body.String())
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(record.ID, &container.ExitError{Code: 9}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-done:
+		if got.response.Code != http.StatusOK {
+			t.Fatalf("next-exit status=%d body=%s", got.response.Code, got.response.Body.String())
+		}
+		var body struct {
+			StatusCode int
+			Error      any
+		}
+		if err := json.Unmarshal(got.response.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.StatusCode != 9 || body.Error != nil {
+			t.Fatalf("next-exit response = %+v, want exit code 9", body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("next-exit did not observe the subsequent container exit")
+	}
+}
+
+func TestDockerContainerWaitRemovedReturnsFinalExitStatus(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("wait-removed", []string{"/bin/false"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(record.ID, &container.ExitError{Code: 12}); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+record.ID+"/wait?condition=removed")
+	}()
+	select {
+	case response := <-done:
+		t.Fatalf("removed wait returned before removal: status=%d body=%s", response.Code, response.Body.String())
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := state.Remove(record.ID); err != nil {
+		t.Fatalf("remove waited container: %v", err)
+	}
+	select {
+	case response := <-done:
+		if response.Code != http.StatusOK {
+			t.Fatalf("removed wait status=%d body=%s", response.Code, response.Body.String())
+		}
+		var body struct {
+			StatusCode int
+			Error      any
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.StatusCode != 12 || body.Error != nil {
+			t.Fatalf("removed wait response = %+v, want exit code 12", body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("removed wait did not observe container removal")
+	}
+}
+
+func TestDockerContainerWaitRemovedCreatedContainerReturnsZero(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("wait-removed-created", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+record.ID+"/wait?condition=removed")
+	}()
+	select {
+	case response := <-done:
+		t.Fatalf("removed wait returned before removal: status=%d body=%s", response.Code, response.Body.String())
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := state.RemoveCreated(record.ID); err != nil {
+		t.Fatalf("remove created container: %v", err)
+	}
+	select {
+	case response := <-done:
+		if response.Code != http.StatusOK {
+			t.Fatalf("removed created wait status=%d body=%s", response.Code, response.Body.String())
+		}
+		var body struct {
+			StatusCode int
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.StatusCode != 0 {
+			t.Fatalf("removed created wait exit code = %d, want 0", body.StatusCode)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("removed wait did not observe created-container removal")
 	}
 }
 
