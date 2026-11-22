@@ -4233,6 +4233,16 @@ func TestWaitForDeploymentStartAllowsSuccessfulOneShotService(t *testing.T) {
 	}
 }
 
+func TestWaitForDeploymentCompletedAcceptsPreviouslyRecordedSuccessfulJob(t *testing.T) {
+	exited := map[string]deploymentProcessExit{
+		"migration": {service: "migration", err: nil},
+	}
+	unexpected, err := waitForDeploymentCompleted(context.Background(), "api", "migration", make(chan deploymentProcessExit), exited)
+	if err != nil || unexpected != nil {
+		t.Fatalf("previously completed job wait = %#v, %v", unexpected, err)
+	}
+}
+
 func TestWaitForDeploymentCompletedRequiresSuccessfulExit(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		exits := make(chan deploymentProcessExit, 1)

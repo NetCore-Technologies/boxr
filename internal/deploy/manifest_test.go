@@ -131,6 +131,10 @@ func TestBuildPlanRejectsInvalidGraphsAndServices(t *testing.T) {
 			"job": validService,
 			"web": {Command: []string{"/bin/true"}, DependsOnCompleted: []string{"job"}},
 		}},
+		"completed dependency with readiness probe": {Version: 1, Services: map[string]Service{
+			"job": {Command: []string{"/bin/true"}, Readiness: &ReadinessProbe{TCPAddress: "127.0.0.1:8080"}},
+			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"job"}, DependsOnCompleted: []string{"job"}},
+		}},
 		"completed dependency both healthy and completed": {Version: 1, Services: map[string]Service{
 			"job": {Command: []string{"/bin/true"}, Options: container.Options{Healthcheck: &container.HealthcheckConfig{Test: []string{"CMD", "/bin/true"}}}},
 			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"job"}, DependsOnHealthy: []string{"job"}, DependsOnCompleted: []string{"job"}},

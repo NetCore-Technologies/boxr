@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 909 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 910 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 
 ## Implemented capabilities
@@ -917,34 +917,35 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 907. Compose init:true uses Boxr’s always-on PID-1 signal-forwarding and child-reaping helper while init:false is rejected
 908. Compose mem_limit cpus and pids_limit map to bounded cgroup v2 memory CPU quota and PID controls with strict scalar parsing
 909. Compose mem_reservation maps to cgroup v2 memory.low and cpu_shares converts to cgroup v2 CPU weight
-910. Linux cgroup v2 freezer transitions verify cgroup membership and kernel frozen state before reporting pause or unpause success
-911. Failed cgroup freezer transitions restore the previous freeze state and confirm rollback
-912. Container pause and unpause persist process-identity-checked lifecycle states and events with rollback on persistence failure
-913. Native CLI and Docker Engine API pause/unpause paths serialize lifecycle transitions and resume paused workloads before stop or kill
-914. Docker Engine inspect reports State.Paused and State.Running consistently with persisted paused status, while prune protects paused containers
-915. Docker Engine container changes reports bounded added changed and deleted paths from managed image and writable filesystem layers
-916. Docker exec supports validated USER[:GROUP] overrides and otherwise inherits the container's configured identity
-917. Container health monitors suspend probes while paused and discard probes overlapping pause/unpause so freezer delays do not create false unhealthy transitions
+910. Compose service_completed_successfully waits for one-shot jobs to exit successfully before dependent groups start
+911. Linux cgroup v2 freezer transitions verify cgroup membership and kernel frozen state before reporting pause or unpause success
+912. Failed cgroup freezer transitions restore the previous freeze state and confirm rollback
+913. Container pause and unpause persist process-identity-checked lifecycle states and events with rollback on persistence failure
+914. Native CLI and Docker Engine API pause/unpause paths serialize lifecycle transitions and resume paused workloads before stop or kill
+915. Docker Engine inspect reports State.Paused and State.Running consistently with persisted paused status, while prune protects paused containers
+916. Docker Engine container changes reports bounded added changed and deleted paths from managed image and writable filesystem layers
+917. Docker exec supports validated USER[:GROUP] overrides and otherwise inherits the container's configured identity
+918. Container health monitors suspend probes while paused and discard probes overlapping pause/unpause so freezer delays do not create false unhealthy transitions
 
 
-918. Managed bridge endpoints persist a stable Docker endpoint ID and locally administered unicast MAC address, apply the MAC to the container interface, and remove both identities on disconnect
-919. Docker container inspect and network inspect expose the managed endpoint ID and configured MAC address from the same persisted IPAM endpoint
-920. Docker container list supports network-name/network-ID-prefix, health, exited-code, and negative-label filters against live managed endpoint metadata
-921. Docker exec supports upgraded stdin streams, non-TTY Docker stdout/stderr multiplex framing, Linux TTY/PTY raw streams, and bounded PTY resize requests
-922. Engine API stdin socket placement falls back to a private per-user short path when a configured state directory exceeds Unix-domain socket path limits
+919. Managed bridge endpoints persist a stable Docker endpoint ID and locally administered unicast MAC address, apply the MAC to the container interface, and remove both identities on disconnect
+920. Docker container inspect and network inspect expose the managed endpoint ID and configured MAC address from the same persisted IPAM endpoint
+921. Docker container list supports network-name/network-ID-prefix, health, exited-code, and negative-label filters against live managed endpoint metadata
+922. Docker exec supports upgraded stdin streams, non-TTY Docker stdout/stderr multiplex framing, Linux TTY/PTY raw streams, and bounded PTY resize requests
+923. Engine API stdin socket placement falls back to a private per-user short path when a configured state directory exceeds Unix-domain socket path limits
 
 
-923. Docker network connect supports validated static IPv4 endpoint addresses and explicit unicast MAC addresses, persists them in IPAM state, and configures the container interface
-924. Docker EndpointConfig rejects unsupported aliases links IPv6 link-local addresses and driver options instead of silently dropping them
+924. Docker network connect supports validated static IPv4 endpoint addresses and explicit unicast MAC addresses, persists them in IPAM state, and configures the container interface
+925. Docker EndpointConfig rejects unsupported aliases links IPv6 link-local addresses and driver options instead of silently dropping them
 
-925. Docker bridge IPAM persists, validates, inspects and allocates only within configured IPRange prefixes, including explicit static endpoint address checks
+926. Docker bridge IPAM persists, validates, inspects and allocates only within configured IPRange prefixes, including explicit static endpoint address checks
 
-926. Docker bridge IPAM auxiliary IPv4 reservations are persisted, returned by inspect, excluded from dynamic allocation and rejected for static endpoint assignment
+927. Docker bridge IPAM auxiliary IPv4 reservations are persisted, returned by inspect, excluded from dynamic allocation and rejected for static endpoint assignment
 
-927. Docker container listing evaluates ancestor image, volume name/source/destination, published host/container port and exposed port/range filters
+928. Docker container listing evaluates ancestor image, volume name/source/destination, published host/container port and exposed port/range filters
 
-928. Docker container list before and since filters resolve existing container IDs/names once per request and compare persisted creation times; invalid and unknown filter inputs return errors
+929. Docker container list before and since filters resolve existing container IDs/names once per request and compare persisted creation times; invalid and unknown filter inputs return errors
 
-929. Docker container list and inspect size=1 return SizeRw and SizeRootFs logical-byte counters using bounded, symlink-safe base-rootfs and OverlayFS-upper walks
+930. Docker container list and inspect size=1 return SizeRw and SizeRootFs logical-byte counters using bounded, symlink-safe base-rootfs and OverlayFS-upper walks
 
-930. Docker container create Tty launches the workload under a controlling PTY, merges terminal output, forwards signals to the PTY process group and preserves workload exit status
+931. Docker container create Tty launches the workload under a controlling PTY, merges terminal output, forwards signals to the PTY process group and preserves workload exit status

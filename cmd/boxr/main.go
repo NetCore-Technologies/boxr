@@ -3788,6 +3788,7 @@ var implementedFeatures = []string{
 	"Compose init:true uses Boxr’s always-on PID-1 signal-forwarding and child-reaping helper while init:false is rejected",
 	"Compose mem_limit cpus and pids_limit map to bounded cgroup v2 memory CPU quota and PID controls with strict scalar parsing",
 	"Compose mem_reservation maps to cgroup v2 memory.low and cpu_shares converts to cgroup v2 CPU weight",
+	"Compose service_completed_successfully waits for one-shot jobs to exit successfully before dependent groups start",
 }
 
 func printFeatures(stdout io.Writer) {
@@ -4876,6 +4877,27 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 				return 1
 			}
 			fmt.Fprintf(stdout, "started service %s\n", process.service)
+		}
+
+		// Completion jobs are isolated singleton waves by the planner. Drain and
+		// verify their exit now, before another wave can consume the event.
+		for _, process := range groupProcesses {
+			if !completedTargets[process.service] {
+				continue
+			}
+			unexpectedExit, completionErr := waitForDeploymentCompleted(ctx, process.service, process.service, exits, exited)
+			if unexpectedExit != nil {
+				exited[unexpectedExit.service] = *unexpectedExit
+			}
+			if completionErr != nil {
+				fmt.Fprintf(stderr, "boxr deploy up: %v\n", completionErr)
+				stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
+				if errors.Is(completionErr, context.Canceled) {
+					return 130
+				}
+				return 1
+			}
+			fmt.Fprintf(stdout, "completed job %s successfully\n", process.service)
 		}
 	}
 	healthCtx, cancelHealth := context.WithCancel(ctx)

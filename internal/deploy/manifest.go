@@ -590,6 +590,12 @@ func buildPlan(file File) (Plan, error) {
 			completedTargets[dependency] = true
 		}
 	}
+	for serviceName := range completedTargets {
+		service := file.Services[serviceName]
+		if service.Readiness != nil {
+			return plan, fmt.Errorf("service %q is used as a successful-completion dependency and cannot declare a readiness probe", serviceName)
+		}
+	}
 	ready := make([]string, 0, len(names))
 	for _, name := range names {
 		if indegree[name] == 0 {
