@@ -4375,13 +4375,26 @@ func TestResolveImageCommandHonorsEntrypointOverride(t *testing.T) {
 				copy(overrideCopy, test.override)
 				override = &overrideCopy
 			}
-			got := resolveImageCommand(test.imageEntrypoint, test.imageCommand, override, test.providedCommand)
+			got := resolveImageCommand(test.imageEntrypoint, test.imageCommand, override, false, test.providedCommand)
 			if !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("resolveImageCommand() = %#v, want %#v", got, test.want)
 			}
 		})
 	}
 }
+
+func TestResolveImageCommandClearsImageCMDWhenRequested(t *testing.T) {
+	got := resolveImageCommand([]string{"/image-entry"}, []string{"--default"}, nil, true, nil)
+	want := []string{"/image-entry"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("clear image CMD result = %#v, want %#v", got, want)
+	}
+	got = resolveImageCommand(nil, []string{"--default"}, nil, true, nil)
+	if len(got) != 0 {
+		t.Fatalf("cleared image command unexpectedly inherited CMD: %#v", got)
+	}
+}
+
 
 func TestDeploymentOSStopSignalMapping(t *testing.T) {
 	cases := map[string]syscall.Signal{

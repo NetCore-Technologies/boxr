@@ -375,12 +375,15 @@ func createFlagTakesValue(name string) bool {
 	}
 }
 
-func resolveImageCommand(imageEntrypoint, imageCommand []string, entrypointOverride *[]string, providedCommand []string) []string {
+func resolveImageCommand(imageEntrypoint, imageCommand []string, entrypointOverride *[]string, clearImageCommand bool, providedCommand []string) []string {
 	entrypoint := imageEntrypoint
 	defaultCommand := imageCommand
 	if entrypointOverride != nil {
 		entrypoint = *entrypointOverride
 		// Compose clears the image CMD whenever entrypoint is explicitly set.
+		defaultCommand = nil
+	}
+	if clearImageCommand {
 		defaultCommand = nil
 	}
 	arguments := providedCommand
@@ -405,6 +408,7 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 	var imageReference string
 	var configCommand []string
 	var configEntrypoint *[]string
+	var configClearImageCommand bool
 	var configEnv []string
 	var env, envFiles, capDrop, mounts, tmpfs, labels, volumes, publish envList
 	var dryRun bool
@@ -430,6 +434,7 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 		}
 		configCommand = loaded.Command
 		configEntrypoint = loaded.Entrypoint
+		configClearImageCommand = loaded.ClearImageCommand
 		configEnv = append(configEnv, loaded.Options.Env...)
 		// Config metadata is the low-priority label source. Labels in the
 		// options object override metadata, and explicit CLI --label flags
@@ -614,7 +619,7 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 		}
 		opts.Labels = mergeLabels(imageRuntimeConfig.Labels, opts.Labels)
 	}
-	commandArgs = resolveImageCommand(imageRuntimeConfig.Entrypoint, imageRuntimeConfig.Cmd, configEntrypoint, providedCommand)
+	commandArgs = resolveImageCommand(imageRuntimeConfig.Entrypoint, imageRuntimeConfig.Cmd, configEntrypoint, configClearImageCommand, providedCommand)
 	if len(commandArgs) == 0 {
 		fmt.Fprintln(stderr, "boxr run: a command is required (provide one after the options or in the config)")
 		flags.Usage()
@@ -4439,11 +4444,12 @@ func startDeploymentProcess(executable, stack string, order int, serviceName str
 		return nil, fmt.Errorf("prepare image service mounts: %w", err)
 	}
 	runFile := config.RunFile{
-		Version:    1,
-		Name:       options.Name,
-		Command:    append([]string(nil), service.Command...),
-		Entrypoint: service.Entrypoint,
-		Options:    options,
+		Version:           1,
+		Name:              options.Name,
+		Command:           append([]string(nil), service.Command...),
+		Entrypoint:        service.Entrypoint,
+		ClearImageCommand: service.ClearImageCommand,
+		Options:           options,
 	}
 	data, err := json.Marshal(runFile)
 	if err != nil {
