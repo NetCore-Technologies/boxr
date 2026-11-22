@@ -4462,6 +4462,30 @@ func startDeploymentProcess(executable, stack string, order int, serviceName str
 	}, nil
 }
 
+func waitForDeploymentCompleted(ctx context.Context, dependentService, dependencyService string, exits <-chan deploymentProcessExit, exited map[string]deploymentProcessExit) (*deploymentProcessExit, error) {
+	if result, exists := exited[dependencyService]; exists {
+		if result.err != nil {
+			return nil, fmt.Errorf("dependency %q did not complete successfully: %w", dependencyService, result.err)
+		}
+		return nil, nil
+	}
+	for {
+		select {
+		case result := <-exits:
+			exited[result.service] = result
+			if result.service == dependencyService {
+				if result.err != nil {
+					return nil, fmt.Errorf("dependency %q did not complete successfully: %w", dependencyService, result.err)
+				}
+				return nil, nil
+			}
+			return &result, fmt.Errorf("service %q exited while service %q was waiting for dependency %q to complete", result.service, dependentService, dependencyService)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
 func waitForDeploymentHealthy(ctx context.Context, dependentService, dependencyService, containerName string, timeout time.Duration, exits <-chan deploymentProcessExit) (*deploymentProcessExit, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -4502,6 +4526,10 @@ func waitForDeploymentHealthy(ctx context.Context, dependentService, dependencyS
 }
 
 func waitForDeploymentStart(ctx context.Context, name string, timeout time.Duration, probe *deploy.ReadinessProbe, exits <-chan deploymentProcessExit) (state.Record, *deploymentProcessExit, error) {
+	return waitForDeploymentStartWithCompletion(ctx, name, timeout, probe, false, exits)
+}
+
+func waitForDeploymentStartWithCompletion(ctx context.Context, name string, timeout time.Duration, probe *deploy.ReadinessProbe, allowSuccessfulCompletion bool, exits <-chan deploymentProcessExit) (state.Record, *deploymentProcessExit, error) {
 	var empty state.Record
 	startCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -4510,6 +4538,13 @@ func waitForDeploymentStart(ctx context.Context, name string, timeout time.Durat
 	for {
 		select {
 		case exited := <-exits:
+			if allowSuccessfulCompletion && exited.service == name && exited.err == nil {
+				record, err := state.Get(name)
+				if err == nil && record.Status == "exited" && record.ExitCode != nil && *record.ExitCode == 0 {
+					return record, &exited, nil
+				}
+				return empty, &exited, fmt.Errorf("service %q exited without a persisted successful completion", name)
+			}
 			return empty, &exited, fmt.Errorf("service %q exited while another service was starting", exited.service)
 		case <-startCtx.Done():
 			if ctx.Err() != nil {
@@ -4537,8 +4572,13 @@ func waitForDeploymentStart(ctx context.Context, name string, timeout time.Durat
 					return empty, nil, fmt.Errorf("service %q readiness failed: %w", name, err)
 				}
 				return record, nil, nil
-			case "exited", "failed":
+			case "exited":
+				if allowSuccessfulCompletion && record.ExitCode != nil && *record.ExitCode == 0 {
+					return record, nil, nil
+				}
 				return record, nil, fmt.Errorf("service %q exited before entering the running state", name)
+			case "failed":
+				return record, nil, fmt.Errorf("service %q failed before entering the running state", name)
 			}
 		}
 	}
@@ -4739,6 +4779,12 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 
 	plannedByName := make(map[string]deploy.ServicePlan, len(plan.Services))
 	orderIndex := make(map[string]int, len(plan.Services))
+	completedTargets := make(map[string]bool, len(plan.Services))
+	for _, service := range file.Services {
+		for _, dependency := range service.DependsOnCompleted {
+			completedTargets[dependency] = true
+		}
+	}
 	for index, planned := range plan.Services {
 		plannedByName[planned.Name] = planned
 		orderIndex[planned.Name] = index
@@ -4756,6 +4802,20 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 				dependencyContainer := deploy.ContainerName(file.Name, dependency)
 				dependencyTimeout := deploymentHealthyDependencyTimeout(service, file.Services[dependency], startTimeout)
 				unexpectedExit, waitErr := waitForDeploymentHealthy(ctx, serviceName, dependency, dependencyContainer, dependencyTimeout, exits)
+				if unexpectedExit != nil {
+					exited[unexpectedExit.service] = *unexpectedExit
+				}
+				if waitErr != nil {
+					fmt.Fprintf(stderr, "boxr deploy up: %v\n", waitErr)
+					stopDeploymentProcesses(processes, exited, exits, stopTimeout, stdout, stderr)
+					if errors.Is(waitErr, context.Canceled) {
+						return 130
+					}
+					return 1
+				}
+			}
+			for _, dependency := range service.DependsOnCompleted {
+				unexpectedExit, waitErr := waitForDeploymentCompleted(ctx, serviceName, dependency, exits, exited)
 				if unexpectedExit != nil {
 					exited[unexpectedExit.service] = *unexpectedExit
 				}
@@ -4803,7 +4863,7 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 			}
 			service := file.Services[process.service]
 			serviceTimeout := deploymentServiceStartTimeout(service, startTimeout)
-			_, unexpectedExit, err := waitForDeploymentStart(ctx, process.name, serviceTimeout, probe, exits)
+			_, unexpectedExit, err := waitForDeploymentStartWithCompletion(ctx, process.name, serviceTimeout, probe, completedTargets[process.service], exits)
 			if unexpectedExit != nil {
 				exited[unexpectedExit.service] = *unexpectedExit
 			}
@@ -4822,6 +4882,9 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 	defer cancelHealth()
 	healthFailures := make(chan deploymentHealthFailure, len(processes))
 	for _, process := range processes {
+		if _, finished := exited[process.service]; finished {
+			continue
+		}
 		healthcheck := file.Services[process.service].Healthcheck
 		if healthcheck == nil {
 			continue
@@ -4836,6 +4899,16 @@ func runDeploymentUp(file deploy.File, plan deploy.Plan, startTimeout, stopTimeo
 		}(process.service, healthcheck)
 	}
 
+	activeServices := 0
+	for _, process := range processes {
+		if _, finished := exited[process.service]; !finished {
+			activeServices++
+		}
+	}
+	if activeServices == 0 {
+		fmt.Fprintf(stdout, "deployment %s completed successfully\n", file.Name)
+		return 0
+	}
 	fmt.Fprintf(stdout, "deployment %s is running; press Ctrl+C to stop all services\n", file.Name)
 	var terminalExit *deploymentProcessExit
 	var terminalHealthFailure *deploymentHealthFailure

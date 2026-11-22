@@ -584,6 +584,12 @@ func buildPlan(file File) (Plan, error) {
 		sort.Strings(dependents[name])
 	}
 
+	completedTargets := make(map[string]bool)
+	for _, service := range file.Services {
+		for _, dependency := range service.DependsOnCompleted {
+			completedTargets[dependency] = true
+		}
+	}
 	ready := make([]string, 0, len(names))
 	for _, name := range names {
 		if indegree[name] == 0 {
@@ -594,9 +600,26 @@ func buildPlan(file File) (Plan, error) {
 	startGroups := make([][]string, 0, len(names))
 	for len(ready) > 0 {
 		current := append([]string(nil), ready...)
-		startGroups = append(startGroups, current)
 		ready = ready[:0]
+		completionReady := make([]string, 0, len(current))
+		regularReady := make([]string, 0, len(current))
 		for _, name := range current {
+			if completedTargets[name] {
+				completionReady = append(completionReady, name)
+			} else {
+				regularReady = append(regularReady, name)
+			}
+		}
+		// Completion-gated jobs run in isolated waves so their normal process
+		// exit can be observed and recorded before any later wave starts.
+		for _, name := range completionReady {
+			startGroups = append(startGroups, []string{name})
+		}
+		if len(regularReady) > 0 {
+			startGroups = append(startGroups, regularReady)
+		}
+		orderedCurrent := append(completionReady, regularReady...)
+		for _, name := range orderedCurrent {
 			order = append(order, name)
 			for _, dependent := range dependents[name] {
 				indegree[dependent]--

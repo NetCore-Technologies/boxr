@@ -4215,6 +4215,52 @@ func TestContainerPruneRequiresExplicitModeAndPreservesActiveRecords(t *testing.
 	}
 }
 
+func TestWaitForDeploymentStartAllowsSuccessfulOneShotService(t *testing.T) {
+	t.Setenv("BOXR_STATE_DIR", t.TempDir())
+	record, err := state.Create("migration-job", []string{"/bin/true"}, container.Options{NetworkMode: "none"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Start(record.ID, 12345); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Finish(record.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, unexpected, err := waitForDeploymentStartWithCompletion(context.Background(), record.Name, time.Second, nil, true, make(chan deploymentProcessExit))
+	if err != nil || unexpected != nil || got.Status != "exited" || got.ExitCode == nil || *got.ExitCode != 0 {
+		t.Fatalf("one-shot service start = status %q exit %#v unexpected %#v err %v", got.Status, got.ExitCode, unexpected, err)
+	}
+}
+
+func TestWaitForDeploymentCompletedRequiresSuccessfulExit(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		exits := make(chan deploymentProcessExit, 1)
+		exits <- deploymentProcessExit{service: "migration"}
+		exited := make(map[string]deploymentProcessExit)
+		unexpected, err := waitForDeploymentCompleted(context.Background(), "api", "migration", exits, exited)
+		if err != nil || unexpected != nil || len(exited) != 1 {
+			t.Fatalf("completed dependency wait = %#v, %v, events %#v", unexpected, err, exited)
+		}
+	})
+	t.Run("failure", func(t *testing.T) {
+		exits := make(chan deploymentProcessExit, 1)
+		exits <- deploymentProcessExit{service: "migration", err: fmt.Errorf("exit code 12")}
+		_, err := waitForDeploymentCompleted(context.Background(), "api", "migration", exits, make(map[string]deploymentProcessExit))
+		if err == nil || !strings.Contains(err.Error(), "did not complete successfully") {
+			t.Fatalf("failed dependency wait error = %v", err)
+		}
+	})
+	t.Run("unexpected sibling", func(t *testing.T) {
+		exits := make(chan deploymentProcessExit, 1)
+		exits <- deploymentProcessExit{service: "database", err: fmt.Errorf("exit code 2")}
+		unexpected, err := waitForDeploymentCompleted(context.Background(), "api", "migration", exits, make(map[string]deploymentProcessExit))
+		if err == nil || unexpected == nil || unexpected.service != "database" {
+			t.Fatalf("unexpected sibling exit = %#v, %v", unexpected, err)
+		}
+	})
+}
+
 func TestWaitForDeploymentHealthyUsesPersistedContainerHealth(t *testing.T) {
 	t.Setenv("BOXR_STATE_DIR", t.TempDir())
 	options := container.Options{
