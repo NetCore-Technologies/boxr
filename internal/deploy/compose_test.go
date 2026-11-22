@@ -47,6 +47,7 @@ services:
     hostname: api
     stop_signal: SIGQUIT
     stop_grace_period: 30s
+    user: "1000:1000"
     read_only: true
     cap_drop: [NET_RAW, CAP_MKNOD]
     networks: [app]
@@ -79,6 +80,9 @@ networks:
 		HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 8080, Protocol: "tcp",
 	}) {
 		t.Fatalf("published ports = %#v", api.Options.PublishedPorts)
+	}
+	if api.Options.User != "1000:1000" {
+		t.Fatalf("container user = %q, want 1000:1000", api.Options.User)
 	}
 	if api.Options.StopSignal != "SIGQUIT" || api.StopTimeoutMS != 30000 {
 		t.Fatalf("stop settings = signal %q grace %dms", api.Options.StopSignal, api.StopTimeoutMS)
@@ -151,6 +155,9 @@ func TestLoadComposeRejectsSemanticsBoxrCannotRepresent(t *testing.T) {
 		"implicit default bridge":          "services:\n  api:\n    image: alpine\n",
 		"non-external network":             "services:\n  api:\n    image: alpine\n    networks: [app]\nnetworks:\n  app: {}\n",
 		"unsupported dependency condition": "services:\n  api:\n    image: alpine\n    network_mode: none\n    depends_on:\n      db:\n        condition: service_completed_successfully\n  db:\n    image: postgres\n    network_mode: none\n",
+		"invalid user syntax":               "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    user: \"bad/user\"\\n",
+		"invalid user whitespace":           "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    user: \"1000: 1000\"\\n",
+		"invalid user delimiter":            "services:\\n  api:\\n    image: alpine\\n    network_mode: none\\n    user: \"1000:1000:1000\"\\n",
 		"unknown service field":            "services:\n  api:\n    image: alpine\n    network_mode: none\n    deploy: {}\n",
 	}
 	for name, contents := range tests {
@@ -862,5 +869,26 @@ func TestParseComposeStopSignal(t *testing.T) {
 		if _, err := parseComposeStopSignal(input); err == nil {
 			t.Errorf("parseComposeStopSignal(%q) unexpectedly succeeded", input)
 		}
+	}
+}
+
+
+func TestParseComposeUser(t *testing.T) {
+	cases := []string{"1000", "1000:1000", "root", "app", ":1000"}
+	for _, input := range cases {
+		node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: input}
+		got, err := parseComposeUser(node)
+		if err != nil || got != input {
+			t.Errorf("parseComposeUser(%q) = %q, %v", input, got, err)
+		}
+	}
+	for _, input := range []string{"", "bad/user", "1000: 1000", "1000:1000:1000", "app\nroot"} {
+		node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: input}
+		if _, err := parseComposeUser(node); err == nil {
+			t.Errorf("parseComposeUser(%q) unexpectedly succeeded", input)
+		}
+	}
+	if _, err := parseComposeUser(&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"}); err == nil {
+		t.Fatal("boolean Compose user unexpectedly succeeded")
 	}
 }
