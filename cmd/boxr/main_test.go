@@ -2950,7 +2950,7 @@ func TestStopDeploymentProcessesForwardsConfiguredSignals(t *testing.T) {
 				t.Fatalf("configured %s did not stop child cleanly: exited=%#v stdout=%q stderr=%q", test.name, exited, out.String(), errOut.String())
 			}
 			if exited["signal-test"].err != nil {
-				t.Fatalf("child exited with error after %s: %v", test.name, exited[test.name].err)
+				t.Fatalf("child exited with error after %s: %v", test.name, exited["signal-test"].err)
 			}
 		})
 	}
