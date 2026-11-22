@@ -2842,23 +2842,6 @@ func TestDeploymentStopTimeoutUsesPersistedServiceOverride(t *testing.T) {
 }
 
 func TestDeploymentStopGraceChildProcess(t *testing.T) {
-	if value := os.Getenv("BOXR_STOP_SIGNAL_CHILD"); value != "" {
-		var configured syscall.Signal
-		switch value {
-		case "SIGUSR1":
-			configured = syscall.Signal(10)
-		case "SIGUSR2":
-			configured = syscall.Signal(12)
-		default:
-			t.Fatalf("unsupported child test signal %q", value)
-		}
-		signals := make(chan os.Signal, 1)
-		signal.Notify(signals, configured)
-		defer signal.Stop(signals)
-		_, _ = fmt.Fprintln(os.Stdout, "ready")
-		<-signals
-		return
-	}
 	if os.Getenv("BOXR_STOP_GRACE_CHILD") != "1" {
 		return
 	}
@@ -2922,20 +2905,34 @@ func TestStopDeploymentProcessesForwardsConfiguredSignals(t *testing.T) {
 		{name: "SIGUSR2", signal: syscall.Signal(12)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			command := exec.Command(os.Args[0], "-test.run=^TestDeploymentStopGraceChildProcess$")
-			command.Env = append(os.Environ(), "BOXR_STOP_SIGNAL_CHILD="+test.name)
-			pipe, err := command.StdoutPipe()
+			signalName := strings.TrimPrefix(test.name, "SIG")
+			command := exec.Command("/bin/sh", "-c",
+				"trap 'exit 0' "+signalName+"; printf 'ready\\n'; while IFS= read -r line; do :; done",
+			)
+			stdin, keepOpen, err := os.Pipe()
 			if err != nil {
+				t.Fatal(err)
+			}
+			defer keepOpen.Close()
+			command.Stdin = stdin
+			stdout, err := command.StdoutPipe()
+			if err != nil {
+				_ = stdin.Close()
 				t.Fatal(err)
 			}
 			command.Stderr = io.Discard
 			if err := command.Start(); err != nil {
+				_ = stdin.Close()
 				t.Fatal(err)
 			}
-			line, err := bufio.NewReader(pipe).ReadString('\n')
+			_ = stdin.Close()
+			defer func() {
+				if command.Process != nil {
+					_ = command.Process.Kill()
+				}
+			}()
+			line, err := bufio.NewReader(stdout).ReadString('\n')
 			if err != nil || line != "ready\n" {
-				_ = command.Process.Kill()
-				_ = command.Wait()
 				t.Fatalf("signal helper did not become ready: line=%q err=%v", line, err)
 			}
 			process := &deploymentProcess{service: "signal-test", stopTimeout: time.Second, stopSignal: test.signal, command: command}
@@ -2951,6 +2948,9 @@ func TestStopDeploymentProcessesForwardsConfiguredSignals(t *testing.T) {
 			}
 			if exited["signal-test"].err != nil {
 				t.Fatalf("child exited with error after %s: %v", test.name, exited["signal-test"].err)
+			}
+			if errOut.Len() != 0 {
+				t.Fatalf("signal forwarding wrote errors: %s", errOut.String())
 			}
 		})
 	}

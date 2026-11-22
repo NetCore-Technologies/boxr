@@ -913,7 +913,7 @@ func parseComposeNetworkReferences(node *yaml.Node) ([]string, error) {
 }
 
 func parseComposeCommand(node *yaml.Node) ([]string, error) {
-	if node.Kind == 0 {
+	if node == nil || node.Kind == 0 {
 		return nil, nil
 	}
 	if node.Kind == yaml.SequenceNode {
@@ -1002,7 +1002,7 @@ func splitComposeCommand(value string) ([]string, error) {
 }
 
 func parseComposeDependencies(node *yaml.Node) ([]string, []string, []string, error) {
-	if node.Kind == 0 {
+	if node == nil || node.Kind == 0 {
 		return nil, nil, nil, nil
 	}
 	var result []string
