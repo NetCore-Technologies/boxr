@@ -4395,7 +4395,6 @@ func TestResolveImageCommandClearsImageCMDWhenRequested(t *testing.T) {
 	}
 }
 
-
 func TestDeploymentOSStopSignalMapping(t *testing.T) {
 	cases := map[string]syscall.Signal{
 		"":        0,

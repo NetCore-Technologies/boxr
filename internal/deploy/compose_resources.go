@@ -115,4 +115,3 @@ func parseComposeCPUShares(node *yaml.Node) (int, error) {
 	weight := 1 + ((shares - 2) * 9999 / 262142)
 	return int(weight), nil
 }
-

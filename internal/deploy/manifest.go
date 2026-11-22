@@ -57,7 +57,7 @@ type VolumeMount struct {
 type Service struct {
 	Image              string            `json:"image,omitempty"`
 	Command            []string          `json:"command,omitempty"`
-	ClearImageCommand bool              `json:"clearImageCommand,omitempty"`
+	ClearImageCommand  bool              `json:"clearImageCommand,omitempty"`
 	Entrypoint         *[]string         `json:"entrypoint,omitempty"`
 	Options            container.Options `json:"options"`
 	DependsOn          []string          `json:"dependsOn,omitempty"`

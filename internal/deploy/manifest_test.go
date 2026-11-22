@@ -85,11 +85,11 @@ func TestBuildPlanOrdersServicesDeterministicallyAndRedactsSecrets(t *testing.T)
 func TestBuildPlanRejectsInvalidGraphsAndServices(t *testing.T) {
 	validService := Service{Command: []string{"/bin/true"}}
 	tests := map[string]File{
-		"unsupported version": {Version: 2, Services: map[string]Service{"web": validService}},
-		"empty services":                                        {Version: 1},
-		"invalid stack name": {Version: 1, Name: "../bad", Services: map[string]Service{"web": validService}},
+		"unsupported version":  {Version: 2, Services: map[string]Service{"web": validService}},
+		"empty services":       {Version: 1},
+		"invalid stack name":   {Version: 1, Name: "../bad", Services: map[string]Service{"web": validService}},
 		"invalid service name": {Version: 1, Services: map[string]Service{"Web": validService}},
-		"missing command": {Version: 1, Services: map[string]Service{"web": {}}},
+		"missing command":      {Version: 1, Services: map[string]Service{"web": {}}},
 		"unknown dependency": {Version: 1, Services: map[string]Service{
 			"web": {Command: []string{"/bin/true"}, DependsOn: []string{"db"}},
 		}},

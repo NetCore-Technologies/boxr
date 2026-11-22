@@ -160,7 +160,7 @@ func TestLoadComposeRejectsSemanticsBoxrCannotRepresent(t *testing.T) {
 		"image build":                           "services:\n  api:\n    build: .\n",
 		"named volumes":                         "services:\n  api:\n    image: alpine\n    network_mode: none\n    volumes: [data:/data]\n",
 		"top-level volumes":                     "services:\n  api:\n    image: alpine\n    network_mode: none\nvolumes:\n  data: {}\n",
-		"invalid entrypoint mapping":              "services:\n  api:\n    image: alpine\n    network_mode: none\n    entrypoint: {}\n",
+		"invalid entrypoint mapping":            "services:\n  api:\n    image: alpine\n    network_mode: none\n    entrypoint: {}\n",
 		"interactive tty":                       "services:\n  api:\n    image: alpine\n    network_mode: none\n    tty: true\n",
 		"privileged":                            "services:\n  api:\n    image: alpine\n    network_mode: none\n    privileged: true\n",
 		"restart policy":                        "services:\n  api:\n    image: alpine\n    network_mode: none\n    restart: always\n",
