@@ -3810,6 +3810,7 @@ var implementedFeatures = []string{
 	"Compose mem_reservation maps to cgroup v2 memory.low and cpu_shares converts to cgroup v2 CPU weight",
 	"Compose service_completed_successfully waits for one-shot jobs to exit successfully before dependent groups start",
 	"Compose entrypoint overrides image ENTRYPOINT, clears image CMD when non-null, and preserves null inheritance semantics",
+	"Compose command null inherits image CMD while empty command string/list explicitly clears the image default",
 }
 
 func printFeatures(stdout io.Writer) {

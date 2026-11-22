@@ -30,7 +30,6 @@ services:
       app: {}
   api:
     image: ghcr.io/example/api:1.2.3
-    command: /app/server --message "hello world"
     entrypoint: ["/srv/entrypoint.sh", "--foreground"]
     command: ["--serve"]
     depends_on:
@@ -75,14 +74,11 @@ networks:
 		t.Fatalf("deployment identity = version %d, name %q", file.Version, file.Name)
 	}
 	api := file.Services["api"]
-	if !api.ClearImageCommand || !reflect.DeepEqual(api.Command, []string{"--serve"}) {
+	if api.ClearImageCommand || !reflect.DeepEqual(api.Command, []string{"--serve"}) {
 		t.Fatalf("command override = %#v, clear image command = %v", api.Command, api.ClearImageCommand)
 	}
 	if api.Entrypoint == nil || !reflect.DeepEqual(*api.Entrypoint, []string{"/srv/entrypoint.sh", "--foreground"}) {
 		t.Fatalf("entrypoint = %#v", api.Entrypoint)
-	}
-	if !reflect.DeepEqual(api.Command, []string{"/app/server", "--message", "hello world"}) {
-		t.Fatalf("command = %#v", api.Command)
 	}
 	if !reflect.DeepEqual(api.DependsOn, []string{"database"}) {
 		t.Fatalf("depends_on = %#v", api.DependsOn)
@@ -1095,6 +1091,45 @@ func TestParseComposeInit(t *testing.T) {
 		if err := parseComposeInit(node); err == nil {
 			t.Errorf("parseComposeInit(%#v) unexpectedly succeeded", node)
 		}
+	}
+}
+
+func TestLoadComposeCommandNullAndEmptyOverrides(t *testing.T) {
+	cases := []struct {
+		name      string
+		command   string
+		wantClear bool
+	}{
+		{name: "null inherits image CMD", command: "null", wantClear: false},
+		{name: "empty string clears image CMD", command: "\"\"", wantClear: true},
+		{name: "empty list clears image CMD", command: "[]", wantClear: true},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "compose.yaml")
+			contents := "services:\n  app:\n    image: example/app:1.0\n    network_mode: none\n    command: " + test.command + "\n"
+			if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+			file, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load Compose command %s: %v", test.command, err)
+			}
+			service := file.Services["app"]
+			if service.ClearImageCommand != test.wantClear {
+				t.Fatalf("ClearImageCommand = %v, want %v", service.ClearImageCommand, test.wantClear)
+			}
+			if len(service.Command) != 0 {
+				t.Fatalf("empty/null command parsed to arguments %#v", service.Command)
+			}
+			plan, err := BuildPlan(file)
+			if err != nil {
+				t.Fatalf("BuildPlan: %v", err)
+			}
+			if plan.Services[0].ClearImageCommand != test.wantClear {
+				t.Fatalf("planned ClearImageCommand = %v, want %v", plan.Services[0].ClearImageCommand, test.wantClear)
+			}
+		})
 	}
 }
 
