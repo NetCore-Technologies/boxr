@@ -374,8 +374,12 @@ func parseDockerEndpointConfig(raw json.RawMessage) (boxrnetwork.EndpointOptions
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return endpoint, fmt.Errorf("EndpointConfig must contain one JSON object")
 	}
-	if len(config.Aliases) > 0 || len(config.Links) > 0 || len(config.DriverOpts) > 0 {
-		return endpoint, fmt.Errorf("EndpointConfig aliases, links and driver options are not supported")
+	if len(config.Links) > 0 || len(config.DriverOpts) > 0 {
+		return endpoint, fmt.Errorf("EndpointConfig links and driver options are not supported")
+	}
+	endpoint.Aliases, err = boxrnetwork.NormalizeEndpointAliases(config.Aliases)
+	if err != nil {
+		return boxrnetwork.EndpointOptions{}, fmt.Errorf("EndpointConfig Aliases: %w", err)
 	}
 	if config.IPAMConfig != nil {
 		if config.IPAMConfig.IPv6Address != "" || len(config.IPAMConfig.LinkLocalIPs) > 0 {
@@ -390,6 +394,23 @@ func parseDockerEndpointConfig(raw json.RawMessage) (boxrnetwork.EndpointOptions
 		}
 	}
 	return endpoint, nil
+}
+
+func verifyManagedContainerHostsMount(record state.Record) error {
+	if record.Options.RootFS == "" {
+		return fmt.Errorf("live bridge name resolution requires a rootfs-backed container")
+	}
+	source, err := boxrnetwork.HostsFilePath(record.ID)
+	if err != nil {
+		return fmt.Errorf("resolve managed hosts file: %w", err)
+	}
+	for _, mount := range record.Options.BindMounts {
+		if filepath.Clean(mount.Target) == "/etc/hosts" &&
+			filepath.Clean(mount.Source) == filepath.Clean(source) && mount.ReadOnly {
+			return nil
+		}
+	}
+	return fmt.Errorf("container %s was started without Boxr's managed /etc/hosts mount; restart it with the current runtime before connecting a bridge network", record.ID)
 }
 
 func (s *Server) handleNetworkConnect(writer http.ResponseWriter, request *http.Request, networkName string) {
@@ -426,6 +447,11 @@ func (s *Server) handleNetworkConnect(writer http.ResponseWriter, request *http.
 		writeError(writer, http.StatusConflict, fmt.Errorf("refuse to enter container PID %d: %w", record.PID, err))
 		return
 	}
+	if err := verifyManagedContainerHostsMount(record); err != nil {
+		writeError(writer, http.StatusConflict, err)
+		return
+	}
+	endpoint.ContainerName = record.Name
 	if _, err := s.joinNetwork(networkName, record.PID, record.ID, endpoint); err != nil {
 		if strings.Contains(err.Error(), "does not exist") {
 			writeError(writer, http.StatusNotFound, err)

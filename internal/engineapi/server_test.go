@@ -2611,7 +2611,22 @@ func TestDockerNetworkConnectDisconnectAndInspectEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	record, err := state.Create("network-client", []string{"/bin/sleep", "30"}, container.Options{NetworkMode: "none"}, nil)
+	record, err := state.Create("network-client", []string{"/bin/sleep", "30"}, container.Options{
+		NetworkMode: "none", RootFS: filepath.Join(t.TempDir(), "rootfs"),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostsSource, err := boxrnetwork.HostsFilePath(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.AddManagedBindMount(record.ID, container.BindMount{
+		Source: hostsSource, Target: "/etc/hosts", ReadOnly: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	record, err = state.Get(record.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2628,7 +2643,7 @@ func TestDockerNetworkConnectDisconnectAndInspectEndpoint(t *testing.T) {
 	}()
 
 	connectRequest := httptest.NewRequest(http.MethodPost, "/v1.45/networks/"+networkCreated.ID+"/connect",
-		strings.NewReader(`{"Container":"`+record.ID+`","EndpointConfig":{"IPAMConfig":{"IPv4Address":"172.29.41.133"},"MacAddress":"02:aa:bb:cc:dd:ee"}}`))
+		strings.NewReader(`{"Container":"`+record.ID+`","EndpointConfig":{"IPAMConfig":{"IPv4Address":"172.29.41.133"},"MacAddress":"02:aa:bb:cc:dd:ee","Aliases":["database","db.internal"]}}`))
 	connectResponse := httptest.NewRecorder()
 	server.ServeHTTP(connectResponse, connectRequest)
 	if connectResponse.Code != http.StatusOK {
@@ -3487,19 +3502,21 @@ func TestDockerNetworkInspectIncludesEndpointIdentity(t *testing.T) {
 }
 
 func TestParseDockerEndpointConfigSupportsStaticIPv4AndMAC(t *testing.T) {
-	raw := json.RawMessage(`{"IPAMConfig":{"IPv4Address":"172.30.48.5"},"MacAddress":"02:aa:bb:cc:dd:ee"}`)
+	raw := json.RawMessage(`{"IPAMConfig":{"IPv4Address":"172.30.48.5"},"MacAddress":"02:aa:bb:cc:dd:ee","Aliases":["api","API.internal"]}`)
 	endpoint, err := parseDockerEndpointConfig(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if endpoint.IPv4Address != "172.30.48.5" || endpoint.MACAddress != "02:aa:bb:cc:dd:ee" {
+	if endpoint.IPv4Address != "172.30.48.5" || endpoint.MACAddress != "02:aa:bb:cc:dd:ee" ||
+		strings.Join(endpoint.Aliases, "|") != "api|api.internal" {
 		t.Fatalf("parsed endpoint options = %+v", endpoint)
 	}
 }
 
 func TestParseDockerEndpointConfigRejectsUnsupportedAndMalformedFields(t *testing.T) {
 	for _, raw := range []string{
-		`{"Aliases":["api"]}`,
+		`{"Aliases":["bad\\nname"]}`,
+		`{"Aliases":["127.0.0.1"]}`,
 		`{"Links":["db:database"]}`,
 		`{"DriverOpts":{"mtu":"1400"}}`,
 		`{"IPAMConfig":{"IPv6Address":"2001:db8::4"}}`,

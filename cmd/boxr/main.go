@@ -3852,6 +3852,7 @@ var implementedFeatures = []string{
 	"Docker Engine API resizes active container TTYs through a private per-container Unix socket and PTY window-size updates",
 	"Dockerfile SHELL instructions persist the selected shell in OCI image config and apply inherited shell arrays to shell-form RUN CMD and ENTRYPOINT across build stages",
 	"Dockerfile COPY --chown applies validated numeric UID:GID ownership to copied files directories and symlinks without following links",
+	"Docker bridge network discovery maps container IDs names and endpoint aliases into private managed /etc/hosts files refreshed in place on attach and detach",
 }
 
 func printFeatures(stdout io.Writer) {

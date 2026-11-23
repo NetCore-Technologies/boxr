@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 937 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 938 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 
 ## Implemented capabilities
@@ -960,3 +960,6 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 
 
 937. Dockerfile COPY --chown applies validated numeric UID:GID ownership to copied files directories and symlinks without following links
+
+
+938. Docker bridge network discovery maps container IDs names and endpoint aliases into private managed /etc/hosts files refreshed in place on attach and detach
