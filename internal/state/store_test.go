@@ -62,6 +62,46 @@ func TestCreateStartFinishInspectAndRemoveLifecycle(t *testing.T) {
 	}
 }
 
+func TestManagedBindMountIsIdempotentDuringAutomaticRestart(t *testing.T) {
+	useTempState(t)
+	record, err := Create("managed-hosts-restart", []string{"/bin/true"}, container.Options{
+		RestartPolicy: "always",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mount := container.BindMount{
+		Source: "/run/boxr/hosts/container.hosts", Target: "/etc/hosts", ReadOnly: true,
+	}
+	if err := AddManagedBindMount(record.ID, mount); err != nil {
+		t.Fatal(err)
+	}
+	if err := Start(record.ID, 4321); err != nil {
+		t.Fatal(err)
+	}
+	if err := Finish(record.ID, &container.ExitError{Code: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareRestart(record.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := AddManagedBindMount(record.ID, mount); err != nil {
+		t.Fatalf("idempotent managed mount during restart: %v", err)
+	}
+	restarting, err := Get(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarting.Status != "restarting" || len(restarting.Options.BindMounts) != 1 {
+		t.Fatalf("restart record = %+v", restarting)
+	}
+	different := mount
+	different.Source = "/run/boxr/hosts/other.hosts"
+	if err := AddManagedBindMount(record.ID, different); err == nil {
+		t.Fatal("different /etc/hosts mount was allowed while restarting")
+	}
+}
+
 func TestManagedRootFSIsPrivateAndRemovedWithContainer(t *testing.T) {
 	stateDir := useTempState(t)
 	record, err := Create("managed-rootfs", []string{"/bin/true"}, container.Options{}, nil)

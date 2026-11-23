@@ -339,17 +339,19 @@ func AddManagedBindMount(id string, mount container.BindMount) error {
 		return fmt.Errorf("managed hosts bind mount must be a read-only absolute source at /etc/hosts")
 	}
 	return update(id, func(record *Record) error {
-		if record.Status != "created" && record.Status != "exited" && record.Status != "failed" {
-			return fmt.Errorf("container %s cannot change managed mounts in %q state", record.ID, record.Status)
-		}
 		for _, existing := range record.Options.BindMounts {
 			if filepath.Clean(existing.Target) != "/etc/hosts" {
 				continue
 			}
 			if filepath.Clean(existing.Source) == filepath.Clean(mount.Source) && existing.ReadOnly {
+				// An automatic restart reuses the persisted managed mount. Allow
+				// this exact idempotent operation while the record is restarting.
 				return nil
 			}
 			return fmt.Errorf("container %s already has a user-managed /etc/hosts mount", record.ID)
+		}
+		if record.Status != "created" && record.Status != "exited" && record.Status != "failed" {
+			return fmt.Errorf("container %s cannot change managed mounts in %q state", record.ID, record.Status)
 		}
 		record.Options.BindMounts = append(record.Options.BindMounts, mount)
 		return nil
