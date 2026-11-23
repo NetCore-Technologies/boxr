@@ -561,8 +561,8 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 		}
 		spec.dockerfileStages = stages
 		spec.Base = "scratch"
-		spec.Copy = nil
-		spec.dockerfileSteps = nil
+		// Preserve the legacy parsed COPY/step views for existing callers. The
+		// build executor prefers dockerfileStages when it is present.
 		spec.Config = stages[len(stages)-1].config
 		spec.dockerfileHasWorkdir = stages[len(stages)-1].hasWorkdir
 	}
