@@ -461,11 +461,33 @@ func TestParseDockerfileCopyChmodSupportsBoundedOctalModes(t *testing.T) {
 	for _, instruction := range []string{
 		"COPY --chown=0:0 runner /runner",
 		"ADD --chmod=0755 runner /runner",
+		"ADD --chown=1000:1000 runner /runner",
 		"COPY --chmod=0755 --chmod=0644 runner /runner",
+		"COPY --chown=root:root runner /runner",
+		"COPY --chown=1000 runner /runner",
+		"COPY --chown=1000: runner /runner",
+		"COPY --chown=4294967295:1000 runner /runner",
 	} {
 		if _, err := ParseDockerfile([]byte("FROM scratch\n" + instruction + "\n")); err == nil {
 			t.Errorf("unsupported COPY/ADD options were accepted: %s", instruction)
 		}
+	}
+}
+
+func TestParseDockerfileSupportsNumericCopyChown(t *testing.T) {
+	spec, err := ParseDockerfile([]byte("FROM scratch\nCOPY --chown=1000:2000 --chmod=0755 app /usr/bin/app\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.dockerfileSteps) != 1 || spec.dockerfileSteps[0].copyOwner == nil {
+		t.Fatalf("COPY --chown step = %#v", spec.dockerfileSteps)
+	}
+	owner := spec.dockerfileSteps[0].copyOwner
+	if owner.UID != 1000 || owner.GID != 2000 || spec.dockerfileSteps[0].copyMode != 0755 {
+		t.Fatalf("COPY metadata = owner %+v mode %04o", owner, spec.dockerfileSteps[0].copyMode)
+	}
+	if _, err := ParseDockerfile([]byte("FROM scratch\nCOPY --chown=0:0 --chown=1:1 app /app\n")); err == nil {
+		t.Fatal("duplicate COPY --chown was accepted")
 	}
 }
 

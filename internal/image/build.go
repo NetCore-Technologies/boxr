@@ -47,6 +47,13 @@ type CopyInstruction struct {
 	Destination string `json:"destination"`
 }
 
+// dockerfileCopyOwner is deliberately numeric-only: resolving image usernames
+// would require a fully correct /etc/passwd and NSS implementation.
+type dockerfileCopyOwner struct {
+	UID int
+	GID int
+}
+
 // ImageRuntimeConfig stores the standard runtime defaults represented by the
 // image config. Environment entries are not printed by the default inspect UI.
 type ImageRuntimeConfig struct {
@@ -354,7 +361,7 @@ func buildDockerfileStages(
 				if step.kind == "add" {
 					copyErr = applyAdd(copyRoot, root, instruction, copyIgnore)
 				} else {
-					copyErr = applyCopy(copyRoot, root, instruction, copyIgnore)
+					copyErr = applyCopyWithOwnership(copyRoot, root, instruction, copyIgnore, step.copyOwner)
 				}
 				if copyErr == nil && step.kind == "copy" && step.hasCopyMode {
 					copyErr = applyDockerfileCopyMode(copyRoot, root, instruction, copyIgnore, step.copyMode)
@@ -563,7 +570,7 @@ func buildWithSpec(contextDir string, spec BuildSpec, reference, platform, ignor
 				if step.kind == "add" {
 					copyErr = applyAdd(contextAbs, root, instruction, ignorePatterns)
 				} else {
-					copyErr = applyCopy(contextAbs, root, instruction, ignorePatterns)
+					copyErr = applyCopyWithOwnership(contextAbs, root, instruction, ignorePatterns, step.copyOwner)
 				}
 				if copyErr == nil && step.kind == "copy" && step.hasCopyMode {
 					copyErr = applyDockerfileCopyMode(contextAbs, root, instruction, ignorePatterns, step.copyMode)
@@ -1016,6 +1023,10 @@ func validateBuildCopySource(contextRoot, relative string) (string, os.FileInfo,
 }
 
 func applyCopy(contextRoot, root string, instruction CopyInstruction, ignorePatterns []ignorePattern) error {
+	return applyCopyWithOwnership(contextRoot, root, instruction, ignorePatterns, nil)
+}
+
+func applyCopyWithOwnership(contextRoot, root string, instruction CopyInstruction, ignorePatterns []ignorePattern, owner *dockerfileCopyOwner) error {
 	source, info, err := validateBuildCopySource(contextRoot, instruction.Source)
 	if err != nil {
 		return err
@@ -1050,7 +1061,7 @@ func applyCopy(contextRoot, root string, instruction CopyInstruction, ignorePatt
 		if err != nil {
 			return fmt.Errorf("prepare COPY destination: %w", err)
 		}
-		return copyContextDirectory(source, destination, root, instruction.Source, ignorePatterns)
+		return copyContextDirectoryWithOwnership(source, destination, root, instruction.Source, ignorePatterns, owner)
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("COPY source must be a regular file or directory")
@@ -1059,7 +1070,13 @@ func applyCopy(contextRoot, root string, instruction CopyInstruction, ignorePatt
 	if err != nil {
 		return fmt.Errorf("prepare COPY destination: %w", err)
 	}
-	return copyContextFile(source, destination, info.Mode())
+	if err := copyContextFile(source, destination, info.Mode()); err != nil {
+		return err
+	}
+	if owner != nil {
+		return applyDockerfileCopyOwner(destination, owner.UID, owner.GID)
+	}
+	return nil
 }
 
 // applyAdd supports local ADD files/directories and plain or gzip tar archives.
@@ -1222,6 +1239,10 @@ func isTarArchive(filename string) (bool, error) {
 }
 
 func copyContextDirectory(source, destination, root, sourceRelative string, ignorePatterns []ignorePattern) error {
+	return copyContextDirectoryWithOwnership(source, destination, root, sourceRelative, ignorePatterns, nil)
+}
+
+func copyContextDirectoryWithOwnership(source, destination, root, sourceRelative string, ignorePatterns []ignorePattern, owner *dockerfileCopyOwner) error {
 	var err error
 	destination, err = ensureRootfsDirectory(root, destination)
 	if err != nil {
@@ -1269,7 +1290,13 @@ func copyContextDirectory(source, destination, root, sourceRelative string, igno
 			if err != nil {
 				return err
 			}
-			return copyContextFile(path, target, info.Mode())
+			if err := copyContextFile(path, target, info.Mode()); err != nil {
+				return err
+			}
+			if owner != nil {
+				return applyDockerfileCopyOwner(target, owner.UID, owner.GID)
+			}
+			return nil
 		case info.Mode()&os.ModeSymlink != 0:
 			link, err := os.Readlink(path)
 			if err != nil {
@@ -1286,8 +1313,12 @@ func copyContextDirectory(source, destination, root, sourceRelative string, igno
 			if err != nil {
 				return err
 			}
-			if err := os.Symlink(link, filepath.Join(parent, filepath.Base(target))); err != nil {
+			linkTarget := filepath.Join(parent, filepath.Base(target))
+			if err := os.Symlink(link, linkTarget); err != nil {
 				return err
+			}
+			if owner != nil {
+				return applyDockerfileCopyOwner(linkTarget, owner.UID, owner.GID)
 			}
 		default:
 			return fmt.Errorf("build context contains unsupported special file %s", rel)
@@ -1300,6 +1331,11 @@ func copyContextDirectory(source, destination, root, sourceRelative string, igno
 	for index := len(directories) - 1; index >= 0; index-- {
 		if err := os.Chmod(directories[index].path, directories[index].mode.Perm()); err != nil {
 			return err
+		}
+		if owner != nil {
+			if err := applyDockerfileCopyOwner(directories[index].path, owner.UID, owner.GID); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

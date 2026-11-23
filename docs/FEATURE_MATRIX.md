@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 936 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 937 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 
 ## Implemented capabilities
@@ -957,3 +957,6 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 
 
 936. Dockerfile SHELL instructions persist the selected shell in OCI image config and apply inherited shell arrays to shell-form RUN CMD and ENTRYPOINT across build stages
+
+
+937. Dockerfile COPY --chown applies validated numeric UID:GID ownership to copied files directories and symlinks without following links

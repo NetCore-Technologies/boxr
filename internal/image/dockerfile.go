@@ -24,6 +24,7 @@ type dockerfileStep struct {
 	value       string
 	copyMode    os.FileMode
 	hasCopyMode bool
+	copyOwner   *dockerfileCopyOwner
 	copyFrom    string
 	command     []string
 	env         []string
@@ -201,6 +202,7 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 			remaining := strings.TrimSpace(expanded)
 			copyMode := os.FileMode(0)
 			hasCopyMode := false
+			var copyOwner *dockerfileCopyOwner
 			copyFrom := ""
 			for strings.HasPrefix(remaining, "--") {
 				split := strings.IndexFunc(remaining, unicode.IsSpace)
@@ -225,6 +227,14 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 						return fmt.Errorf("line %d: COPY --chmod mode %q is invalid; setuid, setgid and sticky bits are not supported", lineNumber, value)
 					}
 					copyMode, hasCopyMode = os.FileMode(mode), true
+				case "--chown":
+					if instructionName != "COPY" || !hasValue || copyOwner != nil {
+						return fmt.Errorf("line %d: --chown is supported once on COPY and requires numeric UID:GID", lineNumber)
+					}
+					copyOwner, err = parseDockerfileCopyOwner(value)
+					if err != nil {
+						return fmt.Errorf("line %d: invalid COPY --chown: %w", lineNumber, err)
+					}
 				case "--from":
 					if instructionName != "COPY" || !hasValue || value == "" || copyFrom != "" {
 						return fmt.Errorf("line %d: COPY --from requires a previous stage name/index or a local image reference", lineNumber)
@@ -298,7 +308,7 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 				}
 				spec.dockerfileSteps = append(spec.dockerfileSteps, dockerfileStep{
 					kind: stepKind, source: cleanSource, destination: stepDestination,
-					copyMode: copyMode, hasCopyMode: hasCopyMode, copyFrom: copyFrom,
+					copyMode: copyMode, hasCopyMode: hasCopyMode, copyOwner: copyOwner, copyFrom: copyFrom,
 				})
 			}
 
@@ -545,7 +555,7 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 	}
 	needsStageExecutor := len(stages) > 0
 	for _, step := range spec.dockerfileSteps {
-		if step.copyFrom != "" || step.kind == "shell" {
+		if step.copyFrom != "" || step.kind == "shell" || step.copyOwner != nil {
 			needsStageExecutor = true
 			break
 		}
@@ -849,6 +859,22 @@ func dockerfileIdentifier(value string) bool {
 		return false
 	}
 	return true
+}
+
+func parseDockerfileCopyOwner(value string) (*dockerfileCopyOwner, error) {
+	uidText, gidText, ok := strings.Cut(value, ":")
+	if !ok || uidText == "" || gidText == "" || strings.Contains(gidText, ":") {
+		return nil, fmt.Errorf("numeric UID:GID is required; named users and groups are not supported")
+	}
+	uid, err := strconv.ParseUint(uidText, 10, 32)
+	if err != nil || uid == uint64(^uint32(0)) {
+		return nil, fmt.Errorf("UID must be a decimal value between 0 and 4294967294")
+	}
+	gid, err := strconv.ParseUint(gidText, 10, 32)
+	if err != nil || gid == uint64(^uint32(0)) {
+		return nil, fmt.Errorf("GID must be a decimal value between 0 and 4294967294")
+	}
+	return &dockerfileCopyOwner{UID: int(uid), GID: int(gid)}, nil
 }
 
 func expandDockerVariables(value string, args, environment map[string]string) string {

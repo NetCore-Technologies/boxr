@@ -3843,6 +3843,7 @@ var implementedFeatures = []string{
 	"Docker container create Tty launches the workload under a controlling PTY, merges terminal output, forwards signals to the PTY process group and preserves workload exit status",
 	"Docker Engine API resizes active container TTYs through a private per-container Unix socket and PTY window-size updates",
 	"Dockerfile SHELL instructions persist the selected shell in OCI image config and apply inherited shell arrays to shell-form RUN CMD and ENTRYPOINT across build stages",
+	"Dockerfile COPY --chown applies validated numeric UID:GID ownership to copied files directories and symlinks without following links",
 }
 
 func printFeatures(stdout io.Writer) {
