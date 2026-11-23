@@ -31,7 +31,10 @@ const (
 	storeVersion          = 1
 	maxStoreBytes         = 4 << 20
 	maxNetworkCount       = 128
-	maxAuxiliaryAddresses = 256
+	maxAuxiliaryAddresses    = 256
+	maxEndpointAliases       = 64
+	maxEndpointAliasBytes    = 253
+	maxNetworkHostsFileBytes = 256 << 10
 )
 
 var (
@@ -57,6 +60,8 @@ type Network struct {
 	MACAddresses       map[string]string        `json:"macAddresses,omitempty"`
 	EndpointIDs        map[string]string        `json:"endpointIDs,omitempty"`
 	Published          map[string][]PortMapping `json:"published,omitempty"`
+	ContainerNames     map[string]string        `json:"containerNames,omitempty"`
+	Aliases            map[string][]string      `json:"aliases,omitempty"`
 	Labels             map[string]string        `json:"labels,omitempty"`
 }
 
@@ -335,6 +340,29 @@ func validateStoredNetworks(networks []Network) error {
 				return fmt.Errorf("network store contains a duplicate IPAM address")
 			}
 			allocated[addressText] = struct{}{}
+		}
+		for containerID, name := range network.ContainerNames {
+			if _, exists := network.Allocations[containerID]; !exists {
+				return fmt.Errorf("network store has a container name without an IPAM lease")
+			}
+			normalized, err := normalizeEndpointName(name)
+			if err != nil || normalized != name {
+				return fmt.Errorf("network store contains an invalid or non-canonical container name")
+			}
+		}
+		for containerID, aliases := range network.Aliases {
+			if _, exists := network.Allocations[containerID]; !exists {
+				return fmt.Errorf("network store has aliases without an IPAM lease")
+			}
+			normalized, err := NormalizeEndpointAliases(aliases)
+			if err != nil || len(normalized) != len(aliases) {
+				return fmt.Errorf("network store contains invalid endpoint aliases")
+			}
+			for index := range normalized {
+				if normalized[index] != aliases[index] {
+					return fmt.Errorf("network store contains non-canonical endpoint aliases")
+				}
+			}
 		}
 		for containerID, mac := range network.MACAddresses {
 			if _, exists := network.Allocations[containerID]; !exists {
@@ -663,8 +691,307 @@ func missingNetworkInterface(err error) bool {
 // EndpointOptions selects deterministic per-container bridge endpoint settings.
 // Empty values use Boxr's generated IPv4 address and locally administered MAC.
 type EndpointOptions struct {
-	IPv4Address string
-	MACAddress  string
+	IPv4Address   string
+	MACAddress    string
+	ContainerName string
+	Aliases       []string
+}
+
+// NormalizeEndpointAliases validates and canonicalizes Docker bridge aliases.
+func NormalizeEndpointAliases(values []string) ([]string, error) {
+	if len(values) > maxEndpointAliases {
+		return nil, fmt.Errorf("network endpoint supports at most %d aliases", maxEndpointAliases)
+	}
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		name, err := normalizeEndpointName(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid network alias %q: %w", value, err)
+		}
+		if _, duplicate := seen[name]; duplicate {
+			continue
+		}
+		seen[name] = struct{}{}
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func normalizeEndpointName(value string) (string, error) {
+	if value == "" || strings.TrimSpace(value) != value || len(value) > maxEndpointAliasBytes ||
+		strings.ContainsAny(value, "\x00/\\\r\n\t ") {
+		return "", fmt.Errorf("must be a non-empty DNS-style name of at most %d bytes", maxEndpointAliasBytes)
+	}
+	name := strings.ToLower(value)
+	if _, err := netip.ParseAddr(name); err == nil {
+		return "", fmt.Errorf("must not be an IP address")
+	}
+	switch name {
+	case "localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback", "broadcasthost":
+		return "", fmt.Errorf("name %q is reserved for loopback hosts entries", name)
+	}
+	for _, label := range strings.Split(name, ".") {
+		if len(label) == 0 || len(label) > 63 {
+			return "", fmt.Errorf("DNS labels must contain between 1 and 63 bytes")
+		}
+		for index, character := range label {
+			valid := character >= 'a' && character <= 'z' ||
+				character >= '0' && character <= '9' || character == '_' ||
+				(index > 0 && character == '-')
+			if !valid {
+				return "", fmt.Errorf("contains an unsupported DNS label character")
+			}
+		}
+		last := label[len(label)-1]
+		if !((last >= 'a' && last <= 'z') || (last >= '0' && last <= '9') || last == '_') {
+			return "", fmt.Errorf("DNS labels must end with a letter, digit or underscore")
+		}
+	}
+	return name, nil
+}
+
+const defaultNetworkHosts = "127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n"
+
+func validHostsContainerID(value string) bool {
+	if value == "" || len(value) > 128 || value == "." || value == ".." ||
+		strings.ContainsAny(value, "/\\\x00\r\n") {
+		return false
+	}
+	for index, character := range value {
+		if !(character >= 'a' && character <= 'z') &&
+			!(character >= 'A' && character <= 'Z') &&
+			!(character >= '0' && character <= '9') &&
+			!(index > 0 && (character == '-' || character == '_' || character == '.')) {
+			return false
+		}
+	}
+	return true
+}
+
+// HostsFilePath creates or returns the private stable inode bind-mounted as
+// /etc/hosts inside a rootfs-backed Boxr container.
+func HostsFilePath(containerID string) (string, error) {
+	if !validHostsContainerID(containerID) {
+		return "", fmt.Errorf("invalid container ID for managed hosts file")
+	}
+	dir, err := ensureStoreDir()
+	if err != nil {
+		return "", err
+	}
+	hostsDir := filepath.Join(dir, "hosts")
+	if err := os.MkdirAll(hostsDir, 0700); err != nil {
+		return "", fmt.Errorf("create managed hosts directory: %w", err)
+	}
+	info, err := os.Lstat(hostsDir)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", fmt.Errorf("managed hosts directory must be a real directory")
+	}
+	if err := os.Chmod(hostsDir, 0700); err != nil {
+		return "", fmt.Errorf("secure managed hosts directory: %w", err)
+	}
+	path := filepath.Join(hostsDir, containerID+".hosts")
+	info, err = os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		file, createErr := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if createErr != nil {
+			if !errors.Is(createErr, os.ErrExist) {
+				return "", fmt.Errorf("create managed hosts file: %w", createErr)
+			}
+		} else {
+			if _, writeErr := io.WriteString(file, defaultNetworkHosts); writeErr != nil {
+				_ = file.Close()
+				_ = os.Remove(path)
+				return "", fmt.Errorf("initialize managed hosts file: %w", writeErr)
+			}
+			if syncErr := file.Sync(); syncErr != nil {
+				_ = file.Close()
+				_ = os.Remove(path)
+				return "", fmt.Errorf("sync managed hosts file: %w", syncErr)
+			}
+			if closeErr := file.Close(); closeErr != nil {
+				return "", fmt.Errorf("close managed hosts file: %w", closeErr)
+			}
+		}
+		info, err = os.Lstat(path)
+	}
+	if err != nil {
+		return "", fmt.Errorf("inspect managed hosts file: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maxNetworkHostsFileBytes {
+		return "", fmt.Errorf("managed hosts file must be a bounded regular file")
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		return "", fmt.Errorf("secure managed hosts file: %w", err)
+	}
+	return path, nil
+}
+
+func networkHostsContent(containerID string, networks []Network) ([]byte, error) {
+	var lines []string
+	for _, network := range networks {
+		if _, attached := network.Allocations[containerID]; !attached {
+			continue
+		}
+		peerIDs := make([]string, 0, len(network.Allocations))
+		for peerID := range network.Allocations {
+			peerIDs = append(peerIDs, peerID)
+		}
+		sort.Strings(peerIDs)
+		for _, peerID := range peerIDs {
+			address, err := netip.ParseAddr(network.Allocations[peerID])
+			if err != nil || !address.Is4() {
+				return nil, fmt.Errorf("network %q contains an invalid IPv4 lease for hosts discovery", network.Name)
+			}
+			names := make([]string, 0, 2+len(network.Aliases[peerID]))
+			if idName, err := normalizeEndpointName(peerID); err == nil {
+				names = append(names, idName)
+			}
+			if containerName := network.ContainerNames[peerID]; containerName != "" {
+				name, err := normalizeEndpointName(containerName)
+				if err != nil {
+					return nil, fmt.Errorf("network %q has an invalid persisted container name: %w", network.Name, err)
+				}
+				names = append(names, name)
+			}
+			for _, alias := range network.Aliases[peerID] {
+				name, err := normalizeEndpointName(alias)
+				if err != nil {
+					return nil, fmt.Errorf("network %q has an invalid persisted alias: %w", network.Name, err)
+				}
+				names = append(names, name)
+			}
+			names = uniqueSortedEndpointNames(names)
+			if len(names) > 0 {
+				lines = append(lines, address.String()+"\t"+strings.Join(names, " "))
+			}
+		}
+	}
+	sort.Strings(lines)
+	var content strings.Builder
+	content.WriteString(defaultNetworkHosts)
+	for _, line := range lines {
+		content.WriteString(line)
+		content.WriteByte('\n')
+		if content.Len() > maxNetworkHostsFileBytes {
+			return nil, fmt.Errorf("managed hosts content exceeds %d bytes", maxNetworkHostsFileBytes)
+		}
+	}
+	return []byte(content.String()), nil
+}
+
+func uniqueSortedEndpointNames(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+type networkHostsSnapshot struct {
+	path    string
+	info    os.FileInfo
+	before  []byte
+	desired []byte
+}
+
+func writeNetworkHostsFileInPlace(snapshot networkHostsSnapshot, value []byte) error {
+	file, err := os.OpenFile(snapshot.path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || !os.SameFile(snapshot.info, info) {
+		return fmt.Errorf("managed hosts file changed while being refreshed")
+	}
+	if err := file.Chmod(0600); err != nil {
+		return err
+	}
+	if err := file.Truncate(0); err != nil {
+		return err
+	}
+	if _, err := file.Write(value); err != nil {
+		return err
+	}
+	return file.Sync()
+}
+
+// syncNetworkHostsFiles writes existing mounted hosts-file inodes in place.
+// Replacing a path would leave a live bind mount attached to the old inode.
+func syncNetworkHostsFiles(dir string, current store) error {
+	hostsDir := filepath.Join(dir, "hosts")
+	directoryInfo, err := os.Lstat(hostsDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if directoryInfo.Mode()&os.ModeSymlink != 0 || !directoryInfo.IsDir() {
+		return fmt.Errorf("managed hosts directory must be a real directory")
+	}
+	entries, err := os.ReadDir(hostsDir)
+	if err != nil {
+		return err
+	}
+	var snapshots []networkHostsSnapshot
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".hosts") {
+			continue
+		}
+		containerID := strings.TrimSuffix(entry.Name(), ".hosts")
+		if !validHostsContainerID(containerID) {
+			return fmt.Errorf("managed hosts directory contains an invalid file name")
+		}
+		path := filepath.Join(hostsDir, entry.Name())
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maxNetworkHostsFileBytes {
+			return fmt.Errorf("managed hosts file %s is not a bounded regular file", entry.Name())
+		}
+		before, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		desired, err := networkHostsContent(containerID, current.Networks)
+		if err != nil {
+			return err
+		}
+		snapshots = append(snapshots, networkHostsSnapshot{path: path, info: info, before: before, desired: desired})
+	}
+	var updated []networkHostsSnapshot
+	for _, snapshot := range snapshots {
+		if err := writeNetworkHostsFileInPlace(snapshot, snapshot.desired); err != nil {
+			var rollbackErrors []string
+			for index := len(updated) - 1; index >= 0; index-- {
+				if rollbackErr := writeNetworkHostsFileInPlace(updated[index], updated[index].before); rollbackErr != nil {
+					rollbackErrors = append(rollbackErrors, rollbackErr.Error())
+				}
+			}
+			if len(rollbackErrors) > 0 {
+				return fmt.Errorf("refresh managed hosts file %s: %v; rollback failed: %s", filepath.Base(snapshot.path), err, strings.Join(rollbackErrors, "; "))
+			}
+			return fmt.Errorf("refresh managed hosts file %s: %w", filepath.Base(snapshot.path), err)
+		}
+		updated = append(updated, snapshot)
+	}
+	return nil
 }
 
 func Join(networkName string, pid int, containerID string, ports ...PortMapping) (string, error) {
@@ -1204,6 +1531,18 @@ func InspectDetails(name string) (Network, error) {
 		item.Published = make(map[string][]PortMapping, len(current.Networks[index].Published))
 		for id, mappings := range current.Networks[index].Published {
 			item.Published[id] = append([]PortMapping(nil), mappings...)
+		}
+	}
+	if len(item.ContainerNames) > 0 {
+		item.ContainerNames = make(map[string]string, len(current.Networks[index].ContainerNames))
+		for id, name := range current.Networks[index].ContainerNames {
+			item.ContainerNames[id] = name
+		}
+	}
+	if len(item.Aliases) > 0 {
+		item.Aliases = make(map[string][]string, len(current.Networks[index].Aliases))
+		for id, aliases := range current.Networks[index].Aliases {
+			item.Aliases[id] = append([]string(nil), aliases...)
 		}
 	}
 	return item, nil
