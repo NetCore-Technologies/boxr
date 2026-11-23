@@ -22,13 +22,23 @@ func TestRunRejectsEmptyCommand(t *testing.T) {
 
 func TestRunWithHooksTTYProvidesAControllingTerminal(t *testing.T) {
 	var output bytes.Buffer
-	err := RunWithHooks("/bin/sh", []string{"-c", "test -t 0 && test -t 1 && test -t 2 && printf boxr-tty-ok"},
-		Options{NetworkMode: "host", TTY: true}, Hooks{Stdout: &output})
+	resizeCalled := false
+	err := RunWithHooks("/bin/sh", []string{"-c", "test -t 0 && test -t 1 && test -t 2 && stty size && printf boxr-tty-ok"},
+		Options{NetworkMode: "host", TTY: true}, Hooks{
+			Stdout: &output,
+			OnTTYReady: func(resize func(rows, columns uint16) error) error {
+				resizeCalled = true
+				return resize(40, 120)
+			},
+		})
 	if err != nil {
 		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
 			t.Skipf("container namespaces are unavailable in this test environment: %v", err)
 		}
 		t.Fatalf("RunWithHooks(TTY): %v", err)
+	}
+	if !resizeCalled || !strings.Contains(output.String(), "40 120") {
+		t.Fatalf("TTY resize was not applied; called=%v output=%q", resizeCalled, output.String())
 	}
 	if !strings.Contains(output.String(), "boxr-tty-ok") {
 		t.Fatalf("TTY workload output = %q", output.String())

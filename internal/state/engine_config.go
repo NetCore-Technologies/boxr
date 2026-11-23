@@ -190,6 +190,44 @@ func EngineStdinSocketPath(id string) (string, error) {
 	return socketPath, nil
 }
 
+// EngineTTYSocketPath returns a private per-container Unix socket used by the
+// Engine API daemon to resize the PTY owned by the detached runtime supervisor.
+func EngineTTYSocketPath(id string) (string, error) {
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	record, err := findLocked(id)
+	if err != nil {
+		return "", err
+	}
+	stateDirectory, err := ensureDir()
+	if err != nil {
+		return "", err
+	}
+	directory := filepath.Join(stateDirectory, "engine-tty")
+	socketPath := filepath.Join(directory, record.ID+".sock")
+	if len(socketPath) >= 100 {
+		if runtime.GOOS != "linux" {
+			return "", fmt.Errorf("Engine API TTY socket path exceeds the Unix-domain socket limit")
+		}
+		directory = filepath.Join("/tmp", fmt.Sprintf("bxr-%d", os.Getuid()))
+		socketPath = filepath.Join(directory, "tty-"+record.ID+".sock")
+	}
+	if len(socketPath) >= 100 {
+		return "", fmt.Errorf("Engine API TTY socket path exceeds the Unix-domain socket limit")
+	}
+	if err := os.Mkdir(directory, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+		return "", fmt.Errorf("create Engine API TTY directory: %w", err)
+	}
+	info, err := os.Lstat(directory)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm()&0077 != 0 {
+		return "", fmt.Errorf("Engine API TTY directory must be a private real directory")
+	}
+	return socketPath, nil
+}
+
 func engineConfigPath(directory, id string) string {
 	return filepath.Join(directory, id+".json")
 }

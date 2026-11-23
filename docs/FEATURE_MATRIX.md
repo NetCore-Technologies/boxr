@@ -2,7 +2,7 @@
 
 The CLI exposes this same inventory through `boxr features` and `boxr features --json`. This document is generated from the feature registry and checked by the CLI test suite.
 
-**Inventory size: 934 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
+**Inventory size: 935 capabilities.** Each entry maps to implemented behaviour, an explicit sub-control, or a testable tooling target.
 
 
 ## Implemented capabilities
@@ -952,3 +952,5 @@ The CLI exposes this same inventory through `boxr features` and `boxr features -
 933. Docker container list and inspect size=1 return SizeRw and SizeRootFs logical-byte counters using bounded, symlink-safe base-rootfs and OverlayFS-upper walks
 
 934. Docker container create Tty launches the workload under a controlling PTY, merges terminal output, forwards signals to the PTY process group and preserves workload exit status
+
+935. Docker Engine API resizes active container TTYs through a private per-container Unix socket and PTY window-size updates

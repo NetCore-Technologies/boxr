@@ -871,10 +871,15 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 				break
 			}
 		}
+		var cleanupTTY func()
 		var healthCancel context.CancelFunc
 		var healthDone <-chan struct{}
 		runErr = container.RunWithHooks(commandArgs[0], commandArgs[1:], opts, container.Hooks{
-			Stdin:  stdinReader,
+			Stdin: stdinReader,
+			OnTTYReady: func(resize func(rows, columns uint16) error) error {
+				cleanupTTY, err = openEngineContainerTTYResizeBridge(record.ID, resize)
+				return err
+			},
 			Stdout: io.MultiWriter(stdout, combinedLog),
 			Stderr: io.MultiWriter(stderr, combinedLog),
 			OnStart: func(pid int) error {
@@ -923,6 +928,9 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 		})
 		if cleanupStdin != nil {
 			cleanupStdin()
+		}
+		if cleanupTTY != nil {
+			cleanupTTY()
 		}
 
 		// RunWithHooks can fail before its exit callback is installed (for
@@ -3833,6 +3841,7 @@ var implementedFeatures = []string{
 	"Docker container list before and since filters resolve existing container IDs/names once per request and compare persisted creation times; invalid and unknown filter inputs return errors",
 	"Docker container list and inspect size=1 return SizeRw and SizeRootFs logical-byte counters using bounded, symlink-safe base-rootfs and OverlayFS-upper walks",
 	"Docker container create Tty launches the workload under a controlling PTY, merges terminal output, forwards signals to the PTY process group and preserves workload exit status",
+	"Docker Engine API resizes active container TTYs through a private per-container Unix socket and PTY window-size updates",
 }
 
 func printFeatures(stdout io.Writer) {

@@ -175,6 +175,18 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			s.handleContainerExport(writer, request, containerID)
 			return
 		}
+		if strings.HasSuffix(remainder, "/resize") {
+			containerID := strings.TrimSuffix(remainder, "/resize")
+			if containerID == "" || strings.Contains(containerID, "/") {
+				writeError(writer, http.StatusNotFound, fmt.Errorf("container resize endpoint not found"))
+				return
+			}
+			if !requireMethod(writer, request, http.MethodPost) {
+				return
+			}
+			s.handleContainerResize(writer, request, containerID)
+			return
+		}
 		if strings.HasSuffix(remainder, "/attach") {
 			containerID := strings.TrimSuffix(remainder, "/attach")
 			if containerID == "" || strings.Contains(containerID, "/") {
@@ -1625,6 +1637,42 @@ func (s *Server) handleContainer(writer http.ResponseWriter, request *http.Reque
 	default:
 		writeError(writer, http.StatusNotFound, fmt.Errorf("container endpoint not found"))
 	}
+}
+
+func (s *Server) handleContainerResize(writer http.ResponseWriter, request *http.Request, query string) {
+	values := request.URL.Query()
+	if len(values) != 2 || len(values["h"]) != 1 || len(values["w"]) != 1 {
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("container resize requires exactly one positive h and w parameter"))
+		return
+	}
+	rows, err := strconv.ParseUint(values.Get("h"), 10, 16)
+	if err != nil || rows == 0 {
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("container resize h must be between 1 and 65535"))
+		return
+	}
+	columns, err := strconv.ParseUint(values.Get("w"), 10, 16)
+	if err != nil || columns == 0 {
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("container resize w must be between 1 and 65535"))
+		return
+	}
+	record, err := state.Get(query)
+	if err != nil {
+		writeError(writer, http.StatusNotFound, err)
+		return
+	}
+	if !record.Options.TTY {
+		writeError(writer, http.StatusBadRequest, fmt.Errorf("container does not have a TTY"))
+		return
+	}
+	if record.Status != "running" {
+		writeError(writer, http.StatusConflict, fmt.Errorf("container must be running to resize its TTY"))
+		return
+	}
+	if err := resizeDockerContainerTTY(record.ID, uint16(rows), uint16(columns)); err != nil {
+		writeError(writer, http.StatusConflict, err)
+		return
+	}
+	writer.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) handleContainerInspect(writer http.ResponseWriter, query string, request *http.Request) {

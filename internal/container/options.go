@@ -287,7 +287,10 @@ type Hooks struct {
 	OnStart func(hostPID int) error
 	OnReady func(hostPID int)
 	OnExit  func(hostPID int, runErr error) error
-	Stdin   io.Reader
+	// OnTTYReady publishes a resize function once the workload PTY exists.
+	// It runs before OnStart releases the workload from its startup barrier.
+	OnTTYReady func(resize func(rows, columns uint16) error) error
+	Stdin      io.Reader
 	Stdout  io.Writer
 	Stderr  io.Writer
 }

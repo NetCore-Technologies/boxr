@@ -200,6 +200,84 @@ func TestContainerLogsUseRawStreamForTTYContainers(t *testing.T) {
 	}
 }
 
+func TestDockerContainerResizeSendsValidatedDimensionsToActiveTTY(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record := createEngineAPITestContainer(t, "tty-resize-api", container.Options{TTY: true})
+	if err := state.Start(record.ID, os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
+	defer state.Remove(record.ID)
+	path, err := state.EngineTTYSocketPath(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	defer os.Remove(path)
+	if err := os.Chmod(path, 0600); err != nil {
+		t.Fatal(err)
+	}
+	type dimensions struct{ rows, columns uint16 }
+	received := make(chan dimensions, 1)
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer connection.Close()
+		var payload [4]byte
+		if _, readErr := io.ReadFull(connection, payload[:]); readErr != nil {
+			return
+		}
+		received <- dimensions{binary.BigEndian.Uint16(payload[:2]), binary.BigEndian.Uint16(payload[2:])}
+		_, _ = connection.Write([]byte{0})
+	}()
+	response := engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+record.ID+"/resize?h=40&w=120")
+	if response.Code != http.StatusOK {
+		t.Fatalf("resize status=%d body=%s", response.Code, response.Body.String())
+	}
+	select {
+	case got := <-received:
+		if got.rows != 40 || got.columns != 120 {
+			t.Fatalf("resize dimensions=%dx%d, want 40x120", got.rows, got.columns)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("container resize request did not reach the runtime socket")
+	}
+}
+
+func TestDockerContainerResizeRejectsInvalidOrUnavailableTTY(t *testing.T) {
+	server := setupEngineAPITest(t)
+	nonTTY := createEngineAPITestContainer(t, "resize-non-tty", container.Options{})
+	defer state.Remove(nonTTY.ID)
+	tty := createEngineAPITestContainer(t, "resize-stopped-tty", container.Options{TTY: true})
+	defer state.Remove(tty.ID)
+	for _, target := range []string{
+		"/v1.45/containers/" + nonTTY.ID + "/resize?h=40&w=120",
+		"/v1.45/containers/" + tty.ID + "/resize?h=0&w=120",
+		"/v1.45/containers/" + tty.ID + "/resize?h=40&w=0",
+		"/v1.45/containers/" + tty.ID + "/resize?h=65536&w=120",
+		"/v1.45/containers/" + tty.ID + "/resize?h=40",
+		"/v1.45/containers/" + tty.ID + "/resize?h=40&w=120&extra=1",
+	} {
+		response := engineAPIRequest(server, http.MethodPost, target)
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("%s returned %d, want 400: %s", target, response.Code, response.Body.String())
+		}
+	}
+	response := engineAPIRequest(server, http.MethodPost, "/v1.45/containers/"+tty.ID+"/resize?h=40&w=120")
+	if response.Code != http.StatusConflict {
+		t.Fatalf("stopped TTY resize status=%d body=%s, want 409", response.Code, response.Body.String())
+	}
+	method := engineAPIRequest(server, http.MethodGet, "/v1.45/containers/"+tty.ID+"/resize?h=40&w=120")
+	if method.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("resize GET status=%d body=%s, want 405", method.Code, method.Body.String())
+	}
+}
+
 func TestContainerLogsUseDockerMultiplexedFrames(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record, err := state.Create("log-test", []string{"/bin/echo", "hello"}, container.Options{}, nil)

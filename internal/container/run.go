@@ -133,6 +133,22 @@ func RunWithHooks(command string, args []string, options Options, hooks Hooks) e
 				}
 			}()
 		}
+		if hooks.OnTTYReady != nil {
+			resize := func(rows, columns uint16) error {
+				if rows == 0 || columns == 0 {
+					return fmt.Errorf("terminal rows and columns must be positive")
+				}
+				return pty.Setsize(terminal, &pty.Winsize{Rows: rows, Cols: columns})
+			}
+			if err := hooks.OnTTYReady(resize); err != nil {
+				_ = readyReader.Close()
+				_ = readyWriter.Close()
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+				_ = finishRuntimePTY(terminal, terminalOutputDone)
+				return fmt.Errorf("publish container terminal resize endpoint: %w", err)
+			}
+		}
 	} else {
 		cmd.Stdin = hooks.Stdin
 		if cmd.Stdin == nil {
