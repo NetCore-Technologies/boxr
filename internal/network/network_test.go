@@ -274,6 +274,142 @@ func TestJoinAllocatesConfiguresAndLeaveReleasesAddress(t *testing.T) {
 	}
 }
 
+
+func TestManagedHostsFilesUpdateInPlaceForBridgePeers(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	network, err := CreateWithRunner(context.Background(), "service-discovery", CreateOptions{
+		Subnet: "172.30.120.0/29",
+	}, &fakeRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiHosts, err := HostsFilePath("container-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerHosts, err := HostsFilePath("container-worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiInfo, err := os.Stat(apiHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerInfo, err := os.Stat(workerHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{}
+	apiIP, err := JoinWithRunnerOptions(context.Background(), network.Name, 3101, "container-api", runner,
+		EndpointOptions{ContainerName: "api-service", Aliases: []string{"api", "API.internal"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerIP, err := JoinWithRunnerOptions(context.Background(), network.Name, 3102, "container-worker", runner,
+		EndpointOptions{ContainerName: "worker-service", Aliases: []string{"jobs"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiData, err := os.ReadFile(apiHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerData, err := os.ReadFile(workerHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(apiData), workerIP+"\tcontainer-worker jobs worker-service") {
+		t.Fatalf("API hosts file is missing worker aliases: %s", apiData)
+	}
+	if !strings.Contains(string(apiData), apiIP+"\tapi api-service api.internal container-api") {
+		t.Fatalf("API hosts file is missing its own names: %s", apiData)
+	}
+	if !strings.Contains(string(workerData), apiIP+"\tapi api-service api.internal container-api") {
+		t.Fatalf("worker hosts file is missing API aliases: %s", workerData)
+	}
+	apiInfoAfter, err := os.Stat(apiHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerInfoAfter, err := os.Stat(workerHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(apiInfo, apiInfoAfter) || !os.SameFile(workerInfo, workerInfoAfter) {
+		t.Fatal("network updates replaced a mounted hosts-file inode")
+	}
+
+	if err := LeaveWithRunner(context.Background(), network.Name, "container-worker", runner); err != nil {
+		t.Fatal(err)
+	}
+	apiData, err = os.ReadFile(apiHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerData, err = os.ReadFile(workerHosts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(apiData), "worker-service") || strings.Contains(string(apiData), "jobs") ||
+		strings.Contains(string(apiData), workerIP) {
+		t.Fatalf("leaving endpoint remained discoverable: %s", apiData)
+	}
+	if strings.Contains(string(workerData), "api-service") || strings.Contains(string(workerData), "api.internal") {
+		t.Fatalf("detached endpoint retained stale peer records: %s", workerData)
+	}
+	if !strings.HasPrefix(string(workerData), defaultNetworkHosts) {
+		t.Fatalf("detached hosts file did not return to loopback defaults: %s", workerData)
+	}
+}
+
+func TestJoinRejectsUnsafeAndExcessiveNetworkAliasesBeforeChangingHost(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	if _, err := CreateWithRunner(context.Background(), "alias-validation", CreateOptions{
+		Subnet: "172.30.121.0/29",
+	}, &fakeRunner{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, aliases := range [][]string{
+		{"bad\nname"}, {"../outside"}, {"127.0.0.1"}, {"localhost"}, {""},
+	} {
+		runner := &fakeRunner{}
+		if _, err := JoinWithRunnerOptions(context.Background(), "alias-validation", 3103, "container-invalid", runner,
+			EndpointOptions{Aliases: aliases}); err == nil {
+			t.Errorf("unsafe alias list %q was accepted", aliases)
+		}
+		if len(runner.calls) != 0 {
+			t.Errorf("unsafe aliases changed host networking: %v", runner.calls)
+		}
+	}
+	aliases := make([]string, maxEndpointAliases+1)
+	for index := range aliases {
+		aliases[index] = fmt.Sprintf("service-%d", index)
+	}
+	if _, err := NormalizeEndpointAliases(aliases); err == nil {
+		t.Fatal("excessive alias count was accepted")
+	}
+}
+
+func TestHostsFilePathRejectsPathTraversalAndSecuresInode(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	for _, id := range []string{"", ".", "..", "../escape", "nested/container", "bad\nname"} {
+		if _, err := HostsFilePath(id); err == nil {
+			t.Errorf("invalid hosts-file identity %q was accepted", id)
+		}
+	}
+	path, err := HostsFilePath("container-hosts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+		t.Fatalf("hosts file is not a private regular inode: %v", info.Mode())
+	}
+}
+
 func TestJoinDoesNotDeletePreExistingVethWhenCreateFails(t *testing.T) {
 	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
 	if _, err := CreateWithRunner(context.Background(), "backend", CreateOptions{
