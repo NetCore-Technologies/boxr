@@ -108,9 +108,9 @@ func TestAddManagedNetworkHostsMountSkipsHostAndUnrootedContainers(t *testing.T)
 
 func TestManagedHostsMountPathConflictDetection(t *testing.T) {
 	cases := []struct {
-		target   string
-		covered  bool
-		nested   bool
+		target  string
+		covered bool
+		nested  bool
 	}{
 		{target: "/etc/hosts", covered: true},
 		{target: "/etc", covered: true},
@@ -124,4 +124,3 @@ func TestManagedHostsMountPathConflictDetection(t *testing.T) {
 		}
 	}
 }
-

@@ -274,7 +274,6 @@ func TestJoinAllocatesConfiguresAndLeaveReleasesAddress(t *testing.T) {
 	}
 }
 
-
 func TestManagedHostsFilesUpdateInPlaceForBridgePeers(t *testing.T) {
 	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
 	network, err := CreateWithRunner(context.Background(), "service-discovery", CreateOptions{
