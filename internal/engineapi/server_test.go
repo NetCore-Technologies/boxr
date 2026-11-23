@@ -203,9 +203,6 @@ func TestContainerLogsUseRawStreamForTTYContainers(t *testing.T) {
 func TestDockerContainerResizeSendsValidatedDimensionsToActiveTTY(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record := createEngineAPITestContainer(t, "tty-resize-api", container.Options{TTY: true})
-	if err := state.Start(record.ID, os.Getpid()); err != nil {
-		t.Fatal(err)
-	}
 	defer state.Remove(record.ID)
 	path, err := state.EngineTTYSocketPath(record.ID)
 	if err != nil {
