@@ -545,7 +545,7 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 	}
 	needsStageExecutor := len(stages) > 0
 	for _, step := range spec.dockerfileSteps {
-		if step.copyFrom != "" || step.kind == "run" || step.kind == "shell" || step.kind == "cmd" || step.kind == "entrypoint" {
+		if step.copyFrom != "" || step.kind == "shell" {
 			needsStageExecutor = true
 			break
 		}

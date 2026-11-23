@@ -584,6 +584,28 @@ func buildWithSpec(contextDir string, spec BuildSpec, reference, platform, ignor
 				if _, err := ensureRootfsDirectory(root, destination); err != nil {
 					return Image{}, fmt.Errorf("create Dockerfile WORKDIR %q: %w", workingDir, err)
 				}
+			case "shell":
+				runtimeConfig.Shell = cloneBuildStrings(step.command)
+			case "cmd":
+				command := cloneBuildStrings(step.command)
+				if step.shellForm {
+					shell := runtimeConfig.Shell
+					if len(shell) == 0 {
+						shell = []string{"/bin/sh", "-c"}
+					}
+					command = append(cloneBuildStrings(shell), step.value)
+				}
+				runtimeConfig.Cmd = command
+			case "entrypoint":
+				command := cloneBuildStrings(step.command)
+				if step.shellForm {
+					shell := runtimeConfig.Shell
+					if len(shell) == 0 {
+						shell = []string{"/bin/sh", "-c"}
+					}
+					command = append(cloneBuildStrings(shell), step.value)
+				}
+				runtimeConfig.Entrypoint = command
 			case "run":
 				runNumber++
 				buildUser := step.user
@@ -603,10 +625,18 @@ func buildWithSpec(contextDir string, spec BuildSpec, reference, platform, ignor
 					NoNewPrivileges: true, SeccompProfile: "baseline",
 					DropCapabilities: []string{"ALL"},
 				}
-				if len(step.command) == 0 {
+				command := cloneBuildStrings(step.command)
+				if step.shellForm {
+					shell := runtimeConfig.Shell
+					if len(shell) == 0 {
+						shell = []string{"/bin/sh", "-c"}
+					}
+					command = append(cloneBuildStrings(shell), step.value)
+				}
+				if len(command) == 0 {
 					return Image{}, fmt.Errorf("RUN %d: command is empty", runNumber)
 				}
-				if err := runDockerfileCommand(step.command[0], step.command[1:], runOptions); err != nil {
+				if err := runDockerfileCommand(command[0], command[1:], runOptions); err != nil {
 					return Image{}, fmt.Errorf("RUN %d: %w", runNumber, err)
 				}
 			}
