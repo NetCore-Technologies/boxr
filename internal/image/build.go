@@ -1,4 +1,4 @@
-if err := runDockerfileCommand(command[0], command[1:], runOptions); err != nil {package image
+package image
 
 import (
 	"archive/tar"
@@ -606,7 +606,7 @@ func buildWithSpec(contextDir string, spec BuildSpec, reference, platform, ignor
 				if len(step.command) == 0 {
 					return Image{}, fmt.Errorf("RUN %d: command is empty", runNumber)
 				}
-				if err := runDockerfileCommand(step.command[0], step.command[1:], runOptions); err != nil {
+				if err := runDockerfileCommand(command[0], command[1:], runOptions); err != nil {
 					return Image{}, fmt.Errorf("RUN %d: %w", runNumber, err)
 				}
 			}
