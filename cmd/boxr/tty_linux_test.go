@@ -3,6 +3,7 @@
 package main
 
 import (
+	"io"
 	"net"
 	"os"
 	"testing"
@@ -18,9 +19,9 @@ func TestEngineContainerTTYResizeBridgeAppliesWindowSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var gotRows, gotColumns uint16
+	applied := make(chan [2]uint16, 1)
 	cleanup, err := openEngineContainerTTYResizeBridge(record.ID, func(rows, columns uint16) error {
-		gotRows, gotColumns = rows, columns
+		applied <- [2]uint16{rows, columns}
 		return nil
 	})
 	if err != nil {
@@ -41,13 +42,18 @@ func TestEngineContainerTTYResizeBridgeAppliesWindowSize(t *testing.T) {
 	}
 	_ = connection.SetReadDeadline(time.Now().Add(time.Second))
 	var response [1]byte
-	if _, err := connection.Read(response[:]); err != nil {
+	if _, err := io.ReadFull(connection, response[:]); err != nil {
 		_ = connection.Close()
 		t.Fatal(err)
 	}
 	_ = connection.Close()
-	if response[0] != 0 || gotRows != 40 || gotColumns != 120 {
-		t.Fatalf("resize response=%d rows=%d columns=%d, want success 40x120", response[0], gotRows, gotColumns)
+	select {
+	case got := <-applied:
+		if response[0] != 0 || got[0] != 40 || got[1] != 120 {
+			t.Fatalf("resize response=%d dimensions=%dx%d, want success 40x120", response[0], got[0], got[1])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runtime did not apply the terminal dimensions")
 	}
 	if info, err := os.Lstat(path); err != nil || info.Mode().Perm()&0077 != 0 {
 		t.Fatalf("TTY socket permissions should be private: info=%v err=%v", info, err)
@@ -60,9 +66,9 @@ func TestEngineContainerTTYResizeBridgeRejectsZeroDimensions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	called := false
+	called := make(chan struct{}, 1)
 	cleanup, err := openEngineContainerTTYResizeBridge(record.ID, func(_, _ uint16) error {
-		called = true
+		called <- struct{}{}
 		return nil
 	})
 	if err != nil {
@@ -80,12 +86,17 @@ func TestEngineContainerTTYResizeBridgeRejectsZeroDimensions(t *testing.T) {
 	_, _ = connection.Write([]byte{0, 0, 0, 80})
 	_ = connection.SetReadDeadline(time.Now().Add(time.Second))
 	var response [1]byte
-	if _, err := connection.Read(response[:]); err != nil {
+	if _, err := io.ReadFull(connection, response[:]); err != nil {
 		_ = connection.Close()
 		t.Fatal(err)
 	}
 	_ = connection.Close()
-	if response[0] == 0 || called {
-		t.Fatalf("zero-sized resize response=%d callbackCalled=%v, want rejection", response[0], called)
+	if response[0] == 0 {
+		t.Fatal("zero-sized resize request unexpectedly succeeded")
+	}
+	select {
+	case <-called:
+		t.Fatal("zero-sized request reached the PTY resize callback")
+	default:
 	}
 }
