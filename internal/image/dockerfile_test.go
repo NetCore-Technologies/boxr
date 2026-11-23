@@ -317,6 +317,124 @@ func TestBuildDockerfileWithBuildArgsPassesOverridesOnlyToRun(t *testing.T) {
 	}
 }
 
+func TestParseDockerfileSupportsSHELLAndAppliesItToShellFormCommands(t *testing.T) {
+	spec, err := ParseDockerfile([]byte("FROM scratch\nSHELL [\"/bin/bash\", \"-e\", \"-c\"]\nRUN echo build\nCMD echo run\nENTRYPOINT echo entry\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.dockerfileStages) != 1 {
+		t.Fatalf("SHELL Dockerfile captured %d stages, want one", len(spec.dockerfileStages))
+	}
+	steps := spec.dockerfileStages[0].steps
+	if len(steps) != 4 || steps[0].kind != "shell" || strings.Join(steps[0].command, "|") != "/bin/bash|-e|-c" {
+		t.Fatalf("SHELL instruction = %#v", steps)
+	}
+	for _, want := range []struct {
+		index int
+		kind  string
+		value string
+	}{{1, "run", "echo build"}, {2, "cmd", "echo run"}, {3, "entrypoint", "echo entry"}} {
+		step := steps[want.index]
+		if step.kind != want.kind || !step.shellForm || step.value != want.value {
+			t.Errorf("step %d = %+v, want %s shell form %q", want.index, step, want.kind, want.value)
+		}
+	}
+	if strings.Join(spec.Config.Cmd, "|") != "/bin/bash|-e|-c|echo run" ||
+		strings.Join(spec.Config.Entrypoint, "|") != "/bin/bash|-e|-c|echo entry" {
+		t.Fatalf("parsed command defaults did not apply SHELL: cmd=%#v entrypoint=%#v", spec.Config.Cmd, spec.Config.Entrypoint)
+	}
+}
+
+func TestParseDockerfileRejectsMalformedSHELLInstructions(t *testing.T) {
+	for _, value := range []string{"", "/bin/bash -c", "[\"/bin/bash\"]", "[]", "null", "[\"/bin/bash\", \"-c\", \"bad\\u0000arg\"]"} {
+		input := "FROM scratch\nSHELL " + value + "\n"
+		if _, err := ParseDockerfile([]byte(input)); err == nil {
+			t.Errorf("malformed SHELL instruction %q was accepted", value)
+		}
+	}
+	if _, err := ParseDockerfile([]byte("FROM scratch\nONBUILD RUN echo nested\n")); err == nil {
+		t.Fatal("unsupported ONBUILD instruction was accepted")
+	}
+}
+
+func TestBuildDockerfileExecutesRunsWithTheActiveStageShell(t *testing.T) {
+	useStore(t)
+	contextDir := t.TempDir()
+	dockerfile := filepath.Join(contextDir, "Dockerfile")
+	content := "FROM scratch\nSHELL [\"/bin/bash\", \"-e\", \"-c\"]\nRUN echo first\nSHELL [\"/bin/sh\", \"-c\"]\nRUN echo second\nCMD echo command\nENTRYPOINT echo entry\n"
+	if err := os.WriteFile(dockerfile, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := runDockerfileCommand
+	defer func() { runDockerfileCommand = previous }()
+	var commands [][]string
+	runDockerfileCommand = func(command string, args []string, options boxrcontainer.Options) error {
+		commands = append(commands, append([]string{command}, args...))
+		if options.NetworkMode != "none" || !options.UserNamespace || !options.NoNewPrivileges {
+			t.Errorf("RUN isolation options regressed: %+v", options)
+		}
+		return nil
+	}
+	if _, err := BuildDockerfileForPlatform(contextDir, dockerfile, "demo:shell", ""); err != nil {
+		t.Fatalf("BuildDockerfileForPlatform: %v", err)
+	}
+	if len(commands) != 2 || strings.Join(commands[0], "|") != "/bin/bash|-e|-c|echo first" ||
+		strings.Join(commands[1], "|") != "/bin/sh|-c|echo second" {
+		t.Fatalf("RUN commands = %#v", commands)
+	}
+	verified, err := Verify("demo:shell")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(verified.RuntimeConfig.Shell, "|") != "/bin/sh|-c" {
+		t.Fatalf("persisted image Shell = %#v", verified.RuntimeConfig.Shell)
+	}
+	if strings.Join(verified.RuntimeConfig.Cmd, "|") != "/bin/sh|-c|echo command" ||
+		strings.Join(verified.RuntimeConfig.Entrypoint, "|") != "/bin/sh|-c|echo entry" {
+		t.Fatalf("persisted shell-form command configuration = cmd %#v entrypoint %#v", verified.RuntimeConfig.Cmd, verified.RuntimeConfig.Entrypoint)
+	}
+}
+
+func TestDockerfileShellIsInheritedFromBaseImageAndEarlierStage(t *testing.T) {
+	useStore(t)
+	baseRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(baseRoot, "bin"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ImportRootFSWithConfig(baseRoot, "demo:shell-base", "linux", "amd64", "", ImageRuntimeConfig{
+		Shell: []string{"/bin/bash", "-e", "-c"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	contextDir := t.TempDir()
+	dockerfile := filepath.Join(contextDir, "Dockerfile")
+	content := "FROM demo:shell-base\nRUN echo inherited\nFROM demo:shell-base AS builder\nSHELL [\"/bin/sh\", \"-c\"]\nFROM builder AS final\nRUN echo stage\n"
+	if err := os.WriteFile(dockerfile, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := runDockerfileCommand
+	defer func() { runDockerfileCommand = previous }()
+	var commands [][]string
+	runDockerfileCommand = func(command string, args []string, _ boxrcontainer.Options) error {
+		commands = append(commands, append([]string{command}, args...))
+		return nil
+	}
+	if _, err := BuildDockerfileForPlatform(contextDir, dockerfile, "demo:shell-inherited", ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 2 || strings.Join(commands[0], "|") != "/bin/bash|-e|-c|echo inherited" ||
+		strings.Join(commands[1], "|") != "/bin/sh|-c|echo stage" {
+		t.Fatalf("inherited SHELL execution = %#v", commands)
+	}
+	verified, err := Verify("demo:shell-inherited")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(verified.RuntimeConfig.Shell, "|") != "/bin/sh|-c" {
+		t.Fatalf("final stage SHELL = %#v", verified.RuntimeConfig.Shell)
+	}
+}
+
 func TestParseDockerfileCopyChmodSupportsBoundedOctalModes(t *testing.T) {
 	spec, err := ParseDockerfile([]byte("FROM scratch\nCOPY --chmod=0755 runner /usr/local/bin/runner\nCOPY --chmod=640 config /etc/app.conf\n"))
 	if err != nil {

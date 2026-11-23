@@ -1,4 +1,4 @@
-package image
+if err := runDockerfileCommand(command[0], command[1:], runOptions); err != nil {package image
 
 import (
 	"archive/tar"
@@ -59,6 +59,7 @@ type ImageRuntimeConfig struct {
 	Volumes      map[string]struct{}          `json:"Volumes,omitempty"`
 	ExposedPorts map[string]struct{}          `json:"ExposedPorts,omitempty"`
 	StopSignal   string                       `json:"StopSignal,omitempty"`
+	Shell        []string                     `json:"Shell,omitempty"`
 	Healthcheck  *container.HealthcheckConfig `json:"Healthcheck,omitempty"`
 }
 
@@ -111,6 +112,19 @@ func ValidateBuildSpec(spec BuildSpec) error {
 		if !filepath.IsAbs(instruction.Destination) || strings.ContainsRune(instruction.Destination, '\x00') || hasParentTraversal(instruction.Destination) {
 			return fmt.Errorf("COPY %d destination must be an absolute path without '..'", index+1)
 		}
+	}
+	if len(spec.Config.Shell) > 32 {
+		return fmt.Errorf("image Shell supports at most 32 arguments")
+	}
+	shellBytes := 0
+	for index, argument := range spec.Config.Shell {
+		if argument == "" || strings.ContainsRune(argument, '\x00') {
+			return fmt.Errorf("invalid image Shell argument %d", index)
+		}
+		shellBytes += len(argument)
+	}
+	if shellBytes > 16<<10 {
+		return fmt.Errorf("image Shell arguments exceed the 16384-byte limit")
 	}
 	for _, entry := range spec.Config.Env {
 		key, value, ok := strings.Cut(entry, "=")
@@ -361,6 +375,28 @@ func buildDockerfileStages(
 				if _, err := ensureRootfsDirectory(root, destination); err != nil {
 					return empty, fmt.Errorf("create Dockerfile stage %d WORKDIR %q: %w", stageIndex+1, workingDir, err)
 				}
+			case "shell":
+				runtimeConfig.Shell = cloneBuildStrings(step.command)
+			case "cmd":
+				command := cloneBuildStrings(step.command)
+				if step.shellForm {
+					shell := runtimeConfig.Shell
+					if len(shell) == 0 {
+						shell = []string{"/bin/sh", "-c"}
+					}
+					command = append(cloneBuildStrings(shell), step.value)
+				}
+				runtimeConfig.Cmd = command
+			case "entrypoint":
+				command := cloneBuildStrings(step.command)
+				if step.shellForm {
+					shell := runtimeConfig.Shell
+					if len(shell) == 0 {
+						shell = []string{"/bin/sh", "-c"}
+					}
+					command = append(cloneBuildStrings(shell), step.value)
+				}
+				runtimeConfig.Entrypoint = command
 			case "run":
 				runNumber++
 				buildUser := step.user
@@ -370,7 +406,15 @@ func buildDockerfileStages(
 				if buildUser != "" && buildUser != "root" && buildUser != "0" && buildUser != "0:0" {
 					return empty, fmt.Errorf("Dockerfile stage %d RUN %d after USER %q is not supported yet; build commands currently execute as root inside a user namespace", stageIndex+1, runNumber, buildUser)
 				}
-				if len(step.command) == 0 {
+				command := cloneBuildStrings(step.command)
+				if step.shellForm {
+					shell := runtimeConfig.Shell
+					if len(shell) == 0 {
+						shell = []string{"/bin/sh", "-c"}
+					}
+					command = append(cloneBuildStrings(shell), step.value)
+				}
+				if len(command) == 0 {
 					return empty, fmt.Errorf("Dockerfile stage %d RUN %d: command is empty", stageIndex+1, runNumber)
 				}
 				mode := networkMode
@@ -384,7 +428,7 @@ func buildDockerfileStages(
 					NoNewPrivileges: true, SeccompProfile: "baseline",
 					DropCapabilities: []string{"ALL"},
 				}
-				if err := runDockerfileCommand(step.command[0], step.command[1:], runOptions); err != nil {
+				
 					return empty, fmt.Errorf("Dockerfile stage %d RUN %d: %w", stageIndex+1, runNumber, err)
 				}
 			}
@@ -607,6 +651,7 @@ func inheritBuildRuntimeConfig(base, overrides ImageRuntimeConfig) ImageRuntimeC
 		Volumes:      cloneBuildVolumes(base.Volumes),
 		ExposedPorts: cloneBuildExposedPorts(base.ExposedPorts),
 		StopSignal:   base.StopSignal,
+		Shell:        cloneBuildStrings(base.Shell),
 		Healthcheck:  cloneBuildHealthcheck(base.Healthcheck),
 	}
 	if overrides.Entrypoint != nil {
@@ -650,6 +695,9 @@ func inheritBuildRuntimeConfig(base, overrides ImageRuntimeConfig) ImageRuntimeC
 	}
 	if overrides.StopSignal != "" {
 		result.StopSignal = overrides.StopSignal
+	}
+	if overrides.Shell != nil {
+		result.Shell = cloneBuildStrings(overrides.Shell)
 	}
 	if overrides.Healthcheck != nil {
 		result.Healthcheck = cloneBuildHealthcheck(overrides.Healthcheck)

@@ -3842,6 +3842,7 @@ var implementedFeatures = []string{
 	"Docker container list and inspect size=1 return SizeRw and SizeRootFs logical-byte counters using bounded, symlink-safe base-rootfs and OverlayFS-upper walks",
 	"Docker container create Tty launches the workload under a controlling PTY, merges terminal output, forwards signals to the PTY process group and preserves workload exit status",
 	"Docker Engine API resizes active container TTYs through a private per-container Unix socket and PTY window-size updates",
+	"Dockerfile SHELL instructions persist the selected shell in OCI image config and apply inherited shell arrays to shell-form RUN CMD and ENTRYPOINT across build stages",
 }
 
 func printFeatures(stdout io.Writer) {

@@ -28,6 +28,7 @@ type dockerfileStep struct {
 	command     []string
 	env         []string
 	user        string
+	shellForm   bool
 }
 
 type dockerfileStage struct {
@@ -98,6 +99,7 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 	fromSeen := false
 	currentStageName := ""
 	var stages []dockerfileStage
+	currentShell := []string{"/bin/sh", "-c"}
 	instructionCount := 0
 	var logical strings.Builder
 	logicalStart := 0
@@ -168,6 +170,7 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 				environment = make(map[string]string)
 				workingDir = "/"
 				currentUser = ""
+				currentShell = []string{"/bin/sh", "-c"}
 			}
 			words, err := dockerfileWords(expanded)
 			if err != nil {
@@ -372,18 +375,30 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 			currentUser = words[0]
 
 		case "CMD":
-			command, err := dockerfileCommand(rest)
+			command, shellForm, shellValue, err := dockerfileCommandForm(rest)
 			if err != nil {
 				return fmt.Errorf("line %d: CMD: %w", lineNumber, err)
 			}
+			if shellForm {
+				command = append(cloneDockerfileStrings(currentShell), shellValue)
+			}
 			spec.Config.Cmd = command
+			spec.dockerfileSteps = append(spec.dockerfileSteps, dockerfileStep{
+				kind: "cmd", command: command, shellForm: shellForm, value: shellValue,
+			})
 
 		case "ENTRYPOINT":
-			command, err := dockerfileCommand(rest)
+			command, shellForm, shellValue, err := dockerfileCommandForm(rest)
 			if err != nil {
 				return fmt.Errorf("line %d: ENTRYPOINT: %w", lineNumber, err)
 			}
+			if shellForm {
+				command = append(cloneDockerfileStrings(currentShell), shellValue)
+			}
 			spec.Config.Entrypoint = command
+			spec.dockerfileSteps = append(spec.dockerfileSteps, dockerfileStep{
+				kind: "entrypoint", command: command, shellForm: shellForm, value: shellValue,
+			})
 
 		case "RUN":
 			if strings.HasPrefix(expanded, "--") {
@@ -392,9 +407,12 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 			if currentUser != "" && currentUser != "root" && currentUser != "0" && currentUser != "0:0" {
 				return fmt.Errorf("line %d: RUN after USER %q is not supported yet; build commands currently execute as root inside a user namespace", lineNumber, currentUser)
 			}
-			command, err := dockerfileCommand(rest)
+			command, shellForm, shellValue, err := dockerfileCommandForm(rest)
 			if err != nil {
 				return fmt.Errorf("line %d: RUN: %w", lineNumber, err)
+			}
+			if shellForm {
+				command = append(cloneDockerfileStrings(currentShell), shellValue)
 			}
 			argKeys := make([]string, 0, len(args))
 			for key := range args {
@@ -406,9 +424,18 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 				argEnv = append(argEnv, key+"="+args[key])
 			}
 			spec.dockerfileSteps = append(spec.dockerfileSteps, dockerfileStep{
-				kind: "run", command: command,
+				kind: "run", command: command, shellForm: shellForm, value: shellValue,
 				env:  mergeBuildEnvironment(argEnv, spec.Config.Env),
 				user: currentUser,
+			})
+		case "SHELL":
+			shell, err := parseDockerfileShell(expanded)
+			if err != nil {
+				return fmt.Errorf("line %d: SHELL: %w", lineNumber, err)
+			}
+			currentShell = cloneDockerfileStrings(shell)
+			spec.dockerfileSteps = append(spec.dockerfileSteps, dockerfileStep{
+				kind: "shell", command: cloneDockerfileStrings(shell),
 			})
 		case "VOLUME":
 			var targets []string
@@ -475,7 +502,7 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 			}
 			spec.Config.Healthcheck = healthcheck
 
-		case "ONBUILD", "SHELL":
+		case "ONBUILD":
 			return fmt.Errorf("line %d: Dockerfile instruction %s is not supported yet", lineNumber, instruction)
 		default:
 			return fmt.Errorf("line %d: unknown Dockerfile instruction %s", lineNumber, instruction)
@@ -518,7 +545,7 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 	}
 	needsStageExecutor := len(stages) > 0
 	for _, step := range spec.dockerfileSteps {
-		if step.copyFrom != "" {
+		if step.copyFrom != "" || step.kind == "run" || step.kind == "shell" || step.kind == "cmd" || step.kind == "entrypoint" {
 			needsStageExecutor = true
 			break
 		}
@@ -834,21 +861,68 @@ func expandDockerVariables(value string, args, environment map[string]string) st
 }
 
 func dockerfileCommand(value string) ([]string, error) {
+	command, shellForm, shellValue, err := dockerfileCommandForm(value)
+	if err != nil {
+		return nil, err
+	}
+	if shellForm {
+		return []string{"/bin/sh", "-c", shellValue}, nil
+	}
+	return command, nil
+}
+
+func dockerfileCommandForm(value string) ([]string, bool, string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return nil, fmt.Errorf("command cannot be empty")
+		return nil, false, "", fmt.Errorf("command cannot be empty")
 	}
 	if strings.HasPrefix(value, "[") {
 		var command []string
 		if err := json.Unmarshal([]byte(value), &command); err != nil {
-			return nil, fmt.Errorf("invalid JSON command form: %w", err)
+			return nil, false, "", fmt.Errorf("invalid JSON command form: %w", err)
 		}
 		if len(command) == 0 {
-			return nil, fmt.Errorf("JSON command form cannot be empty")
+			return nil, false, "", fmt.Errorf("JSON command form cannot be empty")
 		}
-		return command, nil
+		for _, argument := range command {
+			if strings.ContainsRune(argument, '\x00') {
+				return nil, false, "", fmt.Errorf("JSON command arguments must not contain NUL bytes")
+			}
+		}
+		return command, false, "", nil
 	}
-	return []string{"/bin/sh", "-c", value}, nil
+	if strings.ContainsRune(value, '\x00') {
+		return nil, false, "", fmt.Errorf("shell command must not contain NUL bytes")
+	}
+	return nil, true, value, nil
+}
+
+func parseDockerfileShell(value string) ([]string, error) {
+	var shell []string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(value)), &shell); err != nil {
+		return nil, fmt.Errorf("expected a JSON array of shell executable and arguments: %w", err)
+	}
+	if len(shell) < 2 || len(shell) > 32 {
+		return nil, fmt.Errorf("shell must contain between 2 and 32 arguments")
+	}
+	total := 0
+	for index, argument := range shell {
+		if argument == "" || strings.ContainsRune(argument, '\x00') {
+			return nil, fmt.Errorf("shell argument %d must be non-empty and contain no NUL bytes", index)
+		}
+		total += len(argument)
+	}
+	if total > 16<<10 {
+		return nil, fmt.Errorf("SHELL arguments exceed the 16384-byte limit")
+	}
+	return shell, nil
+}
+
+func cloneDockerfileStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	return append([]string(nil), values...)
 }
 
 // BuildDockerfileForPlatform builds a Dockerfile with RUN network access
