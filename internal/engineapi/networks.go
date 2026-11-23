@@ -377,10 +377,11 @@ func parseDockerEndpointConfig(raw json.RawMessage) (boxrnetwork.EndpointOptions
 	if len(config.Links) > 0 || len(config.DriverOpts) > 0 {
 		return endpoint, fmt.Errorf("EndpointConfig links and driver options are not supported")
 	}
-	endpoint.Aliases, err = boxrnetwork.NormalizeEndpointAliases(config.Aliases)
-	if err != nil {
-		return boxrnetwork.EndpointOptions{}, fmt.Errorf("EndpointConfig Aliases: %w", err)
+	aliases, aliasErr := boxrnetwork.NormalizeEndpointAliases(config.Aliases)
+	if aliasErr != nil {
+		return boxrnetwork.EndpointOptions{}, fmt.Errorf("EndpointConfig Aliases: %w", aliasErr)
 	}
+	endpoint.Aliases = aliases
 	if config.IPAMConfig != nil {
 		if config.IPAMConfig.IPv6Address != "" || len(config.IPAMConfig.LinkLocalIPs) > 0 {
 			return endpoint, fmt.Errorf("EndpointConfig supports IPv4Address only; IPv6 and link-local addresses are not supported")
