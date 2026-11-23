@@ -90,4 +90,3 @@ func TestBuildDockerfileCopyChownAppliesToCopyFromStage(t *testing.T) {
 		t.Fatalf("COPY --from owner = %d:%d, want %d:%d", stat.Uid, stat.Gid, uid, gid)
 	}
 }
-
