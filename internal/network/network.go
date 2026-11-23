@@ -1016,6 +1016,18 @@ func JoinWithRunnerOptions(ctx context.Context, networkName string, pid int, con
 	if pid <= 1 || strings.TrimSpace(containerID) == "" || strings.ContainsAny(containerID, "/\\\x00") {
 		return "", fmt.Errorf("valid host PID and container ID are required")
 	}
+	containerName := ""
+	if endpoint.ContainerName != "" {
+		var nameErr error
+		containerName, nameErr = normalizeEndpointName(endpoint.ContainerName)
+		if nameErr != nil {
+			return "", fmt.Errorf("container name: %w", nameErr)
+		}
+	}
+	aliases, err := NormalizeEndpointAliases(endpoint.Aliases)
+	if err != nil {
+		return "", err
+	}
 	unlock, err := lockStore()
 	if err != nil {
 		return "", err
@@ -1068,8 +1080,20 @@ func JoinWithRunnerOptions(ctx context.Context, networkName string, pid int, con
 	if network.EndpointIDs == nil {
 		network.EndpointIDs = make(map[string]string)
 	}
+	if network.ContainerNames == nil {
+		network.ContainerNames = make(map[string]string)
+	}
+	if network.Aliases == nil {
+		network.Aliases = make(map[string][]string)
+	}
 	network.MACAddresses[containerID] = macAddress
 	network.EndpointIDs[containerID] = endpointID
+	if containerName != "" {
+		network.ContainerNames[containerID] = containerName
+	}
+	if len(aliases) > 0 {
+		network.Aliases[containerID] = aliases
+	}
 	if len(normalizedPorts) > 0 {
 		if network.Published == nil {
 			network.Published = make(map[string][]PortMapping)
@@ -1081,6 +1105,8 @@ func JoinWithRunnerOptions(ctx context.Context, networkName string, pid int, con
 		delete(network.MACAddresses, containerID)
 		delete(network.EndpointIDs, containerID)
 		delete(network.Published, containerID)
+		delete(network.ContainerNames, containerID)
+		delete(network.Aliases, containerID)
 		return "", err
 	}
 	hostVeth, peerVeth := vethNames(containerID)
@@ -1089,7 +1115,12 @@ func JoinWithRunnerOptions(ctx context.Context, networkName string, pid int, con
 		delete(network.MACAddresses, containerID)
 		delete(network.EndpointIDs, containerID)
 		delete(network.Published, containerID)
-		return saveStore(dir, current)
+		delete(network.ContainerNames, containerID)
+		delete(network.Aliases, containerID)
+		if err := saveStore(dir, current); err != nil {
+			return err
+		}
+		return syncNetworkHostsFiles(dir, current)
 	}
 	installedPorts := make([]PortMapping, 0, len(normalizedPorts))
 	rollbackCreatedVeth := func(cause error) (string, error) {
@@ -1150,6 +1181,9 @@ func JoinWithRunnerOptions(ctx context.Context, networkName string, pid int, con
 		if err != nil {
 			return rollbackCreatedVeth(fmt.Errorf("publish host port %s:%d/%s: %w", mapping.HostIP, mapping.HostPort, mapping.Protocol, err))
 		}
+	}
+	if err := syncNetworkHostsFiles(dir, current); err != nil {
+		return rollbackCreatedVeth(fmt.Errorf("refresh bridge network hosts files: %w", err))
 	}
 	return address, nil
 }
@@ -1363,7 +1397,12 @@ func leaveFromStore(ctx context.Context, runner Runner, current *store, dir stri
 	delete(network.MACAddresses, containerID)
 	delete(network.EndpointIDs, containerID)
 	delete(network.Published, containerID)
-	return saveStore(dir, *current)
+	delete(network.ContainerNames, containerID)
+	delete(network.Aliases, containerID)
+	if err := saveStore(dir, *current); err != nil {
+		return err
+	}
+	return syncNetworkHostsFiles(dir, *current)
 }
 
 // StaleAttachments returns network leases whose container IDs are absent from
