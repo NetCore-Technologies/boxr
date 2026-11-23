@@ -329,6 +329,33 @@ func removeManagedRootFS(record Record) error {
 	return nil
 }
 
+// AddManagedBindMount persists a Boxr-owned runtime bind mount before the
+// container startup barrier is released. It is restricted to the managed
+// /etc/hosts file so callers cannot use it to mutate arbitrary mount options.
+func AddManagedBindMount(id string, mount container.BindMount) error {
+	if mount.Source == "" || !filepath.IsAbs(mount.Source) ||
+		filepath.Clean(mount.Target) != "/etc/hosts" || !mount.ReadOnly ||
+		mount.VolumeName != "" || mount.CopyUp {
+		return fmt.Errorf("managed hosts bind mount must be a read-only absolute source at /etc/hosts")
+	}
+	return update(id, func(record *Record) error {
+		if record.Status != "created" && record.Status != "exited" && record.Status != "failed" {
+			return fmt.Errorf("container %s cannot change managed mounts in %q state", record.ID, record.Status)
+		}
+		for _, existing := range record.Options.BindMounts {
+			if filepath.Clean(existing.Target) != "/etc/hosts" {
+				continue
+			}
+			if filepath.Clean(existing.Source) == filepath.Clean(mount.Source) && existing.ReadOnly {
+				return nil
+			}
+			return fmt.Errorf("container %s already has a user-managed /etc/hosts mount", record.ID)
+		}
+		record.Options.BindMounts = append(record.Options.BindMounts, mount)
+		return nil
+	})
+}
+
 // RemoveManagedRootFS cleans up an incomplete Engine API create operation.
 // It can only remove the deterministic rootfs path associated with a valid ID.
 func RemoveManagedRootFS(id string) error {

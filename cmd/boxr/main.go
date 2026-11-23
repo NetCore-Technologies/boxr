@@ -849,6 +849,13 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 		fmt.Fprintf(stdout, "created %s\n", record.ID)
 		return 0
 	}
+	if err := addManagedNetworkHostsMount(record.ID, &opts); err != nil {
+		if existingID == "" {
+			_ = state.RemoveCreated(record.ID)
+		}
+		fmt.Fprintf(stderr, "boxr run: prepare managed network hosts: %v\n", err)
+		return 1
+	}
 	logFile, err := state.OpenLog(record.ID)
 	if err != nil {
 		if existingID == "" {
@@ -884,7 +891,8 @@ func runContainerMode(args []string, stdout, stderr io.Writer, createOnly bool) 
 			Stderr: io.MultiWriter(stderr, combinedLog),
 			OnStart: func(pid int) error {
 				if opts.NetworkMode == "bridge" {
-					if _, err := boxrnetwork.Join(opts.NetworkName, pid, record.ID, opts.PublishedPorts...); err != nil {
+					if _, err := boxrnetwork.JoinWithOptions(opts.NetworkName, pid, record.ID,
+						boxrnetwork.EndpointOptions{ContainerName: record.Name}, opts.PublishedPorts...); err != nil {
 						return fmt.Errorf("attach bridge network %q: %w", opts.NetworkName, err)
 					}
 				}
