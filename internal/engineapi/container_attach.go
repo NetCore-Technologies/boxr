@@ -190,6 +190,7 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 	}
 }
 
+
 func writeContainerLogStream(writer io.Writer, data []byte, stream byte, tty bool) error {
 	if tty {
 		return writeDockerExecBytes(writer, data)
