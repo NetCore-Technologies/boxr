@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/manit6752025/boxr/internal/container"
+	"github.com/manit6752025/boxr/internal/network"
 )
 
 func useTempState(t *testing.T) string {
@@ -99,6 +100,28 @@ func TestManagedBindMountIsIdempotentDuringAutomaticRestart(t *testing.T) {
 	different.Source = "/run/boxr/hosts/other.hosts"
 	if err := AddManagedBindMount(record.ID, different); err == nil {
 		t.Fatal("different /etc/hosts mount was allowed while restarting")
+	}
+}
+
+func TestContainerRemovalCleansManagedNetworkHostsFile(t *testing.T) {
+	useTempState(t)
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	record, err := Create("managed-hosts-cleanup", []string{"/bin/true"}, container.Options{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := network.HostsFilePath(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveCreated(record.ID); err != nil {
+		t.Fatalf("RemoveCreated: %v", err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("managed hosts file still exists after container removal: %v", err)
 	}
 }
 

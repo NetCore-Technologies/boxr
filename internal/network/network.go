@@ -831,6 +831,65 @@ func HostsFilePath(containerID string) (string, error) {
 	return path, nil
 }
 
+// RemoveHostsFile removes the private /etc/hosts source for a stopped container.
+// An outstanding bridge allocation blocks removal so stale endpoints cannot
+// lose their mounted source while the network still considers them attached.
+func RemoveHostsFile(containerID string) error {
+	if !validHostsContainerID(containerID) {
+		return fmt.Errorf("invalid container ID for managed hosts cleanup")
+	}
+	dir, err := StoreDir()
+	if err != nil {
+		return err
+	}
+	hostsDir := filepath.Join(dir, "hosts")
+	if _, err := os.Lstat(hostsDir); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	unlock, err := lockStore()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	current, dir, err := loadStore()
+	if err != nil {
+		return err
+	}
+	for _, network := range current.Networks {
+		if _, attached := network.Allocations[containerID]; attached {
+			return fmt.Errorf("container %s still has an IPAM lease on bridge %q", containerID, network.Name)
+		}
+	}
+	hostsDir = filepath.Join(dir, "hosts")
+	directoryInfo, err := os.Lstat(hostsDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if directoryInfo.Mode()&os.ModeSymlink != 0 || !directoryInfo.IsDir() || directoryInfo.Mode().Perm()&0077 != 0 {
+		return fmt.Errorf("managed hosts directory must be a private real directory")
+	}
+	path := filepath.Join(hostsDir, containerID+".hosts")
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maxNetworkHostsFileBytes {
+		return fmt.Errorf("managed hosts file must be a bounded regular file")
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("remove managed hosts file: %w", err)
+	}
+	return nil
+}
+
 func networkHostsContent(containerID string, networks []Network) ([]byte, error) {
 	var lines []string
 	for _, network := range networks {

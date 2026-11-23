@@ -361,6 +361,40 @@ func TestManagedHostsFilesUpdateInPlaceForBridgePeers(t *testing.T) {
 	}
 }
 
+func TestRemoveHostsFileRefusesActiveLeaseAndRemovesAfterDetach(t *testing.T) {
+	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
+	path, err := HostsFilePath("container-cleanup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	network, err := CreateWithRunner(context.Background(), "hosts-cleanup", CreateOptions{
+		Subnet: "172.30.122.0/29",
+	}, &fakeRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{}
+	if _, err := JoinWithRunnerOptions(context.Background(), network.Name, 3201, "container-cleanup", runner,
+		EndpointOptions{ContainerName: "cleanup-service"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveHostsFile("container-cleanup"); err == nil {
+		t.Fatal("hosts file removal succeeded while the endpoint still had an IPAM lease")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("hosts file was removed despite active lease: %v", err)
+	}
+	if err := LeaveWithRunner(context.Background(), network.Name, "container-cleanup", runner); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveHostsFile("container-cleanup"); err != nil {
+		t.Fatalf("RemoveHostsFile after detach: %v", err)
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("managed hosts file still exists after removal: %v", err)
+	}
+}
+
 func TestJoinRejectsUnsafeAndExcessiveNetworkAliasesBeforeChangingHost(t *testing.T) {
 	t.Setenv("BOXR_NETWORK_DIR", filepath.Join(t.TempDir(), "networks"))
 	if _, err := CreateWithRunner(context.Background(), "alias-validation", CreateOptions{

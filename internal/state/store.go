@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/manit6752025/boxr/internal/container"
+	"github.com/manit6752025/boxr/internal/network"
 )
 
 const maxEventFileBytes = 4 << 20
@@ -662,6 +663,9 @@ func remove(query string, allowCreated bool) error {
 	}
 	if record.Status == "created" && !allowCreated {
 		return fmt.Errorf("container %s has not completed; refusing removal", record.ID)
+	}
+	if err := network.RemoveHostsFile(record.ID); err != nil {
+		return fmt.Errorf("remove container managed network hosts file: %w", err)
 	}
 	if err := removeEngineConfigLocked(record.ID); err != nil {
 		return fmt.Errorf("remove container Engine API configuration: %w", err)
