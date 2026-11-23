@@ -174,6 +174,32 @@ func TestContainerListInspectFiltersAndDockerFields(t *testing.T) {
 	}
 }
 
+func TestContainerLogsUseRawStreamForTTYContainers(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("tty-log-test", []string{"/bin/echo", "hello"}, container.Options{TTY: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := state.OpenLog(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("combined terminal output\n")
+	if _, err := logFile.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := logFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	response := engineAPIRequest(server, http.MethodGet, "/containers/"+record.ID+"/logs?stdout=1&stderr=1")
+	if response.Code != http.StatusOK {
+		t.Fatalf("TTY logs status=%d body=%q", response.Code, response.Body.String())
+	}
+	if !bytes.Equal(response.Body.Bytes(), payload) {
+		t.Fatalf("TTY log stream=%v, want raw %v", response.Body.Bytes(), payload)
+	}
+}
+
 func TestContainerLogsUseDockerMultiplexedFrames(t *testing.T) {
 	server := setupEngineAPITest(t)
 	record, err := state.Create("log-test", []string{"/bin/echo", "hello"}, container.Options{}, nil)
@@ -204,6 +230,33 @@ func TestContainerLogsUseDockerMultiplexedFrames(t *testing.T) {
 	}
 	if string(body[8:]) != string(payload) {
 		t.Fatalf("frame payload=%q", body[8:])
+	}
+}
+
+func TestContainerAttachStreamsRawTTYLogSnapshot(t *testing.T) {
+	server := setupEngineAPITest(t)
+	record, err := state.Create("tty-attach-test", []string{"/bin/sh"}, container.Options{TTY: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logFile, err := state.OpenLog(record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("raw terminal attach\n")
+	if _, err := logFile.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := logFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	response := engineAPIRequest(server, http.MethodPost,
+		"/v1.45/containers/"+record.ID+"/attach?logs=1&stream=0&stdout=1&stderr=1")
+	if response.Code != http.StatusOK {
+		t.Fatalf("TTY attach status=%d body=%q", response.Code, response.Body.String())
+	}
+	if !bytes.Equal(response.Body.Bytes(), payload) {
+		t.Fatalf("TTY attach stream=%v, want raw %v", response.Body.Bytes(), payload)
 	}
 }
 
@@ -1178,6 +1231,48 @@ func TestDockerCreateRejectsUnsupportedAndMalformedRequests(t *testing.T) {
 				t.Fatalf("create status=%d body=%s, want %d", response.Code, response.Body.String(), test.want)
 			}
 		})
+	}
+}
+
+func TestDockerCreateAcceptsTTYAndPersistsStdinConfiguration(t *testing.T) {
+	server := setupEngineAPITest(t)
+	const reference = "registry.example/team/tty-app:latest"
+	importEngineAPITestImage(t, reference)
+	request := httptest.NewRequest(http.MethodPost, "/v1.45/containers/create?name=tty-app",
+		strings.NewReader(`{"Image":"registry.example/team/tty-app:latest","Tty":true,"OpenStdin":true,"StdinOnce":true}`))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("TTY create status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created struct {
+		ID string `json:"Id"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	record, err := state.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Remove(record.ID)
+	if !record.Options.TTY || !record.Options.OpenStdin || !record.Options.StdinOnce {
+		t.Fatalf("persisted TTY options = %+v", record.Options)
+	}
+	inspect := engineAPIRequest(server, http.MethodGet, "/v1.45/containers/"+record.ID+"/json")
+	if inspect.Code != http.StatusOK {
+		t.Fatalf("TTY inspect status=%d body=%s", inspect.Code, inspect.Body.String())
+	}
+	var result struct {
+		Config map[string]any `json:"Config"`
+	}
+	if err := json.Unmarshal(inspect.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]bool{"Tty": true, "OpenStdin": true, "StdinOnce": true} {
+		if result.Config[key] != want {
+			t.Errorf("inspect Config.%s = %#v, want %t", key, result.Config[key], want)
+		}
 	}
 }
 

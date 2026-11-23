@@ -5,6 +5,7 @@ package container
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"github.com/creack/pty"
 )
 
 // Run starts a helper as PID 1 in new PID, UTS, mount, and IPC namespaces.
@@ -86,18 +89,6 @@ func RunWithHooks(command string, args []string, options Options, hooks Hooks) e
 	helperArgs := []string{"__boxr-init", base64.RawURLEncoding.EncodeToString(encodedOptions), resolvedCommand}
 	helperArgs = append(helperArgs, args...)
 	cmd := exec.Command(executable, helperArgs...)
-	cmd.Stdin = hooks.Stdin
-	if cmd.Stdin == nil {
-		cmd.Stdin = os.Stdin
-	}
-	cmd.Stdout = hooks.Stdout
-	if cmd.Stdout == nil {
-		cmd.Stdout = os.Stdout
-	}
-	cmd.Stderr = hooks.Stderr
-	if cmd.Stderr == nil {
-		cmd.Stderr = os.Stderr
-	}
 	cmd.ExtraFiles = []*os.File{readyReader}
 	cmd.Env = childProcessEnvironment(options, os.Environ())
 	cloneFlags := uintptr(syscall.CLONE_NEWPID | syscall.CLONE_NEWUTS | syscall.CLONE_NEWNS | syscall.CLONE_NEWIPC)
@@ -107,16 +98,64 @@ func RunWithHooks(command string, args []string, options Options, hooks Hooks) e
 	if options.UserNamespace {
 		cloneFlags |= syscall.CLONE_NEWUSER
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Cloneflags: cloneFlags,
-		Setpgid:    true,
-		Pdeathsig:  syscall.SIGKILL,
-	}
 
-	if err := cmd.Start(); err != nil {
-		_ = readyReader.Close()
-		_ = readyWriter.Close()
-		return fmt.Errorf("start isolated process (root or appropriate namespace capabilities are required): %w", err)
+	var terminal *os.File
+	var terminalOutputDone chan error
+	if options.TTY {
+		terminal, err = pty.StartWithAttrs(cmd, &pty.Winsize{Rows: 24, Cols: 80}, &syscall.SysProcAttr{
+			Cloneflags: cloneFlags,
+			Pdeathsig:  syscall.SIGKILL,
+		})
+		if err != nil {
+			_ = readyReader.Close()
+			_ = readyWriter.Close()
+			return fmt.Errorf("start isolated process with controlling PTY (root or appropriate namespace capabilities are required): %w", err)
+		}
+		output := hooks.Stdout
+		if output == nil {
+			output = os.Stdout
+		}
+		terminalOutputDone = make(chan error, 1)
+		go func() {
+			_, copyErr := io.Copy(output, terminal)
+			if copyErr != nil && !errors.Is(copyErr, syscall.EIO) && !errors.Is(copyErr, os.ErrClosed) {
+				_ = cmd.Process.Kill()
+			}
+			terminalOutputDone <- copyErr
+		}()
+		if hooks.Stdin != nil {
+			go func() {
+				_, copyErr := io.Copy(terminal, hooks.Stdin)
+				if options.StdinOnce && copyErr == nil {
+					// Ctrl-D produces EOF in the PTY's canonical input mode
+					// after Docker's one-shot stdin stream disconnects.
+					_, _ = terminal.Write([]byte{4})
+				}
+			}()
+		}
+	} else {
+		cmd.Stdin = hooks.Stdin
+		if cmd.Stdin == nil {
+			cmd.Stdin = os.Stdin
+		}
+		cmd.Stdout = hooks.Stdout
+		if cmd.Stdout == nil {
+			cmd.Stdout = os.Stdout
+		}
+		cmd.Stderr = hooks.Stderr
+		if cmd.Stderr == nil {
+			cmd.Stderr = os.Stderr
+		}
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Cloneflags: cloneFlags,
+			Setpgid:    true,
+			Pdeathsig:  syscall.SIGKILL,
+		}
+		if err := cmd.Start(); err != nil {
+			_ = readyReader.Close()
+			_ = readyWriter.Close()
+			return fmt.Errorf("start isolated process (root or appropriate namespace capabilities are required): %w", err)
+		}
 	}
 	_ = readyReader.Close()
 	if options.UserNamespace {
@@ -124,6 +163,7 @@ func RunWithHooks(command string, args []string, options Options, hooks Hooks) e
 			_ = readyWriter.Close()
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
+			_ = finishRuntimePTY(terminal, terminalOutputDone)
 			return fmt.Errorf("configure user namespace: %w", err)
 		}
 	}
@@ -132,6 +172,7 @@ func RunWithHooks(command string, args []string, options Options, hooks Hooks) e
 			_ = readyWriter.Close()
 			_ = cmd.Process.Kill()
 			_ = cmd.Wait()
+			_ = finishRuntimePTY(terminal, terminalOutputDone)
 			return fmt.Errorf("record container startup: %w", err)
 		}
 	}
@@ -164,6 +205,7 @@ func RunWithHooks(command string, args []string, options Options, hooks Hooks) e
 		_ = readyWriter.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
+		_ = finishRuntimePTY(terminal, terminalOutputDone)
 		stopForwarder()
 		runErr := fmt.Errorf("configure cgroup limits: %w", err)
 		if hooks.OnExit != nil {
@@ -178,6 +220,7 @@ func RunWithHooks(command string, args []string, options Options, hooks Hooks) e
 		_ = readyWriter.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
+		_ = finishRuntimePTY(terminal, terminalOutputDone)
 		stopForwarder()
 		if cleanupCgroup != nil {
 			_ = cleanupCgroup()
@@ -198,6 +241,13 @@ func RunWithHooks(command string, args []string, options Options, hooks Hooks) e
 	}
 
 	waitErr := cmd.Wait()
+	if terminalErr := finishRuntimePTY(terminal, terminalOutputDone); terminalErr != nil {
+		if waitErr == nil {
+			waitErr = terminalErr
+		} else {
+			waitErr = errors.Join(waitErr, terminalErr)
+		}
+	}
 	stopForwarder()
 	var cleanupErr error
 	if cleanupCgroup != nil {
@@ -218,6 +268,27 @@ func RunWithHooks(command string, args []string, options Options, hooks Hooks) e
 		return fmt.Errorf("clean up container cgroup: %w", cleanupErr)
 	}
 	return waitErr
+}
+
+// finishRuntimePTY drains merged terminal output after the namespace helper
+// exits, then closes the PTY master. Linux reports EIO when the final slave
+// descriptor closes; that is the normal end-of-stream condition.
+func finishRuntimePTY(terminal *os.File, outputDone <-chan error) error {
+	if terminal == nil {
+		return nil
+	}
+	var outputErr error
+	if outputDone != nil {
+		outputErr = <-outputDone
+	}
+	closeErr := terminal.Close()
+	if outputErr != nil && !errors.Is(outputErr, syscall.EIO) && !errors.Is(outputErr, os.ErrClosed) {
+		return fmt.Errorf("read container PTY output: %w", outputErr)
+	}
+	if closeErr != nil && !errors.Is(closeErr, os.ErrClosed) {
+		return fmt.Errorf("close container PTY: %w", closeErr)
+	}
+	return nil
 }
 
 // Init is the hidden PID-1 entrypoint used by Run. It is exported only because

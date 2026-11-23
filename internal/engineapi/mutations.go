@@ -646,9 +646,6 @@ func createContainerRecord(name string, input dockerCreateRequest) (result state
 		}
 		return empty, err
 	}
-	if input.Tty {
-		return empty, fmt.Errorf("TTY container creation is not yet supported; use a non-TTY container and boxr exec -it for an interactive terminal")
-	}
 	if input.AttachStdin && !input.OpenStdin {
 		return empty, fmt.Errorf("AttachStdin requires OpenStdin")
 	}
@@ -677,6 +674,7 @@ func createContainerRecord(name string, input dockerCreateRequest) (result state
 		options.Workdir = image.RuntimeConfig.WorkingDir
 	}
 	options.Hostname = input.Hostname
+	options.TTY = input.Tty
 	options.OpenStdin = input.OpenStdin
 	options.StdinOnce = input.StdinOnce
 	options.Env = container.MergeEnvironment(image.RuntimeConfig.Env, input.Env)

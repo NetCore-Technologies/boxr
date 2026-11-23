@@ -3812,6 +3812,7 @@ var implementedFeatures = []string{
 	"Compose entrypoint overrides image ENTRYPOINT, clears image CMD when non-null, and preserves null inheritance semantics",
 	"Compose command null inherits image CMD while empty command string/list explicitly clears the image default",
 	"Docker Engine container wait implements not-running next-exit and removed conditions with persisted exit status semantics",
+	"Docker container create Tty launches the workload under a controlling PTY, merges terminal output, forwards signals to the PTY process group and preserves workload exit status",
 }
 
 func printFeatures(stdout io.Writer) {

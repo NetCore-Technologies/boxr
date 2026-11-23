@@ -3,6 +3,7 @@
 package container
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -16,6 +17,21 @@ import (
 func TestRunRejectsEmptyCommand(t *testing.T) {
 	if err := Run("", nil, Options{}); err == nil || !strings.Contains(err.Error(), "command cannot be empty") {
 		t.Fatalf("Run(empty) error = %v, want empty-command error", err)
+	}
+}
+
+func TestRunWithHooksTTYProvidesAControllingTerminal(t *testing.T) {
+	var output bytes.Buffer
+	err := RunWithHooks("/bin/sh", []string{"-c", "test -t 0 && test -t 1 && test -t 2 && printf boxr-tty-ok"},
+		Options{NetworkMode: "host", TTY: true}, Hooks{Stdout: &output})
+	if err != nil {
+		if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) {
+			t.Skipf("container namespaces are unavailable in this test environment: %v", err)
+		}
+		t.Fatalf("RunWithHooks(TTY): %v", err)
+	}
+	if !strings.Contains(output.String(), "boxr-tty-ok") {
+		t.Fatalf("TTY workload output = %q", output.String())
 	}
 }
 

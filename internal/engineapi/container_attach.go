@@ -10,13 +10,17 @@ import (
 	"github.com/manit6752025/boxr/internal/state"
 )
 
-// handleContainerAttach implements Docker's one-way container attach stream.
-// Boxr currently persists stdout and stderr in a single combined log, so the
-// stream is advertised as stdout; stdin/interactive container attachment is
-// rejected instead of pretending that a detached workload has an input pipe.
+// handleContainerAttach implements Docker's container attach stream. Boxr
+// persists stdout and stderr together; non-TTY streams use Docker multiplex
+// framing while TTY streams remain raw, as they do in the Engine API.
 func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http.Request, query string) {
 	if request.Method != http.MethodPost {
 		writeMethodErrorFor(writer, http.MethodPost)
+		return
+	}
+	record, err := state.Get(query)
+	if err != nil {
+		writeError(writer, http.StatusNotFound, err)
 		return
 	}
 	for key := range request.URL.Query() {
@@ -63,11 +67,6 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 	if stdin {
 		if !stream || !dockerExecUpgradeRequested(request) {
 			writeError(writer, http.StatusBadRequest, fmt.Errorf("stdin attachment requires stream=1 and a Docker TCP upgrade"))
-			return
-		}
-		record, getErr := state.Get(query)
-		if getErr != nil {
-			writeError(writer, http.StatusNotFound, getErr)
 			return
 		}
 		if !record.Options.OpenStdin {
@@ -133,7 +132,7 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 			}()
 		}
 		if logs && outputEnabled && len(data) > 0 {
-			if err := writeLogFrame(target, data, outputStream); err != nil {
+			if err := writeContainerLogStream(target, data, outputStream, record.Options.TTY); err != nil {
 				return
 			}
 		}
@@ -147,7 +146,7 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 		}
 	}
 	if !dockerExecUpgradeRequested(request) && logs && outputEnabled && len(data) > 0 {
-		if err := writeLogFrame(target, data, outputStream); err != nil {
+		if err := writeContainerLogStream(target, data, outputStream, record.Options.TTY); err != nil {
 			return
 		}
 	}
@@ -174,7 +173,7 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 				offset = next
 			} else if next > offset {
 				if outputEnabled && buffer.Len() > 0 {
-					if err := writeLogFrame(target, []byte(buffer.String()), outputStream); err != nil {
+					if err := writeContainerLogStream(target, []byte(buffer.String()), outputStream, record.Options.TTY); err != nil {
 						return
 					}
 				}
@@ -189,4 +188,12 @@ func (s *Server) handleContainerAttach(writer http.ResponseWriter, request *http
 			}
 		}
 	}
+}
+
+
+func writeContainerLogStream(writer io.Writer, data []byte, stream byte, tty bool) error {
+	if tty {
+		return writeDockerExecBytes(writer, data)
+	}
+	return writeLogFrame(writer, data, stream)
 }

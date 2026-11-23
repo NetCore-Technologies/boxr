@@ -1851,6 +1851,11 @@ func (s *Server) handleContainerLogs(writer http.ResponseWriter, request *http.R
 			return
 		}
 	}
+	record, err := state.Get(query)
+	if err != nil {
+		writeError(writer, http.StatusNotFound, err)
+		return
+	}
 	data, offset, err := state.ReadLogsSnapshot(query, tail)
 	if err != nil {
 		writeError(writer, http.StatusNotFound, err)
@@ -1859,7 +1864,7 @@ func (s *Server) handleContainerLogs(writer http.ResponseWriter, request *http.R
 	writer.Header().Set("Content-Type", "application/vnd.docker.raw-stream")
 	writer.WriteHeader(http.StatusOK)
 	if len(data) > 0 {
-		if err := writeLogFrame(writer, data, 1); err != nil {
+		if err := writeContainerLogStream(writer, data, 1, record.Options.TTY); err != nil {
 			return
 		}
 	}
@@ -1884,7 +1889,7 @@ func (s *Server) handleContainerLogs(writer http.ResponseWriter, request *http.R
 				return
 			}
 			if next > offset {
-				if writeLogFrame(writer, []byte(buffer.String()), 1) != nil {
+				if writeContainerLogStream(writer, []byte(buffer.String()), 1, record.Options.TTY) != nil {
 					return
 				}
 				offset = next
