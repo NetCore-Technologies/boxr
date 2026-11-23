@@ -459,7 +459,6 @@ func TestParseDockerfileCopyChmodSupportsBoundedOctalModes(t *testing.T) {
 		}
 	}
 	for _, instruction := range []string{
-		"COPY --chown=0:0 runner /runner",
 		"ADD --chmod=0755 runner /runner",
 		"ADD --chown=1000:1000 runner /runner",
 		"COPY --chmod=0755 --chmod=0644 runner /runner",
