@@ -231,10 +231,11 @@ func ParseDockerfileWithArgs(data []byte, buildArgs map[string]string) (BuildSpe
 					if instructionName != "COPY" || !hasValue || copyOwner != nil {
 						return fmt.Errorf("line %d: --chown is supported once on COPY and requires numeric UID:GID", lineNumber)
 					}
-					copyOwner, err = parseDockerfileCopyOwner(value)
-					if err != nil {
-						return fmt.Errorf("line %d: invalid COPY --chown: %w", lineNumber, err)
+					parsedOwner, ownerErr := parseDockerfileCopyOwner(value)
+					if ownerErr != nil {
+						return fmt.Errorf("line %d: invalid COPY --chown: %w", lineNumber, ownerErr)
 					}
+					copyOwner = parsedOwner
 				case "--from":
 					if instructionName != "COPY" || !hasValue || value == "" || copyFrom != "" {
 						return fmt.Errorf("line %d: COPY --from requires a previous stage name/index or a local image reference", lineNumber)
